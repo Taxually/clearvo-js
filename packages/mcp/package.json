@@ -1,6 +1,6 @@
 {
   "name": "@clearvo/mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "MCP server for Clearvo — submit invoices, calculate tax, validate tax numbers via Claude Code, Cursor, or any MCP-compatible AI tool",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
