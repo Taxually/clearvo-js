@@ -71,9 +71,13 @@ async function callApi(
       'Get a key at https://app.clearvo.io/settings'
     );
   }
+  // FormData (e.g. upload_exemption_document) must not get a JSON Content-Type or
+  // be stringified — fetch sets the correct multipart boundary itself when the
+  // body is a FormData instance, and stringifying it would send "[object FormData]".
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const headers: Record<string, string> = {
     'x-api-key': API_KEY,
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     'Accept': 'application/json',
     ...extraHeaders,
   };
@@ -84,7 +88,7 @@ async function callApi(
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -106,6 +110,13 @@ async function callApi(
   }
   return data;
 }
+
+// Matches the 5MB limit already enforced on this repo's other document-upload
+// paths (e.g. the buyer collection wizard). documentBase64 travels as a JSON
+// string tool argument the LLM itself holds in context, so rejecting an
+// oversized payload here — before decoding/uploading — avoids a confusing
+// timeout or opaque failure further down the chain.
+const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
 const TOOLS = [
   {
@@ -707,6 +718,47 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'create_exemption_certificate',
+    description:
+      'Create a tax exemption certificate for a customer (e.g. resale, manufacturing, exempt organization). ' +
+      'Once created, reference it via customer.ref matching customerRef during calculate_tax so the exemption ' +
+      'is automatically applied to eligible line items. Call upload_exemption_document afterwards if you have ' +
+      'the signed PDF to attach.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        certificateRef: { type: 'string', description: 'Your internal reference for this certificate (e.g. "EXEMPT-2024-001").' },
+        customerRef: { type: 'string', description: 'Your internal customer reference. Matched against customer.ref on calculate_tax requests to auto-apply this exemption.' },
+        certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Type of exemption claimed.' },
+        formType: { type: 'string', enum: ['SST', 'MTC', 'CUSTOM'], description: 'Standard form type, if applicable.' },
+        customerName: { type: 'string', description: 'Exempt customer\'s name.' },
+        buyerTaxId: { type: 'string', description: 'Exempt customer\'s tax ID.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Defaults to "US".' },
+        region: { type: 'string', description: 'State or region code the exemption applies to (e.g. "CA"). US exemptions are typically state-scoped.' },
+        taxCategorySlug: { type: 'string', description: 'Optional — restrict the exemption to a specific product tax category instead of all products.' },
+        effectiveFrom: { type: 'string', description: 'Date the certificate becomes valid, YYYY-MM-DD.' },
+        effectiveTo: { type: 'string', description: 'Expiry date, YYYY-MM-DD. Omit for open-ended certificates.' },
+        entityId: { type: 'string', description: 'Entity to create the certificate under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['certificateRef', 'customerRef', 'certificateType', 'effectiveFrom'],
+    },
+  },
+  {
+    name: 'upload_exemption_document',
+    description:
+      'Attach the signed certificate PDF to an exemption certificate created via create_exemption_certificate. ' +
+      'The PDF content must be base64-encoded.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        certificateId: { type: 'string', description: 'The certificate ID returned by create_exemption_certificate.' },
+        documentBase64: { type: 'string', description: 'Base64-encoded PDF file content.' },
+        entityId: { type: 'string', description: 'Entity the certificate belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['certificateId', 'documentBase64'],
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -764,6 +816,31 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'invite_team_member':
       return callApi('POST', '/team/invites', args);
+
+    case 'create_exemption_certificate': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/tax/exemptions', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'upload_exemption_document': {
+      const { certificateId, documentBase64, entityId } = args as { certificateId: string; documentBase64: string; entityId?: string };
+      const buffer = Buffer.from(documentBase64, 'base64');
+      if (buffer.length > MAX_EXEMPTION_DOCUMENT_BYTES) {
+        throw new Error(`documentBase64 decodes to ${buffer.length} bytes, exceeding the ${MAX_EXEMPTION_DOCUMENT_BYTES / (1024 * 1024)}MB limit for exemption certificate documents.`);
+      }
+      // Buffer.from(..., 'base64') is lenient — malformed input (stray characters,
+      // a data: URI prefix, truncation) is silently skipped rather than throwing,
+      // which would otherwise produce a garbage/empty file that still "succeeds"
+      // since we hardcode the content-type and filename ourselves regardless of
+      // actual content. Check the PDF magic bytes so a bad payload fails loudly
+      // here instead of silently storing a corrupted certificate document.
+      if (buffer.length < 4 || buffer.subarray(0, 4).toString('latin1') !== '%PDF') {
+        throw new Error('documentBase64 does not decode to a valid PDF (missing %PDF header). Check the value is base64-encoded PDF file content with no surrounding data: URI prefix or whitespace.');
+      }
+      const formData = new FormData();
+      formData.append('document', new Blob([buffer], { type: 'application/pdf' }), 'certificate.pdf');
+      return callApi('POST', `/tax/exemptions/${encodeURIComponent(certificateId)}/document`, formData, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
 
     case 'get_requirements': {
       const country = args.country as string;
