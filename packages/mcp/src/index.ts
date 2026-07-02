@@ -679,6 +679,9 @@ const TOOLS = [
       'solution gates it (if any), a description of what the step means, and how to complete it ' +
       '(which tool to call, or which dashboard page to visit for steps with no public API yet). ' +
       'Steps not relevant to this account (e.g. team invites on a Starter plan) are omitted entirely. ' +
+      'Also returns nextSteps — a step-by-step integration guide URL and summary for each enabled ' +
+      'solution (currently tax calculations and e-invoicing), so once the checklist is done you know ' +
+      'how to actually wire the API into the customer\'s application, not just that setup is complete. ' +
       'Call this right after connecting, and again after completing a step, to verify it registered.',
     inputSchema: {
       type: 'object' as const,
