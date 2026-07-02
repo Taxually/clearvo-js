@@ -77,7 +77,10 @@ async function callApi(
     'Accept': 'application/json',
     ...extraHeaders,
   };
-  if (ENTITY_ID) headers['x-entity-id'] = ENTITY_ID;
+  // An explicit per-call x-entity-id (e.g. set_pl_credentials' entityId arg,
+  // forwarded via extraHeaders) must win over the env-configured default —
+  // only fall back to CLEARVO_ENTITY_ID when the call didn't specify one.
+  if (ENTITY_ID && !headers['x-entity-id']) headers['x-entity-id'] = ENTITY_ID;
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers,
@@ -305,6 +308,101 @@ const TOOLS = [
         vatNumber: { type: 'string', description: 'VAT registration number — include country prefix (e.g. "DE123456789"). Can be added later via update.' },
       },
       required: ['legalName', 'country'],
+    },
+  },
+  {
+    name: 'update_entity',
+    description:
+      'Update a business entity\'s name or business profile address. ' +
+      'Use this to complete the "company profile" onboarding step — a complete address ' +
+      '(addressLine1, city, postalCode) is required for compliance correspondence. ' +
+      'Does not support vatNumber — record or change a VAT number with add_registration instead.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'The entity ID to update (from list_entities or create_entity).' },
+        name: { type: 'string', description: 'Updated legal name.' },
+        addressLine1: { type: 'string', description: 'Street address, line 1.' },
+        addressLine2: { type: 'string', description: 'Street address, line 2 (suite, floor, etc.). Optional.' },
+        city: { type: 'string', description: 'City.' },
+        postalCode: { type: 'string', description: 'Postal / ZIP code.' },
+      },
+      required: ['entityId'],
+    },
+  },
+  {
+    name: 'set_ar_credentials',
+    description:
+      'Register Argentina AFIP electronic invoicing credentials (CUIT, punto de venta, and WSFE certificate) for an entity. ' +
+      'Required before submitting invoices to Argentina. ' +
+      'certPem and keyPem are the AFIP-issued WSFE certificate and its private key, PEM-encoded.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        cuit: { type: 'string', description: '11-digit Argentine CUIT, no dashes or spaces.' },
+        puntoDeVenta: { type: 'number', description: 'AFIP point-of-sale number, 1–9999.' },
+        certPem: { type: 'string', description: 'PEM-encoded AFIP WSFE certificate, starting with -----BEGIN CERTIFICATE-----.' },
+        keyPem: { type: 'string', description: 'PEM-encoded private key for the certificate.' },
+        condicionIVAIssuer: { type: 'number', description: 'AFIP IVA condition code for the issuer. Defaults to 1 (Responsable Inscripto).' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['cuit', 'puntoDeVenta', 'certPem', 'keyPem'],
+    },
+  },
+  {
+    name: 'set_pl_credentials',
+    description:
+      'Register Poland KSeF (Krajowy System e-Faktur) credentials for an entity: NIP and KSeF API token. ' +
+      'Required before submitting invoices to Poland or polling the KSeF inbox. ' +
+      'Generate the token in the KSeF taxpayer portal (ksef.mf.gov.pl) under Zarządzanie tokenami → Wygeneruj token, ' +
+      'with "wysyłka faktur" and "dostęp do faktur" permissions.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        nip: { type: 'string', description: '10-digit Polish NIP, no spaces or dashes.' },
+        token: { type: 'string', description: 'KSeF API token from the taxpayer portal.' },
+        environment: { type: 'string', enum: ['production', 'test'], description: 'Defaults to "production".' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['nip', 'token'],
+    },
+  },
+  {
+    name: 'set_hu_credentials',
+    description:
+      'Register Hungary NAV Online Számla credentials for an entity: tax number and technical user details. ' +
+      'Required before submitting invoices to Hungary. ' +
+      'The technical user (login, password, signKey, exchangeKey) is created in the NAV Online Számla portal ' +
+      '(onlineszamla.nav.gov.hu) with invoice reporting rights.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        taxNumber: { type: 'string', description: '8-digit Hungarian taxpayer ID.' },
+        login: { type: 'string', description: 'NAV technical user login.' },
+        password: { type: 'string', description: 'NAV technical user password.' },
+        signKey: { type: 'string', description: 'Signature key from the NAV technical user registration.' },
+        exchangeKey: { type: 'string', description: '32 hex-character AES-128-ECB token decryption key.' },
+        environment: { type: 'string', enum: ['production', 'test'], description: 'Defaults to "production".' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['taxNumber', 'login', 'password', 'signKey', 'exchangeKey'],
+    },
+  },
+  {
+    name: 'invite_team_member',
+    description:
+      'Invite a teammate to this Clearvo account by email. ' +
+      'Requires an account-scoped API key. The invitee receives an email with a link to join and set up their own login. ' +
+      'Use entityIds to restrict the invited member to specific business entities — omit to grant access to every entity on the account. ' +
+      'Does not support role="admin" — admin invites must be sent from app.clearvo.io/settings/team by an existing owner/admin.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        email: { type: 'string', description: 'Invitee\'s email address.' },
+        role: { type: 'string', enum: ['developer', 'finance', 'viewer', 'auditor'], description: 'Role granted to the invited member. "admin" is not available via this tool — invite admins from the dashboard.' },
+        entityIds: { type: 'array', items: { type: 'string' }, description: 'Optional — restrict the invited member to these entity IDs. Omit for access to all entities on the account.' },
+      },
+      required: ['email', 'role'],
     },
   },
   {
@@ -643,6 +741,29 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'create_entity':
       return callApi('POST', '/entities', args);
+
+    case 'update_entity': {
+      const { entityId, ...updates } = args as { entityId: string } & Record<string, unknown>;
+      return callApi('PATCH', `/entities/${encodeURIComponent(entityId)}`, updates);
+    }
+
+    case 'set_ar_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/ar/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_pl_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/pl/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_hu_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/hu/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'invite_team_member':
+      return callApi('POST', '/team/invites', args);
 
     case 'get_requirements': {
       const country = args.country as string;
