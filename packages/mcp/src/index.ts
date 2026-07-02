@@ -393,12 +393,13 @@ const TOOLS = [
     description:
       'Invite a teammate to this Clearvo account by email. ' +
       'Requires an account-scoped API key. The invitee receives an email with a link to join and set up their own login. ' +
-      'Use entityIds to restrict the invited member to specific business entities — omit to grant access to every entity on the account.',
+      'Use entityIds to restrict the invited member to specific business entities — omit to grant access to every entity on the account. ' +
+      'Does not support role="admin" — admin invites must be sent from app.clearvo.io/settings/team by an existing owner/admin.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         email: { type: 'string', description: 'Invitee\'s email address.' },
-        role: { type: 'string', enum: ['admin', 'developer', 'finance', 'viewer', 'auditor'], description: 'Role granted to the invited member.' },
+        role: { type: 'string', enum: ['developer', 'finance', 'viewer', 'auditor'], description: 'Role granted to the invited member. "admin" is not available via this tool — invite admins from the dashboard.' },
         entityIds: { type: 'array', items: { type: 'string' }, description: 'Optional — restrict the invited member to these entity IDs. Omit for access to all entities on the account.' },
       },
       required: ['email', 'role'],
