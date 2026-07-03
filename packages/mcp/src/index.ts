@@ -330,7 +330,11 @@ const TOOLS = [
       'Update a business entity\'s name or business profile address. ' +
       'Use this to complete the "company profile" onboarding step — a complete address ' +
       '(addressLine1, city, postalCode) is required for compliance correspondence. ' +
-      'Does not support vatNumber — record or change a VAT number with add_registration instead.',
+      'Does not support vatNumber — record or change a VAT number with add_registration instead. ' +
+      'Also handles confirmNoRegistrations: set true when the entity genuinely has no tax registrations ' +
+      'anywhere yet (e.g. a new or pre-nexus business that only wants Compliance Radar to monitor for a ' +
+      'future threshold breach) — this satisfies the "add-registration" onboarding step without a ' +
+      'fabricated registration. Rejected with 422 if the entity already has a real registration on file.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -340,6 +344,7 @@ const TOOLS = [
         addressLine2: { type: 'string', description: 'Street address, line 2 (suite, floor, etc.). Optional.' },
         city: { type: 'string', description: 'City.' },
         postalCode: { type: 'string', description: 'Postal / ZIP code.' },
+        confirmNoRegistrations: { type: 'boolean', description: 'Set true to confirm this entity has no tax registrations anywhere yet (satisfies the add-registration onboarding step without a fake registration). Set false to clear a previous confirmation.' },
       },
       required: ['entityId'],
     },
