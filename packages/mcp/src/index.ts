@@ -222,7 +222,10 @@ const TOOLS = [
       'and EN16931 tax code for each line item. Handles EU B2B reverse charge, OSS/IOSS schemes, ' +
       'US state-level sales tax, Canadian GST/HST/PST, and more. ' +
       'The taxCode returned maps directly to the taxCode field in submit_invoice — no conversion needed. ' +
-      'Set commit=true to record the calculation in the audit trail (required for threshold monitoring).',
+      'Set commit=true to record the calculation in the audit trail (required for threshold monitoring). ' +
+      'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
+      'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
+      'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -612,9 +615,14 @@ const TOOLS = [
   {
     name: 'add_registration',
     description:
-      'Record a new tax registration for an entity: VAT, IOSS, OSS, VOEC, or NON_UNION_OSS. ' +
-      'Use this when you receive a new VAT registration number from a tax authority and want to ' +
-      'record it so Clearvo can apply the correct treatment in tax calculations.',
+      'Record a new tax registration for an entity. This covers any tax identifier issued by any tax authority ' +
+      'worldwide — not just VAT: a US state sales-tax permit, GST registration, IOSS, OSS, or another local scheme ' +
+      'all count. Use this whenever the entity registers with a tax authority anywhere, whether or not the ' +
+      'registration number has arrived yet (omit taxNumber to self-certify the registration exists). ' +
+      'IMPORTANT: a registration does not collect tax until its collection date is set — pass collectFromDate ' +
+      'in this same call (ask the user whether to start immediately or on a future date) rather than leaving it ' +
+      'unset; Clearvo will not apply tax for that country/state until it is. Omitting collectFromDate leaves ' +
+      'collection unset — call set_registration_collection afterwards if you do that.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -625,6 +633,7 @@ const TOOLS = [
         },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Not required for IOSS (applies EU-wide).' },
         taxNumber: { type: 'string', description: 'The registration or VAT number issued by the authority. Optional — can be added later once received. Omit to self-certify that the registration exists without yet recording the number.' },
+        collectFromDate: { type: ['string', 'null'], description: 'When tax collection should start. Pass null to start immediately, or an ISO date (YYYY-MM-DD) to defer to a future date. Omit entirely to leave collection unset (call set_registration_collection later instead).' },
         entityId: { type: 'string', description: 'Entity to register. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['type'],
@@ -695,8 +704,13 @@ const TOOLS = [
       'unverifiable VAT numbers, default tax-inclusive/exclusive pricing, default product category, ' +
       'and US address precision. The response includes a "descriptions" object explaining what each ' +
       'setting controls and the tradeoffs — use it to explain the options to the user in plain language ' +
-      'before calling update_tax_settings. Also returns confirmedAt — null means the user has not yet ' +
-      'explicitly reviewed these settings (a Getting Started step).',
+      'before calling update_tax_settings. IMPORTANT: even when a user says they want to accept all ' +
+      'defaults, do not treat that as a no-op — defaultTaxCategorySlug is the one setting worth raising ' +
+      'explicitly before confirming, because leaving it unset silently falls back to a generic ' +
+      'physical-goods category that mistaxes an account whose catalogue is mostly one non-physical type ' +
+      '(e.g. all SaaS). Ask what the account mostly sells and set it if there is a dominant type, before ' +
+      'calling update_tax_settings with confirmed=true. Also returns confirmedAt — null means the user ' +
+      'has not yet explicitly reviewed these settings (a Getting Started step).',
     inputSchema: {
       type: 'object' as const,
       properties: {},
@@ -706,8 +720,10 @@ const TOOLS = [
     name: 'update_tax_settings',
     description:
       'Update account-level tax calculation settings. Call get_tax_settings first to see current values ' +
-      'and their explanations before changing anything. Pass confirmed=true once the user has reviewed ' +
-      'the settings (even if they kept all defaults) — this marks the "Review your tax calculation ' +
+      'and their explanations before changing anything — and before confirming, if the account\'s catalogue ' +
+      'is mostly one product type (e.g. all SaaS), set defaultTaxCategorySlug for that type rather than ' +
+      'leaving it unset; see get_tax_settings for why. Pass confirmed=true once the user has reviewed ' +
+      'the settings (even if they kept every other default) — this marks the "Review your tax calculation ' +
       'settings" Getting Started step complete.',
     inputSchema: {
       type: 'object' as const,
@@ -715,7 +731,7 @@ const TOOLS = [
         vatValidationMode: { type: 'string', enum: ['full', 'format', 'none'], description: "'full' validates live against the issuing authority, 'format' only checks structure, 'none' skips validation entirely." },
         vatUnverifiableTreatment: { type: 'string', enum: ['consumer', 'business'], description: "How to treat a B2B buyer whose VAT number can't be verified live. 'consumer' (safer default) charges tax as if B2C; 'business' keeps reverse-charge treatment." },
         defaultPriceIncludesTax: { type: 'boolean', description: 'Whether prices sent to calculate_tax already include tax (true) or are tax-exclusive (false).' },
-        defaultTaxCategorySlug: { type: ['string', 'null'], description: 'Tax category applied when no product name/category is supplied on a line item. Pass null to clear it.' },
+        defaultTaxCategorySlug: { type: ['string', 'null'], description: 'RECOMMENDED to set explicitly rather than leaving unset — the tax category applied when no product name/category is supplied on a line item. Unset silently falls back to a generic physical-goods category, which mistaxes a catalogue that is mostly one non-physical type (e.g. all SaaS). Pass null to clear it back to that fallback.' },
         usAddressPrecision: { type: 'string', enum: ['rooftop', 'zip'], description: "'rooftop' resolves the full street address for the most accurate US rate (recommended); 'zip' uses ZIP code only." },
         confirmed: { type: 'boolean', description: 'Set true once the user has reviewed these settings — marks the onboarding step complete, independent of whether any value changed.' },
       },
@@ -724,7 +740,10 @@ const TOOLS = [
   {
     name: 'create_exemption_certificate',
     description:
-      'Create a tax exemption certificate for a customer (e.g. resale, manufacturing, exempt organization). ' +
+      'Record a tax exemption certificate belonging to one of this entity\'s BUYERS — not a certificate for the ' +
+      'entity itself. An exemption certificate is a document a customer provides (e.g. a US resale certificate, ' +
+      'manufacturing exemption, or nonprofit exemption letter) proving they do not owe sales tax on a purchase. ' +
+      'Only call this when you know a specific customer holds one; there is no default or fallback certificate. ' +
       'Once created, reference it via customer.ref matching customerRef during calculate_tax so the exemption ' +
       'is automatically applied to eligible line items. Call upload_exemption_document afterwards if you have ' +
       'the signed PDF to attach.',
