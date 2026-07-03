@@ -222,7 +222,10 @@ const TOOLS = [
       'and EN16931 tax code for each line item. Handles EU B2B reverse charge, OSS/IOSS schemes, ' +
       'US state-level sales tax, Canadian GST/HST/PST, and more. ' +
       'The taxCode returned maps directly to the taxCode field in submit_invoice — no conversion needed. ' +
-      'Set commit=true to record the calculation in the audit trail (required for threshold monitoring).',
+      'Set commit=true to record the calculation in the audit trail (required for threshold monitoring). ' +
+      'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
+      'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
+      'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -616,10 +619,10 @@ const TOOLS = [
       'worldwide — not just VAT: a US state sales-tax permit, GST registration, IOSS, OSS, or another local scheme ' +
       'all count. Use this whenever the entity registers with a tax authority anywhere, whether or not the ' +
       'registration number has arrived yet (omit taxNumber to self-certify the registration exists). ' +
-      'IMPORTANT: adding a registration does NOT start tax collection — the new registration has no collection ' +
-      'date set, so Clearvo will not apply tax for that country/state yet even though it is on file. Always ' +
-      'follow up with set_registration_collection to set when collection should begin (immediately or a future ' +
-      'date), and ask the user which they want rather than leaving it unset.',
+      'IMPORTANT: a registration does not collect tax until its collection date is set — pass collectFromDate ' +
+      'in this same call (ask the user whether to start immediately or on a future date) rather than leaving it ' +
+      'unset; Clearvo will not apply tax for that country/state until it is. Omitting collectFromDate leaves ' +
+      'collection unset — call set_registration_collection afterwards if you do that.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -630,6 +633,7 @@ const TOOLS = [
         },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Not required for IOSS (applies EU-wide).' },
         taxNumber: { type: 'string', description: 'The registration or VAT number issued by the authority. Optional — can be added later once received. Omit to self-certify that the registration exists without yet recording the number.' },
+        collectFromDate: { type: ['string', 'null'], description: 'When tax collection should start. Pass null to start immediately, or an ISO date (YYYY-MM-DD) to defer to a future date. Omit entirely to leave collection unset (call set_registration_collection later instead).' },
         entityId: { type: 'string', description: 'Entity to register. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['type'],
