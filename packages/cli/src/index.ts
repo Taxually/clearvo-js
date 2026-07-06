@@ -175,10 +175,12 @@ products
   .option('--entity <entityId>', 'Filter by entity ID')
   .option('--limit <n>', 'Results per page', '25')
   .option('--page <n>', 'Page number', '1')
+  .option('--sort <order>', 'Sort order: newest (default), name, or confidence')
   .option('--pretty', 'Pretty-print JSON output')
-  .action(async (opts: { entity?: string; limit: string; page: string; pretty?: boolean }) => {
+  .action(async (opts: { entity?: string; limit: string; page: string; sort?: string; pretty?: boolean }) => {
     const qs = new URLSearchParams({ limit: opts.limit, page: opts.page });
     if (opts.entity) qs.set('entityId', opts.entity);
+    if (opts.sort)   qs.set('sort', opts.sort);
     const result = await api('GET', `/products?${qs}`);
     print(result, !!opts.pretty);
   });

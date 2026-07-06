@@ -494,6 +494,7 @@ const TOOLS = [
         entityId: { type: 'string', description: 'Entity ID to list products for. Omit to use the default entity for this API key.' },
         limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
         page: { type: 'number', description: 'Page number, 1-based (default 1)' },
+        sort: { type: 'string', enum: ['newest', 'name', 'confidence'], description: 'Sort order: newest (default), name (A-Z), or confidence (highest AI confidence first; unconfirmed/non-AI products sort last).' },
       },
     },
   },
@@ -895,6 +896,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.entityId) qs.set('entityId', args.entityId as string);
       if (args.limit)    qs.set('limit',    String(args.limit));
       if (args.page)     qs.set('page',     String(args.page));
+      if (args.sort)     qs.set('sort',     args.sort as string);
       const q = qs.toString();
       return callApi('GET', `/products${q ? `?${q}` : ''}`);
     }
