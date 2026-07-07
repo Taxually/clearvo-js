@@ -140,6 +140,7 @@ export class ClearvoClient {
     if (params.entityId) qs.set('entityId', params.entityId);
     if (params.limit != null) qs.set('limit', String(params.limit));
     if (params.page  != null) qs.set('page',  String(params.page));
+    if (params.sort) qs.set('sort', params.sort);
     const q = qs.toString();
     return this.request('GET', `/products${q ? `?${q}` : ''}`);
   }

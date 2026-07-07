@@ -160,6 +160,8 @@ export interface CountryRequirements {
   notes?: string;
 }
 
+export type ProductTier = 'CONFIRMED' | 'STANDARD_MAPPING' | 'AI_CLASSIFIED' | 'UNCLASSIFIED';
+
 export interface Product {
   id: string;
   entityId: string;
@@ -167,6 +169,16 @@ export interface Product {
   sku?: string;
   description?: string;
   taxCategory?: string;
+  /** AI classification confidence (0-1). Only populated when tier is 'AI_CLASSIFIED'. */
+  confidence?: number | null;
+  /** Trust tier derived from the classification source — see ProductTier. */
+  tier?: ProductTier;
+  /** Ready-to-render display label for `tier`, e.g. "Confirmed". */
+  tierLabel?: string;
+  /** Ready-to-render description of how/when this product was added, e.g. "Synced from WooCommerce". */
+  addedLabel?: string;
+  /** Ready-to-render description of who confirmed this classification, or null if unconfirmed. */
+  confirmedByLabel?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -190,6 +202,8 @@ export interface ListProductsParams {
   entityId?: string;
   limit?: number;
   page?: number;
+  /** Sort order. 'newest' (default) = most recently created first. 'name' = A-Z. 'confidence' = highest AI confidence first (unconfirmed/non-AI products sort last). */
+  sort?: 'newest' | 'name' | 'confidence';
 }
 
 export interface ListProductsResponse {
