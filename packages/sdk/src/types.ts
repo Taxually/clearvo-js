@@ -54,6 +54,9 @@ export interface ListInvoicesParams {
   beforeId?: string;
   country?: string;
   status?: string;
+  /** 'outbound' = invoices you submitted, 'inbound' = invoices you received as a buyer
+   *  (currently Poland KSeF only). Omit to return both directions. */
+  direction?: 'inbound' | 'outbound';
 }
 
 export interface ListInvoicesResponse {

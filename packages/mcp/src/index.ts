@@ -387,6 +387,24 @@ const TOOLS = [
     },
   },
   {
+    name: 'poll_pl_inbox',
+    description:
+      'Fetch new invoices received from suppliers via Poland KSeF (the buyer inbox). KSeF has no push ' +
+      'mechanism — Clearvo only sees a supplier\'s invoice once this is called, so call it whenever you need ' +
+      'the latest received invoices (there is no automatic background schedule yet). Requires set_pl_credentials ' +
+      'to have been called first with a token that has "dostęp do faktur" (invoice access) permission — a ' +
+      'send-only token will fail. Newly received invoices are stored with direction "inbound" and can then be ' +
+      'listed via list_invoices with direction: "inbound", or fetched individually via get_invoice. Each stored ' +
+      'invoice also runs a Biała Lista (White List) check on the seller\'s bank account IBAN, since Polish law ' +
+      'puts VAT-deduction risk on the payer for paying an unlisted account.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'set_hu_credentials',
     description:
       'Register Hungary NAV Online Számla credentials for an entity: tax number and technical user details. ' +
@@ -443,11 +461,13 @@ const TOOLS = [
   {
     name: 'list_invoices',
     description:
-      'List invoices previously submitted through Clearvo. ' +
-      'Filter by country, clearance status, or date. ' +
+      'List invoices previously submitted through Clearvo, OR received from a supplier via a national ' +
+      'inbound platform (currently Poland KSeF only — pass direction: "inbound", after calling poll_pl_inbox ' +
+      'to fetch the latest received invoices). ' +
+      'Filter by country, clearance status, direction, or date. ' +
       'Returns submission timestamps, clearance status labels, and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
-      'or identify REJECTED invoices that need to be resubmitted. ' +
+      'identify REJECTED invoices that need to be resubmitted, or list everything received as a buyer. ' +
       'Paginate using the nextCursor / prevCursor values returned in each response: pass nextCursor as after_id to advance forward.',
     inputSchema: {
       type: 'object' as const,
@@ -457,6 +477,11 @@ const TOOLS = [
           type: 'string',
           enum: ['PENDING', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNROUTABLE', 'DELIVERED', 'UNDELIVERED'],
           description: 'Filter by clearance status',
+        },
+        direction: {
+          type: 'string',
+          enum: ['inbound', 'outbound'],
+          description: 'Filter by direction: "outbound" = invoices you submitted (default view), "inbound" = invoices you received as a buyer. Omit to return both.',
         },
         limit:     { type: 'number', description: 'Results per page (default 25, max 100)' },
         after_id:  { type: 'string', description: 'Return invoices submitted before this invoice ID (use nextCursor from a previous response)' },
@@ -837,6 +862,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/pl/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'poll_pl_inbox': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('POST', '/pl/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'set_hu_credentials': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/hu/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
@@ -879,6 +909,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const qs = new URLSearchParams();
       if (args.country)   qs.set('country',   args.country   as string);
       if (args.status)    qs.set('status',    args.status    as string);
+      if (args.direction) qs.set('direction', args.direction as string);
       if (args.limit)     qs.set('limit',     String(args.limit));
       if (args.after_id)  qs.set('after_id',  args.after_id  as string);
       if (args.before_id) qs.set('before_id', args.before_id as string);
