@@ -299,7 +299,7 @@ const TOOLS = [
     description:
       'List the business entities registered under this Clearvo account. ' +
       'Each entity is a legal company registered for tax compliance (one VAT registration, one country of establishment). ' +
-      'Returns entity IDs, names, countries of establishment, VAT numbers, and ERP reference codes. ' +
+      'Returns entity IDs, names, countries of establishment, and VAT numbers. ' +
       'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices.',
     inputSchema: {
       type: 'object' as const,

@@ -8,7 +8,6 @@ export interface Entity {
   name: string;
   country: string;
   vatNumber: string | null;
-  erpReferences: string[];
   isDefault: boolean;
   createdAt: string;
 }
@@ -31,7 +30,6 @@ export interface CreateEntityResponse {
 export interface UpdateEntityInput {
   name?: string;
   vatNumber?: string;
-  erpReferences?: string[];
 }
 
 export interface InvoiceSubmitResponse {
