@@ -320,6 +320,89 @@ export interface ListTaxCalculationsResponse {
   pagination: { page: number; limit: number; total: number };
 }
 
+export type SiiInvoiceType = 'LFE' | 'LFR';
+
+export type SiiRecordStatus = 'PENDING' | 'VALIDATED' | 'SUBMITTED' | 'ACCEPTED' | 'REJECTED' | 'ERROR';
+
+export interface SubmitSiiRecordInput {
+  invoiceType: SiiInvoiceType;
+  invoiceNumber: string;
+  invoiceDate: string;
+  counterpartyNif?: string | null;
+  counterpartyName?: string | null;
+  baseAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  /** Régimen especial / clave key, '01'..'16'. */
+  claveRegimen: string;
+}
+
+export interface CorrectSiiRecordInput extends SubmitSiiRecordInput {
+  /** id of the SII record being corrected. */
+  originalRecordId: string;
+}
+
+export interface SubmitSiiRecordResponse {
+  ok: boolean;
+  id: string;
+  status: string;
+  aeatCsv: string | null;
+  reportingDeadline: string;
+}
+
+export interface SiiRecord {
+  id: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  invoiceType: SiiInvoiceType;
+  counterpartyNif: string | null;
+  counterpartyName: string | null;
+  baseAmount: number | null;
+  taxAmount: number | null;
+  totalAmount: number | null;
+  claveRegimen: string;
+  status: SiiRecordStatus;
+  /** A0 = original submission, A1 = correction. */
+  tipoComunicacion: 'A0' | 'A1';
+  /** Set only on a correction record — the id of the SII record it corrects. */
+  originalRecordId: string | null;
+  /** 0 for an original submission, incremented by 1 per correction. */
+  correctionSeq: number;
+  reportingDeadline: string;
+  submittedAt: string | null;
+  aeatCsv: string | null;
+  aeatStatusCode: string | null;
+  aeatErrorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Full detail for a single SII record. Superset of SiiRecord. */
+export interface SiiRecordDetail extends SiiRecord {
+  /** Full AEAT error message, present when aeatErrorCode is set. */
+  aeatErrorDetail: string | null;
+}
+
+export interface ListSiiRecordsParams {
+  status?: SiiRecordStatus;
+  invoiceType?: SiiInvoiceType;
+  /** invoiceDate >= this value, YYYY-MM-DD. */
+  dateFrom?: string;
+  /** invoiceDate <= this value, YYYY-MM-DD. */
+  dateTo?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface ListSiiRecordsResponse {
+  records: SiiRecord[];
+  pagination: { total: number; page: number; limit: number; pages: number; hasNext: boolean; hasPrev: boolean };
+}
+
+export interface GetSiiRecordResponse {
+  record: SiiRecordDetail;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,

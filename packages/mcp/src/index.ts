@@ -483,6 +483,87 @@ const TOOLS = [
     },
   },
   {
+    name: 'submit_sii_record',
+    description:
+      'Submit a single Spain SII (Suministro Inmediato de Información) registro to AEAT. ' +
+      'Use this instead of submit_invoice for an entity enrolled in the SII census (obligation es_sii) — ' +
+      'SII and VeriFactu are mutually exclusive per entity, so a SII-obliged entity is never submitted via ' +
+      'submit_invoice/POST /send. Requires the entity to have completed the Annex I written authorization ' +
+      'and to hold a Spanish VAT registration — call get_setup_status first if unsure. ' +
+      'Returns a record id — call get_sii_record to check aeatStatusCode/aeatErrorCode after submission.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        invoiceType: { type: 'string', enum: ['LFE', 'LFR'], description: 'LFE = Facturas Expedidas (issued), LFR = Facturas Recibidas (received).' },
+        invoiceNumber: { type: 'string' },
+        invoiceDate: { type: 'string', description: 'ISO YYYY-MM-DD.' },
+        counterpartyNif: { type: 'string' },
+        counterpartyName: { type: 'string' },
+        baseAmount: { type: 'number' },
+        taxAmount: { type: 'number' },
+        totalAmount: { type: 'number' },
+        claveRegimen: { type: 'string', description: "Régimen especial / clave key, '01'..'16'." },
+      },
+      required: ['invoiceType', 'invoiceNumber', 'invoiceDate', 'baseAmount', 'taxAmount', 'totalAmount', 'claveRegimen'],
+    },
+  },
+  {
+    name: 'correct_sii_record',
+    description:
+      'Submit a correction (tipoComunicacion A1) for a previously-submitted SII record. ' +
+      'The original record\'s invoice fields are never updated — this always creates a new SII record ' +
+      'referencing the original via originalRecordId, with correctionSeq incremented by 1. ' +
+      'Pass the full corrected values for all fields, not just the ones that changed.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        originalRecordId: { type: 'string', description: 'id of the SII record being corrected.' },
+        invoiceType: { type: 'string', enum: ['LFE', 'LFR'] },
+        invoiceNumber: { type: 'string' },
+        invoiceDate: { type: 'string', description: 'ISO YYYY-MM-DD.' },
+        counterpartyNif: { type: 'string' },
+        counterpartyName: { type: 'string' },
+        baseAmount: { type: 'number' },
+        taxAmount: { type: 'number' },
+        totalAmount: { type: 'number' },
+        claveRegimen: { type: 'string', description: "Régimen especial / clave key, '01'..'16'." },
+      },
+      required: ['originalRecordId', 'invoiceType', 'invoiceNumber', 'invoiceDate', 'baseAmount', 'taxAmount', 'totalAmount', 'claveRegimen'],
+    },
+  },
+  {
+    name: 'list_sii_records',
+    description:
+      'List Spain SII records for the caller\'s entity. Filter by status, invoice type, or invoice date range. ' +
+      'Use this to audit submitted SII registros, find records still PENDING, or identify REJECTED/ERROR ' +
+      'records that need a correction via correct_sii_record.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        status: { type: 'string', enum: ['PENDING', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'ERROR'] },
+        invoiceType: { type: 'string', enum: ['LFE', 'LFR'] },
+        dateFrom: { type: 'string', description: 'invoiceDate >= this value, YYYY-MM-DD.' },
+        dateTo: { type: 'string', description: 'invoiceDate <= this value, YYYY-MM-DD.' },
+        page: { type: 'number', description: 'Default 1.' },
+        limit: { type: 'number', description: 'Results per page, default 50, max 200.' },
+      },
+    },
+  },
+  {
+    name: 'get_sii_record',
+    description:
+      'Fetch full detail for a single Spain SII record by id, scoped to the caller\'s entity. ' +
+      'Returns everything in list_sii_records plus aeatErrorDetail — the full AEAT error message, ' +
+      'present when aeatErrorCode is set. Use this to investigate a specific rejection before correcting it.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['id'],
+      properties: {
+        id: { type: 'string', description: 'The SII record id, e.g. from submit_sii_record or list_sii_records.' },
+      },
+    },
+  },
+  {
     name: 'list_products',
     description:
       'List the product catalogue for an entity. ' +
@@ -889,6 +970,29 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_invoice': {
       const id = args.id as string;
       return callApi('GET', `/invoices/${encodeURIComponent(id)}`);
+    }
+
+    case 'submit_sii_record':
+      return callApi('POST', '/sii/submit', args);
+
+    case 'correct_sii_record':
+      return callApi('POST', '/sii/correct', args);
+
+    case 'list_sii_records': {
+      const qs = new URLSearchParams();
+      if (args.status)      qs.set('status',      args.status      as string);
+      if (args.invoiceType) qs.set('invoiceType', args.invoiceType as string);
+      if (args.dateFrom)    qs.set('dateFrom',    args.dateFrom    as string);
+      if (args.dateTo)      qs.set('dateTo',      args.dateTo      as string);
+      if (args.page)        qs.set('page',        String(args.page));
+      if (args.limit)       qs.set('limit',       String(args.limit));
+      const q = qs.toString();
+      return callApi('GET', `/sii/records${q ? `?${q}` : ''}`);
+    }
+
+    case 'get_sii_record': {
+      const id = args.id as string;
+      return callApi('GET', `/sii/records/${encodeURIComponent(id)}`);
     }
 
     case 'list_products': {
