@@ -31,6 +31,12 @@ import type {
   TaxCalculationSummary,
   ListTaxCalculationsParams,
   ListTaxCalculationsResponse,
+  SubmitSiiRecordInput,
+  CorrectSiiRecordInput,
+  SubmitSiiRecordResponse,
+  ListSiiRecordsParams,
+  ListSiiRecordsResponse,
+  GetSiiRecordResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -216,5 +222,31 @@ export class ClearvoClient {
     if (params.page  != null) qs.set('page',  String(params.page));
     const q = qs.toString();
     return this.request('GET', `/tax/calculate${q ? `?${q}` : ''}`);
+  }
+
+  // ── Spain SII ──────────────────────────────────────────────────────────────
+
+  submitSiiRecord(input: SubmitSiiRecordInput): Promise<SubmitSiiRecordResponse> {
+    return this.request('POST', '/sii/submit', input);
+  }
+
+  correctSiiRecord(input: CorrectSiiRecordInput): Promise<SubmitSiiRecordResponse> {
+    return this.request('POST', '/sii/correct', input);
+  }
+
+  listSiiRecords(params: ListSiiRecordsParams = {}): Promise<ListSiiRecordsResponse> {
+    const qs = new URLSearchParams();
+    if (params.status)         qs.set('status',      params.status);
+    if (params.invoiceType)    qs.set('invoiceType',  params.invoiceType);
+    if (params.dateFrom)       qs.set('dateFrom',     params.dateFrom);
+    if (params.dateTo)         qs.set('dateTo',       params.dateTo);
+    if (params.page  != null)  qs.set('page',  String(params.page));
+    if (params.limit != null)  qs.set('limit', String(params.limit));
+    const q = qs.toString();
+    return this.request('GET', `/sii/records${q ? `?${q}` : ''}`);
+  }
+
+  getSiiRecord(id: string): Promise<GetSiiRecordResponse> {
+    return this.request('GET', `/sii/records/${encodeURIComponent(id)}`);
   }
 }
