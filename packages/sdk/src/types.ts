@@ -30,12 +30,24 @@ export interface CreateEntityResponse {
 export interface UpdateEntityInput {
   name?: string;
   vatNumber?: string;
+  /** Default for InvoiceRequest.notifyBuyer — applies whenever a send omits its own override. */
+  notifyBuyerByDefault?: boolean;
 }
 
 export interface InvoiceSubmitResponse {
   referenceId: string;
   status: string;
   message?: string;
+  /**
+   * Outcome of the buyer invoice notification feature — only present for
+   * countries where no authority network delivers the invoice to the buyer
+   * (Spain, Portugal, France, Germany always; Italy B2C).
+   */
+  buyerNotification?: {
+    status: 'SENT' | 'SKIPPED' | 'FAILED';
+    reason?: 'NOT_APPLICABLE' | 'NOT_OPTED_IN' | 'MISSING_BUYER_EMAIL' | 'NOTIFICATIONS_NOT_CONFIGURED';
+    error?: string;
+  };
 }
 
 export interface InvoiceStatusResponse {
