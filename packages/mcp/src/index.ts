@@ -170,6 +170,13 @@ const TOOLS = [
               },
               required: ['city', 'country'],
             },
+            contact: {
+              type: 'object',
+              description: 'Buyer contact details. contact.email is required for notifyBuyer to have any effect.',
+              properties: {
+                email: { type: 'string', description: 'Buyer email — required if notifyBuyer is set (or your entity default is on) for a country where Clearvo does not deliver the invoice electronically.' },
+              },
+            },
           },
           required: ['name', 'address'],
         },
@@ -194,6 +201,10 @@ const TOOLS = [
         totalAmount: { type: 'number', description: 'Net total excluding tax' },
         taxAmount: { type: 'number', description: 'Total tax amount' },
         documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note"' },
+        notifyBuyer: {
+          type: 'boolean',
+          description: 'Only meaningful for countries where no authority network delivers the invoice to the buyer (Spain, Portugal, France, Germany always; Italy only when the buyer has no SDI routing code — i.e. B2C). When true and buyer.contact.email is set, Clearvo emails the buyer a link to view/download the invoice. Omit to use the entity default (see update_entity\'s notifyBuyerByDefault); true/false here overrides that default for this invoice only. Silently ignored for countries Clearvo already delivers electronically (Peppol, Italy B2B/B2G, Poland, Romania, Hungary, Greece, Argentina) — check the response\'s buyerNotification field to see what happened.',
+        },
       },
       required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'buyer', 'lines', 'totalAmount', 'taxAmount'],
     },
@@ -334,7 +345,8 @@ const TOOLS = [
       'Also handles confirmNoRegistrations: set true when the entity genuinely has no tax registrations ' +
       'anywhere yet (e.g. a new or pre-nexus business that only wants Compliance Radar to monitor for a ' +
       'future threshold breach) — this satisfies the "add-registration" onboarding step without a ' +
-      'fabricated registration. Rejected with 422 if the entity already has a real registration on file.',
+      'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
+      'Also handles notifyBuyerByDefault — see submit_invoice\'s notifyBuyer for what this controls.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -345,6 +357,7 @@ const TOOLS = [
         city: { type: 'string', description: 'City.' },
         postalCode: { type: 'string', description: 'Postal / ZIP code.' },
         confirmNoRegistrations: { type: 'boolean', description: 'Set true to confirm this entity has no tax registrations anywhere yet (satisfies the add-registration onboarding step without a fake registration). Set false to clear a previous confirmation.' },
+        notifyBuyerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyBuyer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyBuyer override.' },
       },
       required: ['entityId'],
     },
