@@ -415,6 +415,68 @@ export interface GetSiiRecordResponse {
   record: SiiRecordDetail;
 }
 
+// ── Data Query Tool ──────────────────────────────────────────────────────────
+
+export type QueryDataset = 'einvoicing_records' | 'tax_calculations';
+
+export type QueryFilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains';
+
+export interface QueryFilter {
+  field: string;
+  operator: QueryFilterOperator;
+  /** Required for every operator except 'in', which uses `values` instead. */
+  value?: string | number | boolean;
+  /** Only valid with operator 'in'. */
+  values?: Array<string | number | boolean>;
+}
+
+export interface QueryRequestParams {
+  dataset: QueryDataset;
+  filters?: QueryFilter[];
+  /** Allowlisted field names to return per row. Omit for the dataset's default column set. */
+  columns?: string[];
+  /** Rows per page. Default 25, max 100. */
+  limit?: number;
+  /** Inclusive lower bound on the dataset's canonical timestamp field (ISO date or datetime). */
+  from?: string;
+  /** Inclusive upper bound on the dataset's canonical timestamp field (ISO date or datetime). */
+  to?: string;
+  /** Opaque keyset cursor from a previous response's nextCursor. */
+  cursor?: string;
+}
+
+export interface QueryResponse {
+  ok: true;
+  rows: Array<Record<string, unknown>>;
+  hasMore: boolean;
+  nextCursor: string | null;
+  asOf: string;
+}
+
+export interface QueryFieldDefinition {
+  field: string;
+  type: string;
+  operators: QueryFilterOperator[];
+  enumValues?: string[];
+  indexed: boolean;
+  computed?: boolean;
+  currencySemantics?: string;
+}
+
+export interface QueryDatasetSchema {
+  dataset: QueryDataset;
+  timestampField: string;
+  limits: { defaultPageSize: number; maxPageSize: number; maxSpanDays: number };
+  dateSemantics: { field: string; timezone: string; description: string };
+  fields: QueryFieldDefinition[];
+  defaultColumns: string[];
+}
+
+export interface QueryFieldsResponse {
+  schemaVersion: string;
+  datasets: Record<QueryDataset, QueryDatasetSchema>;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,

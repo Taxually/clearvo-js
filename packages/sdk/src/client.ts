@@ -37,6 +37,9 @@ import type {
   ListSiiRecordsParams,
   ListSiiRecordsResponse,
   GetSiiRecordResponse,
+  QueryRequestParams,
+  QueryResponse,
+  QueryFieldsResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -248,5 +251,23 @@ export class ClearvoClient {
 
   getSiiRecord(id: string): Promise<GetSiiRecordResponse> {
     return this.request('GET', `/sii/records/${encodeURIComponent(id)}`);
+  }
+
+  // ── Data Query Tool ────────────────────────────────────────────────────────
+
+  /**
+   * Filtered, paginated query over einvoicing_records or tax_calculations.
+   * Fields, operators, and enum values are allowlisted per dataset — call
+   * getQueryFields() to discover what's currently supported before building
+   * `filters`/`columns`.
+   */
+  queryData(params: QueryRequestParams): Promise<QueryResponse> {
+    const { dataset, filters, columns, limit, from, to, cursor } = params;
+    return this.request('POST', '/query', { dataset, filters, columns, limit, from, to, cursor });
+  }
+
+  /** Discoverable schema for queryData(): allowlisted fields, operators, enums, and limits per dataset. */
+  getQueryFields(): Promise<QueryFieldsResponse> {
+    return this.request('GET', '/query/fields');
   }
 }
