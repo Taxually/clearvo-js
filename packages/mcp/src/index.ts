@@ -781,6 +781,68 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_query_fields',
+    description:
+      'Discover the allowlisted fields, operators, enum values, and limits for query_data, per dataset ' +
+      '("einvoicing_records" or "tax_calculations"). Call this before building filters for query_data — ' +
+      'it is the source of truth for what field/operator combinations are currently supported, since the ' +
+      'allowlist can change over time. Also returns each dataset\'s default page size, max page size, ' +
+      'max date-range span in days, and default response columns.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
+    name: 'query_data',
+    description:
+      'Ad-hoc filtered, paginated query over your own einvoicing_records or tax_calculations — the same ' +
+      'engine behind the Clearvo dashboard\'s "Explore" page. Use this for self-service analysis beyond ' +
+      'list_invoices/list_tax_calculations\' fixed filters: arbitrary combinations of allowlisted fields ' +
+      '(date range, jurisdiction, status, tax ID, amount, etc.) via `filters`. Call get_query_fields first ' +
+      'to see which fields/operators/enums are currently allowed for the chosen dataset — an unlisted field ' +
+      'or operator is rejected. Requires at least one indexed filter (an unfiltered or non-indexed-only ' +
+      'query is rejected to bound cost) and a date range no wider than the dataset\'s maxSpanDays. Returns ' +
+      'a page of rows (hasMore/nextCursor only — no aggregate counts or sums) and never raw XML or JSONB ' +
+      'internals. Rate-limited per API key, stricter than list_invoices/list_tax_calculations. Paginate by ' +
+      'passing the previous response\'s nextCursor back in as `cursor` (the cursor is bound to the exact ' +
+      'same filters — changing filters mid-pagination invalidates it).',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['dataset'],
+      properties: {
+        dataset: {
+          type: 'string',
+          enum: ['einvoicing_records', 'tax_calculations'],
+          description: 'Which dataset to query. See get_query_fields for each dataset\'s allowlisted fields.',
+        },
+        filters: {
+          type: 'array',
+          description: 'Allowlisted field filters, ANDed together. Get valid field/operator/enum combinations from get_query_fields.',
+          items: {
+            type: 'object',
+            required: ['field', 'operator'],
+            properties: {
+              field:    { type: 'string', description: 'A field named in this dataset\'s schema (see get_query_fields).' },
+              operator: { type: 'string', enum: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'contains'], description: '"in" requires `values`; every other operator requires `value`.' },
+              value:    { description: 'Comparison value. Required for every operator except "in".' },
+              values:   { type: 'array', description: 'Comparison values. Only valid with operator "in".' },
+            },
+          },
+        },
+        columns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Allowlisted field names to return per row. Omit for the dataset\'s default column set (see get_query_fields).',
+        },
+        limit:  { type: 'number', description: 'Rows per page (default 25, max 100)' },
+        from:   { type: 'string', description: 'Inclusive lower bound on the dataset\'s canonical timestamp field (ISO date or datetime).' },
+        to:     { type: 'string', description: 'Inclusive upper bound on the dataset\'s canonical timestamp field (ISO date or datetime).' },
+        cursor: { type: 'string', description: 'Opaque keyset cursor from a previous query_data response\'s nextCursor, to fetch the next page of the same query.' },
+      },
+    },
+  },
+  {
     name: 'get_setup_status',
     description:
       'Check what is left to finish setting up this Clearvo account — mirrors the dashboard\'s ' +
@@ -1068,6 +1130,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.page)     qs.set('page',     String(args.page));
       const q = qs.toString();
       return callApi('GET', `/tax/calculate${q ? `?${q}` : ''}`);
+    }
+
+    case 'get_query_fields':
+      return callApi('GET', '/query/fields');
+
+    case 'query_data': {
+      const { dataset, filters, columns, limit, from, to, cursor } = args as {
+        dataset: string; filters?: unknown; columns?: unknown; limit?: number; from?: string; to?: string; cursor?: string;
+      };
+      return callApi('POST', '/query', { dataset, filters, columns, limit, from, to, cursor });
     }
 
     case 'get_setup_status':

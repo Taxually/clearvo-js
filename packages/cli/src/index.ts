@@ -361,6 +361,57 @@ calculations
     print(result, !!opts.pretty);
   });
 
+// ── clearvo query ────────────────────────────────────────────────────────────
+// Ad-hoc filtered/paginated query over einvoicing_records or tax_calculations —
+// the same engine behind the dashboard's "Explore" page. Run `query fields`
+// first to see the allowlisted fields/operators/enums for a dataset.
+const query = program.command('query').description('Filtered, paginated query over einvoicing_records or tax_calculations');
+
+function parseFilterOption(raw: string): { field: string; operator: string; value?: string; values?: string[] } {
+  const [field, operator, ...rest] = raw.split(':');
+  if (!field || !operator || rest.length === 0) {
+    console.error(`Error: --filter must be "field:operator:value", got "${raw}"`);
+    process.exit(1);
+  }
+  const rawValue = rest.join(':');
+  if (operator === 'in') {
+    return { field, operator, values: rawValue.split(',') };
+  }
+  return { field, operator, value: rawValue };
+}
+
+query
+  .command('fields <dataset>')
+  .description('List the allowlisted fields, operators, enum values, and limits for a dataset (einvoicing_records | tax_calculations)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (dataset: string, opts: { pretty?: boolean }) => {
+    const result = await api('GET', '/query/fields') as { datasets: Record<string, unknown> };
+    print(result.datasets?.[dataset] ?? result, !!opts.pretty);
+  });
+
+query
+  .command('run')
+  .description('Run a filtered, paginated query. Use "query fields <dataset>" to see valid --filter field:operator:value combinations.')
+  .requiredOption('--dataset <dataset>', 'einvoicing_records | tax_calculations')
+  .option('--filter <field:operator:value>', 'Repeatable. operator is one of eq|neq|gt|gte|lt|lte|in|contains ("in" takes comma-separated values)', (val: string, prev: string[]) => [...prev, val], [] as string[])
+  .option('--columns <fields>', 'Comma-separated allowlisted field names to return (default: dataset defaults)')
+  .option('--limit <n>', 'Rows per page (default 25, max 100)')
+  .option('--from <date>', 'Inclusive lower bound on the dataset\'s canonical timestamp field')
+  .option('--to <date>', 'Inclusive upper bound on the dataset\'s canonical timestamp field')
+  .option('--cursor <token>', 'nextCursor from a previous run, to fetch the next page of the same query')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: { dataset: string; filter: string[]; columns?: string; limit?: string; from?: string; to?: string; cursor?: string; pretty?: boolean }) => {
+    const filters = opts.filter.map(parseFilterOption);
+    const body: Record<string, unknown> = { dataset: opts.dataset, filters };
+    if (opts.columns) body.columns = opts.columns.split(',');
+    if (opts.limit)   body.limit = Number(opts.limit);
+    if (opts.from)    body.from = opts.from;
+    if (opts.to)      body.to = opts.to;
+    if (opts.cursor)  body.cursor = opts.cursor;
+    const result = await api('POST', '/query', body);
+    print(result, !!opts.pretty);
+  });
+
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);

@@ -52,7 +52,7 @@ Add to `~/.claude/settings.json`:
 
 Then ask Claude: *"Submit a test invoice for €1,000 to Acme SpA (IT12345678901) for software licence Q3"*
 
-**Available tools**: `submit_invoice`, `poll_status`, `calculate_tax`, `validate_tax_number`, `validate_tax_numbers_batch`, `list_entities`, `create_entity`, `get_requirements`, `list_invoices`, `get_invoice`, `submit_sii_record`, `correct_sii_record`, `list_sii_records`, `get_sii_record`, `list_products`, `create_product`, `update_product`, `list_webhooks`, `create_webhook`, `delete_webhook`, `list_registrations`, `add_registration`, `set_registration_collection`, `list_tax_calculations`, `get_setup_status`, `get_tax_settings`, `update_tax_settings`
+**Available tools**: `submit_invoice`, `poll_status`, `calculate_tax`, `validate_tax_number`, `validate_tax_numbers_batch`, `list_entities`, `create_entity`, `get_requirements`, `list_invoices`, `get_invoice`, `submit_sii_record`, `correct_sii_record`, `list_sii_records`, `get_sii_record`, `list_products`, `create_product`, `update_product`, `list_webhooks`, `create_webhook`, `delete_webhook`, `list_registrations`, `add_registration`, `set_registration_collection`, `list_tax_calculations`, `get_query_fields`, `query_data`, `get_setup_status`, `get_tax_settings`, `update_tax_settings`
 
 ## TypeScript SDK
 

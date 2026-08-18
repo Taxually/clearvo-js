@@ -29,4 +29,12 @@ export type {
   ListSiiRecordsParams,
   ListSiiRecordsResponse,
   GetSiiRecordResponse,
+  QueryDataset,
+  QueryFilterOperator,
+  QueryFilter,
+  QueryRequestParams,
+  QueryResponse,
+  QueryFieldDefinition,
+  QueryDatasetSchema,
+  QueryFieldsResponse,
 } from './types.js';
