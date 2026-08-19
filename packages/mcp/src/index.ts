@@ -177,6 +177,10 @@ const TOOLS = [
                 email: { type: 'string', description: 'Buyer email — required if notifyBuyer is set (or your entity default is on) for a country where Clearvo does not deliver the invoice electronically.' },
               },
             },
+            customerRef: {
+              type: 'string',
+              description: 'Your own reference for a previously-saved customer (see the dashboard\'s Customers page). When set, Clearvo fills in any of name/taxId/address you omit here from the saved record — fields you do supply still take precedence.',
+            },
           },
           required: ['name', 'address'],
         },
