@@ -947,6 +947,80 @@ const TOOLS = [
       required: ['certificateId', 'documentBase64'],
     },
   },
+  {
+    name: 'list_customers',
+    description:
+      'List an entity\'s customer master data (name, tax ID, address). ' +
+      'Every successfully-issued invoice also auto-captures/refreshes a customer record from its buyer details, ' +
+      'so this list fills in over time even without calling create_customer directly. ' +
+      'Reference a customer via buyer.customerRef on submit_invoice instead of resending full buyer details every time.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        search: { type: 'string', description: 'Case-insensitive substring match against the stored name' },
+        page: { type: 'number', description: 'Page number, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
+        entityId: { type: 'string', description: 'Entity to list customers for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'create_customer',
+    description:
+      'Create a customer master-data record. Reference it later via buyer.customerRef on submit_invoice ' +
+      'instead of resending full buyer details every time. country and taxId are optional together — a B2C ' +
+      'customer with no VAT registration can have neither, but must not have one without the other.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Customer name' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Required together with taxId.' },
+        taxId: { type: 'string', description: 'Tax ID. Required together with country; format-validated and normalized.' },
+        customerRef: { type: 'string', description: 'Your own reference (e.g. CRM/ERP customer id). Must be unique per entity.' },
+        addressLine1: { type: 'string' },
+        addressLine2: { type: 'string' },
+        city: { type: 'string' },
+        region: { type: 'string' },
+        postalCode: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity to create the customer under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_customer',
+    description:
+      'Update a customer\'s master data. country and taxId are treated as a pair — clearing one without the ' +
+      'other clears taxId (the pair is no longer complete).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        customerId: { type: 'string', description: 'The customer ID to update (from list_customers or create_customer)' },
+        name: { type: 'string' },
+        country: { type: 'string' },
+        taxId: { type: 'string' },
+        customerRef: { type: 'string' },
+        addressLine1: { type: 'string' },
+        addressLine2: { type: 'string' },
+        city: { type: 'string' },
+        region: { type: 'string' },
+        postalCode: { type: 'string' },
+      },
+      required: ['customerId'],
+    },
+  },
+  {
+    name: 'delete_customer',
+    description: 'Soft-delete a customer. If this customer is invoiced again, they will be re-added automatically.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        customerId: { type: 'string', description: 'The customer ID to delete (from list_customers)' },
+        entityId: { type: 'string', description: 'Entity the customer belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['customerId'],
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -1155,6 +1229,31 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'update_tax_settings': {
       const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, confirmed } = args;
       return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, confirmed });
+    }
+
+    case 'list_customers': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      const qs = new URLSearchParams();
+      if (rest.search) qs.set('search', rest.search as string);
+      if (rest.page)   qs.set('page',   String(rest.page));
+      if (rest.limit)  qs.set('limit',  String(rest.limit));
+      const q = qs.toString();
+      return callApi('GET', `/customers${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'create_customer': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/customers', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_customer': {
+      const { customerId, entityId, ...updates } = args as { customerId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/customers/${encodeURIComponent(customerId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'delete_customer': {
+      const { customerId, entityId } = args as { customerId: string; entityId?: string };
+      return callApi('DELETE', `/customers/${encodeURIComponent(customerId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     default:
