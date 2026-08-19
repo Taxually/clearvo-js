@@ -1005,6 +1005,7 @@ const TOOLS = [
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity the customer belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['customerId'],
     },
