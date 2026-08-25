@@ -115,6 +115,25 @@ export interface TaxCalculateRequest {
     quantity?: number;
     productName: string;
     taxCategory?: string;
+    /**
+     * Caller-forced rate band for this line — names a band only, never a raw
+     * rate; the engine still resolves the actual percentage for the line's
+     * own jurisdiction from that band. Highest-precedence input to rate-band
+     * resolution, checked before commodityCode and taxCategory. Does not
+     * affect classification, place-of-supply, or upstream B2B/reverse-charge/
+     * exemption logic — those run unconditionally first and are unaffected.
+     */
+    taxTreatmentOverride?: 'STANDARD' | 'REDUCED' | 'SECOND_REDUCED' | 'SUPER_REDUCED' | 'ZERO' | 'EXEMPT';
+    /**
+     * Optional tariff/customs classification code for this line (HS, CN, or
+     * UK Trade Tariff — no separate scheme field needed; matching is
+     * jurisdiction-scoped by the line's own resolved country). Looked up
+     * hierarchy-aware (own digit precision, then progressively shorter
+     * prefixes). Consulted only when taxTreatmentOverride is absent — a
+     * total miss re-enters the ordinary taxCategory/classification cascade
+     * exactly as if this field had never been supplied.
+     */
+    commodityCode?: string;
     amountIncludesTax?: boolean;
   }>;
   vatValidation?: 'full' | 'format' | 'none';
@@ -154,6 +173,29 @@ export interface TaxCalculateResponse {
       slug: string;
       confidence: number;
       status: string;
+    };
+    /**
+     * HOW this line's tax category was resolved — the provenance signal
+     * alongside `classification`. Always populated when classification data
+     * is present, even when taxTreatmentOverride or commodityCode later
+     * determined the line's actual rate band (classification runs
+     * unconditionally before jurisdiction/rate-band resolution).
+     * AI_FALLBACK: no real classification signal existed — confidence
+     * carries no real meaning and must never be presented as a percentage.
+     */
+    classificationSource?: 'EXPLICIT' | 'STRIPE_CODE' | 'CACHED' | 'AI' | 'AI_FALLBACK' | null;
+    sourcingRationale?: {
+      /** This line's resolved rate band (STANDARD/REDUCED/ZERO/EXEMPT/etc). Always present when sourcingRationale is. */
+      rateBand?: string;
+      /**
+       * Which resolution tier decided `rateBand` above. 'OVERRIDE' confirms
+       * taxTreatmentOverride was honoured; 'COMMODITY_CODE' confirms
+       * commodityCode matched a row. Any other value means neither field
+       * applied and the band came from the ordinary taxCategory-driven
+       * chain instead.
+       */
+      bandTier?: 'OVERRIDE' | 'COMMODITY_CODE' | 'EXPLICIT' | 'COUNTRY' | 'SCOPE_EU' | 'SCOPE_US' | 'SCOPE_GLOBAL' | 'FALLBACK' | 'DEGRADED';
+      [key: string]: unknown;
     };
   }>;
 }
