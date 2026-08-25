@@ -80,9 +80,16 @@ export interface TaxCalculateRequest {
   seller: {
     address: { country: string };
     taxId?: string;
-    iossNumber?: string;
   };
   shipFrom?: { country: string };
+  /**
+   * Incoterms 2020 rule for the shipment. Accepted, echoed back in the
+   * response, and persisted for audit/visibility only — does not currently
+   * drive any tax-treatment logic (in particular, it does not gate IOSS
+   * eligibility, which applies whenever ship-from is non-EU, destination is
+   * EU, and value is <=EUR150, regardless of incoterms).
+   */
+  incoterms?: 'EXW' | 'FCA' | 'FAS' | 'FOB' | 'CFR' | 'CIF' | 'CPT' | 'CIP' | 'DAP' | 'DPU' | 'DDP';
   customer: {
     type: 'B2B' | 'B2C' | 'B2G';
     taxId?: string;
