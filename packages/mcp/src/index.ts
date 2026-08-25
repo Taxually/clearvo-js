@@ -1022,6 +1022,76 @@ const TOOLS = [
       required: ['customerId'],
     },
   },
+  {
+    name: 'list_check_families',
+    description:
+      'List the optional (BUSINESS_POLICY) validation check families this entity can turn on or off — e.g. ' +
+      'a business-policy-only tax-ID format warning outside the countries where it is a legal mandate. Each ' +
+      'family carries its member rule codes (split into legalMandateRuleCodes/businessPolicyRuleCodes) and this ' +
+      "entity's current toggleState (ENABLED, DISABLED, or PARTIAL). A family made entirely of LEGAL_MANDATE " +
+      'rules is never listed here — those can never be disabled for a single entity; see the mandate list instead.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { entityId: { type: 'string', description: 'Entity ID to query. Required for account-scoped keys; omit for entity-scoped keys.' } },
+    },
+  },
+  {
+    name: 'toggle_check_family',
+    description:
+      'Enable or disable an entire optional check family (see list_check_families) for this entity in one call, ' +
+      'instead of suppressing one rule code at a time. Only the BUSINESS_POLICY rule codes in the family are ever ' +
+      'touched — any LEGAL_MANDATE rows in a mixed family are always left enforced, and the response always lists ' +
+      'skippedLegalMandateRuleCodes (even when empty) so the caller can see that. Rejected with NOT_TOGGLEABLE if ' +
+      'the family is 100% LEGAL_MANDATE.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        checkFamily: { type: 'string', description: 'The check family to toggle (from list_check_families)' },
+        enabled: { type: 'boolean', description: 'true to enable (re-activate) the family, false to disable it' },
+        reason: { type: 'string', description: 'Optional free-text reason recorded in the override audit trail' },
+        entityId: { type: 'string', description: 'Entity to toggle the family for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['checkFamily', 'enabled'],
+    },
+  },
+  {
+    name: 'get_skip_transactions',
+    description:
+      'Get this entity\'s Skip Transactions configuration: whether it is active, and the configured lists of ' +
+      'buyer tax IDs, customer refs, and buyer names. Any invoice whose buyer matches any configured list value ' +
+      'is excluded from e-invoicing entirely — never submitted to any authority.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { entityId: { type: 'string', description: 'Entity ID to query. Required for account-scoped keys; omit for entity-scoped keys.' } },
+    },
+  },
+  {
+    name: 'set_skip_transactions',
+    description:
+      'Enable, or fully replace, this entity\'s Skip Transactions lists. Each call replaces all three lists ' +
+      '(not a merge) — send the complete desired set every time. At least one non-blank value across all three ' +
+      'lists combined is required; a request that normalizes to all three empty is rejected (an empty set would ' +
+      'match nothing, never everything).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        taxIds: { type: 'array', items: { type: 'string' }, description: 'Buyer tax IDs to skip' },
+        customerRefs: { type: 'array', items: { type: 'string' }, description: 'Buyer customerRef values to skip' },
+        names: { type: 'array', items: { type: 'string' }, description: 'Buyer names to skip' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'disable_skip_transactions',
+    description:
+      'Disable this entity\'s Skip Transactions entirely. The configured lists are preserved, not cleared — a ' +
+      'later set_skip_transactions call with the same lists re-activates them unchanged.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { entityId: { type: 'string', description: 'Entity to disable. Required for account-scoped keys; omit for entity-scoped keys.' } },
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -1255,6 +1325,31 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'delete_customer': {
       const { customerId, entityId } = args as { customerId: string; entityId?: string };
       return callApi('DELETE', `/customers/${encodeURIComponent(customerId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_check_families': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/rules/families', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'toggle_check_family': {
+      const { checkFamily, entityId, ...rest } = args as { checkFamily: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/rules/families/${encodeURIComponent(checkFamily)}`, rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_skip_transactions': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/skip-transactions', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_skip_transactions': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('PUT', '/skip-transactions', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'disable_skip_transactions': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('DELETE', '/skip-transactions', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     default:
