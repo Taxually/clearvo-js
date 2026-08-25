@@ -768,6 +768,30 @@ const TOOLS = [
     },
   },
   {
+    name: 'deregister_registration',
+    description:
+      'End a tax registration\'s active collection period without deleting it — the registration and its ' +
+      'history remain visible via list_registrations. Use this instead of trying to delete a registration ' +
+      'that is still in active use (e.g. the entity\'s home-country VAT registration or default IOSS number), ' +
+      'which cannot be deleted directly. ' +
+      'Pass effectiveDate as null to deregister immediately, or as an ISO date string (YYYY-MM-DD) to schedule ' +
+      'the end of collection for a future date.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        registrationId: {
+          type: 'string',
+          description: 'The tax number ID or obligation ID of the registration (from list_registrations — use taxNumberId or obligationId field)',
+        },
+        effectiveDate: {
+          type: ['string', 'null'],
+          description: 'ISO date string (YYYY-MM-DD) to schedule deregistration for a future date, or null to deregister immediately.',
+        },
+      },
+      required: ['registrationId', 'effectiveDate'],
+    },
+  },
+  {
     name: 'list_tax_calculations',
     description:
       'List committed tax calculations (those created with commit=true). ' +
@@ -1269,6 +1293,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'set_registration_collection': {
       const { registrationId, collectFromDate } = args as { registrationId: string; collectFromDate: string | null };
       return callApi('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, { collectFromDate });
+    }
+
+    case 'deregister_registration': {
+      const { registrationId, effectiveDate } = args as { registrationId: string; effectiveDate: string | null };
+      return callApi('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, { effectiveDate });
     }
 
     case 'list_tax_calculations': {
