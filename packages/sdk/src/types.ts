@@ -83,11 +83,16 @@ export interface TaxCalculateRequest {
   };
   shipFrom?: { country: string };
   /**
-   * Incoterms 2020 rule for the shipment. Accepted, echoed back in the
-   * response, and persisted for audit/visibility only — does not currently
-   * drive any tax-treatment logic (in particular, it does not gate IOSS
-   * eligibility, which applies whenever ship-from is non-EU, destination is
-   * EU, and value is <=EUR150, regardless of incoterms).
+   * Incoterms 2020 rule for the shipment. Does not gate IOSS eligibility
+   * (applies whenever ship-from is non-EU, destination is EU, and value is
+   * <=EUR150, regardless of incoterms). Above that threshold — or for any
+   * B2C cross-border physical-goods shipment with no applicable
+   * value-threshold scheme at all — this determines import-VAT liability:
+   * omitted or 'DDP' (seller is importer of record) leaves the ordinary
+   * registration-based treatment unchanged; any other value (buyer is
+   * importer of record) makes the line outside the scope of Clearvo tax
+   * calculation (taxCode 'O', tax charged 0), since the buyer's own customs
+   * process collects import VAT separately. Never affects B2B transactions.
    */
   incoterms?: 'EXW' | 'FCA' | 'FAS' | 'FOB' | 'CFR' | 'CIF' | 'CPT' | 'CIP' | 'DAP' | 'DPU' | 'DDP';
   customer: {
