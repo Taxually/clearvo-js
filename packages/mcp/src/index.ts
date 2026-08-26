@@ -973,19 +973,30 @@ const TOOLS = [
     description:
       'Create a customer master-data record. Reference it later via buyer.customerRef on submit_invoice ' +
       'instead of resending full buyer details every time. country and taxId are optional together — a B2C ' +
-      'customer with no VAT registration can have neither, but must not have one without the other.',
+      'customer with no VAT registration can have neither, but must not have one without the other. Use taxIds ' +
+      'instead of country/taxId for a customer registered in more than one country.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         name: { type: 'string', description: 'Customer name' },
-        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Required together with taxId.' },
-        taxId: { type: 'string', description: 'Tax ID. Required together with country; format-validated and normalized.' },
-        customerRef: { type: 'string', description: 'Your own reference (e.g. CRM/ERP customer id). Must be unique per entity.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of the primary registration. Required together with taxId. Mutually exclusive with taxIds.' },
+        taxId: { type: 'string', description: 'Tax ID. Required together with country; format-validated and normalized. Mutually exclusive with taxIds.' },
+        taxIds: {
+          type: 'array',
+          description: 'Full ordered list of this customer\'s tax registrations for a customer registered in more than one country — first entry is the primary. Mutually exclusive with country/taxId.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
+        customerRef: { type: 'string', description: 'Your own reference (e.g. CRM/ERP customer id). Must be unique per entity — see upsert_customer_by_ref to create-or-update by this reference directly instead of erroring on a repeat call.' },
         addressLine1: { type: 'string' },
         addressLine2: { type: 'string' },
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
+        peppolParticipantId: { type: 'string', description: '"schemeId:value" form, e.g. "0106:12345678". Supplying it is treated as confirmed immediately.' },
         entityId: { type: 'string', description: 'Entity to create the customer under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['name'],
@@ -995,7 +1006,7 @@ const TOOLS = [
     name: 'update_customer',
     description:
       'Update a customer\'s master data. country and taxId are treated as a pair — clearing one without the ' +
-      'other clears taxId (the pair is no longer complete).',
+      'other clears taxId (the pair is no longer complete). Mutually exclusive with taxIds.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1003,15 +1014,62 @@ const TOOLS = [
         name: { type: 'string' },
         country: { type: 'string' },
         taxId: { type: 'string' },
+        taxIds: {
+          type: 'array',
+          description: 'Full replacement list of this customer\'s tax registrations (pass [] to clear every one) — first entry becomes the primary. Mutually exclusive with country/taxId. Omit entirely to leave existing registrations untouched.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
         customerRef: { type: 'string' },
         addressLine1: { type: 'string' },
         addressLine2: { type: 'string' },
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
+        peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Setting it is treated as confirmed immediately; pass null to clear it.' },
         entityId: { type: 'string', description: 'Entity the customer belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['customerId'],
+    },
+  },
+  {
+    name: 'upsert_customer_by_ref',
+    description:
+      'Create or update a customer keyed on your own customerRef instead of Clearvo\'s internal id — the natural ' +
+      'tool for syncing customer master data from your own CRM/ERP, where "push the current state of this ' +
+      'customer" runs repeatedly, not a one-time create. Unlike create_customer (which errors on a repeat ' +
+      'customerRef), this always succeeds: creates on first call, REPLACES on every later call with the same ' +
+      'customerRef — an omitted optional field clears whatever was previously stored. The one exception is ' +
+      'peppolParticipantId: omitted, it is left untouched, so a plain field sync doesn\'t wipe an identity ' +
+      'confirmed separately.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        customerRef: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP customer id).' },
+        name: { type: 'string', description: 'Customer name' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of the primary registration. Required together with taxId. Mutually exclusive with taxIds.' },
+        taxId: { type: 'string', description: 'Required together with country. Mutually exclusive with taxIds.' },
+        taxIds: {
+          type: 'array',
+          description: 'Full list of this customer\'s tax registrations, first entry is the primary. Mutually exclusive with country/taxId.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
+        addressLine1: { type: 'string' },
+        addressLine2: { type: 'string' },
+        city: { type: 'string' },
+        region: { type: 'string' },
+        postalCode: { type: 'string' },
+        peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Supplying it is treated as confirmed immediately. Omit to leave an existing confirmed value untouched.' },
+        entityId: { type: 'string', description: 'Entity to upsert the customer under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['customerRef', 'name'],
     },
   },
   {
@@ -1254,6 +1312,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'update_customer': {
       const { customerId, entityId, ...updates } = args as { customerId: string; entityId?: string } & Record<string, unknown>;
       return callApi('PATCH', `/customers/${encodeURIComponent(customerId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'upsert_customer_by_ref': {
+      const { customerRef, entityId, ...rest } = args as { customerRef: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PUT', `/customers/by-ref/${encodeURIComponent(customerRef)}`, rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'delete_customer': {
