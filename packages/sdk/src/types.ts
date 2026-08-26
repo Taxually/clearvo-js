@@ -531,6 +531,72 @@ export interface QueryFieldsResponse {
   datasets: Record<QueryDataset, QueryDatasetSchema>;
 }
 
+export type ClientTaxCodeDirection = 'sale' | 'purchase';
+
+export interface ClientTaxCode {
+  id: string;
+  entityId: string;
+  /** Your own ERP tax code, e.g. "A1". Unique per entity. */
+  code: string;
+  /** 2- or 3-letter ISO country code. */
+  country: string;
+  /** Sub-national scope (e.g. a US state), or null for a country-wide code. */
+  region: string | null;
+  /** EN16931 tax category code: S, AA, AB, AC, AE, K, G, E, O, or Z. */
+  taxCode: string;
+  /** Optional scope. null (default) means the code applies to both sale and purchase. */
+  direction: ClientTaxCodeDirection | null;
+  /**
+   * Response-only, computed live from country + taxCode (and, for a US row,
+   * the region's own state sales tax rate) — never a stored or
+   * caller-supplied value. Decimal fraction (0.19 = 19%). null when the rate
+   * can't currently be determined.
+   */
+  rate: number | null;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateClientTaxCodeInput {
+  code: string;
+  country: string;
+  region?: string;
+  taxCode: string;
+  direction?: ClientTaxCodeDirection;
+  description?: string;
+  /** Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface UpdateClientTaxCodeInput {
+  code?: string;
+  country?: string;
+  region?: string;
+  taxCode?: string;
+  direction?: ClientTaxCodeDirection;
+  description?: string;
+}
+
+export interface DuplicateTreatmentWarning {
+  code: 'DUPLICATE_TREATMENT';
+  message: string;
+  conflictingCodeId: string;
+  conflictingCode: string;
+}
+
+export interface ListClientTaxCodesResponse {
+  ok: boolean;
+  clientTaxCodes: ClientTaxCode[];
+}
+
+export interface ClientTaxCodeResponse {
+  ok: boolean;
+  clientTaxCode: ClientTaxCode;
+  /** Present only when another code for this entity already maps to the identical treatment — the write still succeeds. */
+  warning?: DuplicateTreatmentWarning;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,

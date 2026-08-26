@@ -37,4 +37,11 @@ export type {
   QueryFieldDefinition,
   QueryDatasetSchema,
   QueryFieldsResponse,
+  ClientTaxCodeDirection,
+  ClientTaxCode,
+  CreateClientTaxCodeInput,
+  UpdateClientTaxCodeInput,
+  DuplicateTreatmentWarning,
+  ListClientTaxCodesResponse,
+  ClientTaxCodeResponse,
 } from './types.js';
