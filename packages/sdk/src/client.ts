@@ -40,6 +40,10 @@ import type {
   QueryRequestParams,
   QueryResponse,
   QueryFieldsResponse,
+  ListClientTaxCodesResponse,
+  CreateClientTaxCodeInput,
+  UpdateClientTaxCodeInput,
+  ClientTaxCodeResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -269,5 +273,39 @@ export class ClearvoClient {
   /** Discoverable schema for queryData(): allowlisted fields, operators, enums, and limits per dataset. */
   getQueryFields(): Promise<QueryFieldsResponse> {
     return this.request('GET', '/query/fields');
+  }
+
+  // ── Client Tax Codes ──────────────────────────────────────────────────────
+  // Maps a customer's own ERP tax code (e.g. a SAP two-digit code) to the
+  // tax treatment it represents. Used as an INPUT on submitInvoice() (pass
+  // clientTaxCode on a line item instead of taxCode+vatRate) and returned as
+  // an OUTPUT on calculateTax() (the response echoes back your matching code
+  // for ERP posting). `rate` is always response-only — never send it.
+
+  listClientTaxCodes(entityId?: string): Promise<ListClientTaxCodesResponse> {
+    return this.request('GET', '/tax/client-codes', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  createClientTaxCode(input: CreateClientTaxCodeInput): Promise<ClientTaxCodeResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/tax/client-codes', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  updateClientTaxCode(clientTaxCodeId: string, updates: UpdateClientTaxCodeInput, entityId?: string): Promise<ClientTaxCodeResponse> {
+    return this.request(
+      'PATCH',
+      `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`,
+      updates,
+      entityId ? { 'x-entity-id': entityId } : undefined
+    );
+  }
+
+  deleteClientTaxCode(clientTaxCodeId: string, entityId?: string): Promise<{ ok: boolean }> {
+    return this.request(
+      'DELETE',
+      `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`,
+      undefined,
+      entityId ? { 'x-entity-id': entityId } : undefined
+    );
   }
 }

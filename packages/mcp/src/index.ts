@@ -1084,6 +1084,78 @@ const TOOLS = [
       required: ['customerId'],
     },
   },
+  {
+    name: 'list_client_tax_codes',
+    description:
+      'List the client tax codes configured for an entity. A client tax code maps a customer\'s own ERP tax ' +
+      'code (e.g. a SAP two-digit code like "A1") to the tax treatment it represents — country/region, an ' +
+      'EN16931 tax category, and an optional sale/purchase direction. Use submit_invoice with clientTaxCode on a ' +
+      'line item to send one of these codes instead of taxCode+rate directly; calculate_tax returns your ' +
+      'matching code back in its response for ERP posting. rate is always computed live, never stored.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity ID to list client tax codes for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'create_client_tax_code',
+    description:
+      'Create a client tax code — a mapping from your own ERP tax code to the tax treatment it represents. ' +
+      'Do not pass a rate: it is always computed live from country + taxCode (and, for a US row, the region\'s ' +
+      'own state sales tax rate). Creating a code that maps to the identical treatment (country/region/taxCode/' +
+      'direction) as another existing code is allowed — the response carries a non-blocking warning rather than ' +
+      'rejecting the write, since real ERPs sometimes split one VAT treatment across two internal codes (e.g. by ' +
+      'GL account).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Your own ERP tax code, e.g. "A1". Must be unique for this entity.' },
+        country: { type: 'string', description: '2- or 3-letter ISO country code, e.g. "DE"' },
+        region: { type: 'string', description: 'Optional sub-national scope (e.g. a US state code). Omit for a country-wide code.' },
+        taxCode: {
+          type: 'string',
+          enum: ['S', 'AA', 'AB', 'AC', 'AE', 'K', 'G', 'E', 'O', 'Z'],
+          description: 'EN16931 tax category code this ERP code represents: S=Standard rate, AA=Lower/reduced rate, AB=Second reduced rate, AC=Super reduced rate, AE=VAT reverse charge, K=VAT exempt intra-community, G=Free export item, E=Exempt from tax, O=Outside scope, Z=Zero-rated goods.',
+        },
+        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Optional. Omit for a code that applies to both sale and purchase.' },
+        description: { type: 'string', description: 'Optional free text describing the supply/treatment, e.g. "Domestic standard-rated goods".' },
+        entityId: { type: 'string', description: 'Entity to create the code under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['code', 'country', 'taxCode'],
+    },
+  },
+  {
+    name: 'update_client_tax_code',
+    description: 'Update a client tax code. Any field may be omitted to leave it unchanged. rate cannot be set — it is always computed.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        clientTaxCodeId: { type: 'string', description: 'The client tax code ID to update (from list_client_tax_codes or create_client_tax_code)' },
+        code: { type: 'string', description: 'Updated ERP tax code' },
+        country: { type: 'string', description: 'Updated country' },
+        region: { type: 'string', description: 'Updated sub-national scope' },
+        taxCode: { type: 'string', enum: ['S', 'AA', 'AB', 'AC', 'AE', 'K', 'G', 'E', 'O', 'Z'], description: 'Updated EN16931 tax category code' },
+        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Updated direction scope' },
+        description: { type: 'string', description: 'Updated description' },
+        entityId: { type: 'string', description: 'Entity the code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['clientTaxCodeId'],
+    },
+  },
+  {
+    name: 'delete_client_tax_code',
+    description: 'Delete a client tax code.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        clientTaxCodeId: { type: 'string', description: 'The client tax code ID to delete (from list_client_tax_codes)' },
+        entityId: { type: 'string', description: 'Entity the code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['clientTaxCodeId'],
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -1322,6 +1394,26 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'delete_customer': {
       const { customerId, entityId } = args as { customerId: string; entityId?: string };
       return callApi('DELETE', `/customers/${encodeURIComponent(customerId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_client_tax_codes': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/tax/client-codes', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'create_client_tax_code': {
+      const { entityId, ...body } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/tax/client-codes', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_client_tax_code': {
+      const { clientTaxCodeId, entityId, ...updates } = args as { clientTaxCodeId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'delete_client_tax_code': {
+      const { clientTaxCodeId, entityId } = args as { clientTaxCodeId: string; entityId?: string };
+      return callApi('DELETE', `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     default:

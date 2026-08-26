@@ -342,6 +342,83 @@ registrations
     print(result, !!opts.pretty);
   });
 
+// ── clearvo tax-codes ────────────────────────────────────────────────────────
+// Client tax codes map your own ERP tax code (e.g. a SAP two-digit code) to
+// the tax treatment it represents. `send` accepts clientTaxCode on a line
+// item instead of taxCode+rate; `calculate` echoes your matching code back
+// in its response for ERP posting. `rate` is always computed live — never
+// pass one when creating or updating a code.
+const taxCodes = program.command('tax-codes').description('Manage client tax codes (ERP code → tax treatment mappings)');
+
+taxCodes
+  .command('list')
+  .description('List client tax codes for an entity')
+  .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: { entity?: string; pretty?: boolean }) => {
+    const result = await api('GET', '/tax/client-codes', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+taxCodes
+  .command('create')
+  .description('Create a client tax code')
+  .requiredOption('--code <code>', 'Your own ERP tax code, e.g. "A1"')
+  .requiredOption('--country <code>', 'ISO 3166-1 alpha-2/3 country code (e.g. DE)')
+  .requiredOption('--tax-code <code>', 'EN16931 tax category: S, AA, AB, AC, AE, K, G, E, O, or Z')
+  .option('--region <region>', 'Sub-national scope (e.g. a US state code)')
+  .option('--direction <direction>', 'sale or purchase — omit for a code that applies to both')
+  .option('--description <text>', 'Free text describing the supply/treatment')
+  .option('--entity <entityId>', 'Entity to create the code under (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: {
+    code: string; country: string; taxCode: string; region?: string;
+    direction?: string; description?: string; entity?: string; pretty?: boolean;
+  }) => {
+    const body: Record<string, string> = { code: opts.code, country: opts.country.toUpperCase(), taxCode: opts.taxCode.toUpperCase() };
+    if (opts.region) body.region = opts.region.toUpperCase();
+    if (opts.direction) body.direction = opts.direction;
+    if (opts.description) body.description = opts.description;
+    const result = await api('POST', '/tax/client-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+taxCodes
+  .command('update <id>')
+  .description('Update a client tax code')
+  .option('--code <code>', 'Updated ERP tax code')
+  .option('--country <code>', 'Updated country')
+  .option('--region <region>', 'Updated sub-national scope')
+  .option('--tax-code <code>', 'Updated EN16931 tax category code')
+  .option('--direction <direction>', 'Updated direction: sale or purchase')
+  .option('--description <text>', 'Updated description')
+  .option('--entity <entityId>', 'Entity the code belongs to (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: {
+    code?: string; country?: string; region?: string; taxCode?: string;
+    direction?: string; description?: string; entity?: string; pretty?: boolean;
+  }) => {
+    const body: Record<string, string> = {};
+    if (opts.code) body.code = opts.code;
+    if (opts.country) body.country = opts.country.toUpperCase();
+    if (opts.region) body.region = opts.region.toUpperCase();
+    if (opts.taxCode) body.taxCode = opts.taxCode.toUpperCase();
+    if (opts.direction) body.direction = opts.direction;
+    if (opts.description) body.description = opts.description;
+    const result = await api('PATCH', `/tax/client-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+taxCodes
+  .command('delete <id>')
+  .description('Delete a client tax code')
+  .option('--entity <entityId>', 'Entity the code belongs to (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+    const result = await api('DELETE', `/tax/client-codes/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
 // ── clearvo calculations ─────────────────────────────────────────────────────
 const calculations = program.command('calculations').description('View committed tax calculation history');
 
