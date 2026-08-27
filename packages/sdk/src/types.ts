@@ -539,7 +539,7 @@ export type ClientTaxCodeDirection = 'sale' | 'purchase';
 export type ClientTaxCodeMovement = 'local' | 'intra_community' | 'export' | 'distance_sale' | 'import' | 'own_goods_movement';
 export type ClientTaxCodeTaxability = 'taxable' | 'exempt' | 'out_of_scope';
 export type ClientTaxCodeCustomerType = 'b2b' | 'b2c';
-export type ClientTaxCodeSupplyType = 'goods' | 'digital_service' | 'general_service' | 'unsupported';
+export type ClientTaxCodeSupplyType = 'goods' | 'digital_service' | 'general_service';
 export type ClientTaxCodeRateBand = 'standard' | 'reduced' | 'second_reduced' | 'super_reduced' | 'zero';
 export type ClientTaxCodeFilingTag =
   | 'cash_accounting_settled' | 'cash_accounting_unsettled' | 'split_payment' | 'statement_of_intent'
