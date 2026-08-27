@@ -1087,11 +1087,10 @@ const TOOLS = [
   {
     name: 'list_client_tax_codes',
     description:
-      'List the client tax codes configured for an entity. A client tax code maps a customer\'s own ERP tax ' +
-      'code (e.g. a SAP two-digit code like "A1") to the tax treatment it represents — country/region, an ' +
-      'EN16931 tax category, and an optional sale/purchase direction. Use submit_invoice with clientTaxCode on a ' +
-      'line item to send one of these codes instead of taxCode+rate directly; calculate_tax returns your ' +
-      'matching code back in its response for ERP posting. rate is always computed live, never stored.',
+      'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
+      '(e.g. a SAP two-digit code) to a Clearvo Tax Decision. Reference one via clientTaxCode on submit_invoice ' +
+      'instead of sending taxCode/vatRate directly; calculate_tax returns your matching code back in its ' +
+      'response for ERP posting. The EN16931 taxCode and rate are always computed live, never stored.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1102,44 +1101,53 @@ const TOOLS = [
   {
     name: 'create_client_tax_code',
     description:
-      'Create a client tax code — a mapping from your own ERP tax code to the tax treatment it represents. ' +
-      'Do not pass a rate: it is always computed live from country + taxCode (and, for a US row, the region\'s ' +
-      'own state sales tax rate). Creating a code that maps to the identical treatment (country/region/taxCode/' +
-      'direction) as another existing code is allowed — the response carries a non-blocking warning rather than ' +
-      'rejecting the write, since real ERPs sometimes split one VAT treatment across two internal codes (e.g. by ' +
-      'GL account).',
+      'Map one of your own ERP tax codes to a Clearvo Tax Decision — movement, taxability, customerType, ' +
+      'supplyType, reverseCharge, useTaxSelfAssessed, and (where meaningful) rateBand. The EN16931 taxCode and ' +
+      'rate are computed live from these fields, never caller-supplied. `code` must be unique per entity — a ' +
+      'repeat call with an existing code fails with DUPLICATE_CODE; use update_client_tax_code instead. Two ' +
+      'different codes mapping to the identical treatment are allowed but return a non-blocking warning.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        code: { type: 'string', description: 'Your own ERP tax code, e.g. "A1". Must be unique for this entity.' },
-        country: { type: 'string', description: '2- or 3-letter ISO country code, e.g. "DE"' },
-        region: { type: 'string', description: 'Optional sub-national scope (e.g. a US state code). Omit for a country-wide code.' },
-        taxCode: {
-          type: 'string',
-          enum: ['S', 'AA', 'AB', 'AC', 'AE', 'K', 'G', 'E', 'O', 'Z'],
-          description: 'EN16931 tax category code this ERP code represents: S=Standard rate, AA=Lower/reduced rate, AB=Second reduced rate, AC=Super reduced rate, AE=VAT reverse charge, K=VAT exempt intra-community, G=Free export item, E=Exempt from tax, O=Outside scope, Z=Zero-rated goods.',
-        },
-        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Optional. Omit for a code that applies to both sale and purchase.' },
-        description: { type: 'string', description: 'Optional free text describing the supply/treatment, e.g. "Domestic standard-rated goods".' },
-        entityId: { type: 'string', description: 'Entity to create the code under. Required for account-scoped keys; omit for entity-scoped keys.' },
+        code: { type: 'string', description: 'Your own ERP tax code (e.g. a SAP two-digit code), unique per entity.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 or alpha-3 country code (e.g. "DE").' },
+        region: { type: 'string', description: 'Sub-national scope (e.g. a US state). Omit for a country-wide code.' },
+        movement: { type: 'string', enum: ['local', 'intra_community', 'export', 'distance_sale', 'import', 'own_goods_movement'], description: '`export` covers every non-EU-EU B2B cross-border combination — the EU/G vs. non-EU/AE split in the derived taxCode comes from whether `country` itself is in the EU.' },
+        taxability: { type: 'string', enum: ['taxable', 'exempt', 'out_of_scope'] },
+        customerType: { type: 'string', enum: ['b2b', 'b2c'], description: 'Omit for a code that applies to either b2b or b2c.' },
+        supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service', 'unsupported'] },
+        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'], description: 'Required when taxability=taxable and this movement/reverseCharge combination doesn\'t already fix the EN16931 code (e.g. required for movement=local without reverseCharge). Not applicable — and ignored if sent — for intra_community, export, or a domestic reverse charge.' },
+        reverseCharge: { type: 'boolean', description: 'Defaults to false. Independent of movement — some countries require domestic reverse charge for specific goods categories even on a wholly local sale.' },
+        useTaxSelfAssessed: { type: 'boolean', description: 'Defaults to false.' },
+        filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'], description: 'Pure metadata for a future Taxsure integration — never consumed by any computation.' },
+        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Omit for a code that applies to both.' },
+        description: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity to create the client tax code under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
-      required: ['code', 'country', 'taxCode'],
+      required: ['code', 'country', 'movement', 'taxability', 'supplyType'],
     },
   },
   {
     name: 'update_client_tax_code',
-    description: 'Update a client tax code. Any field may be omitted to leave it unchanged. rate cannot be set — it is always computed.',
+    description: 'Update any subset of a client tax code\'s fields. Same DUPLICATE_CODE (blocking) and duplicate-treatment (non-blocking warning) behaviour as create_client_tax_code.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        clientTaxCodeId: { type: 'string', description: 'The client tax code ID to update (from list_client_tax_codes or create_client_tax_code)' },
-        code: { type: 'string', description: 'Updated ERP tax code' },
-        country: { type: 'string', description: 'Updated country' },
-        region: { type: 'string', description: 'Updated sub-national scope' },
-        taxCode: { type: 'string', enum: ['S', 'AA', 'AB', 'AC', 'AE', 'K', 'G', 'E', 'O', 'Z'], description: 'Updated EN16931 tax category code' },
-        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Updated direction scope' },
-        description: { type: 'string', description: 'Updated description' },
-        entityId: { type: 'string', description: 'Entity the code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+        clientTaxCodeId: { type: 'string', description: 'The client tax code ID to update (from list_client_tax_codes or create_client_tax_code).' },
+        code: { type: 'string' },
+        country: { type: 'string' },
+        region: { type: 'string' },
+        movement: { type: 'string', enum: ['local', 'intra_community', 'export', 'distance_sale', 'import', 'own_goods_movement'] },
+        taxability: { type: 'string', enum: ['taxable', 'exempt', 'out_of_scope'] },
+        customerType: { type: 'string', enum: ['b2b', 'b2c'] },
+        supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service', 'unsupported'] },
+        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'] },
+        reverseCharge: { type: 'boolean' },
+        useTaxSelfAssessed: { type: 'boolean' },
+        filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'] },
+        direction: { type: 'string', enum: ['sale', 'purchase'] },
+        description: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity the client tax code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['clientTaxCodeId'],
     },

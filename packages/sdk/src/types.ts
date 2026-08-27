@@ -533,6 +533,18 @@ export interface QueryFieldsResponse {
 
 export type ClientTaxCodeDirection = 'sale' | 'purchase';
 
+// A client tax code maps your own ERP tax code (e.g. a SAP two-digit code)
+// to the Tax Decision it represents. The EN16931 taxCode and rate are always
+// computed live from the fields below — never stored or caller-supplied.
+export type ClientTaxCodeMovement = 'local' | 'intra_community' | 'export' | 'distance_sale' | 'import' | 'own_goods_movement';
+export type ClientTaxCodeTaxability = 'taxable' | 'exempt' | 'out_of_scope';
+export type ClientTaxCodeCustomerType = 'b2b' | 'b2c';
+export type ClientTaxCodeSupplyType = 'goods' | 'digital_service' | 'general_service' | 'unsupported';
+export type ClientTaxCodeRateBand = 'standard' | 'reduced' | 'second_reduced' | 'super_reduced' | 'zero';
+export type ClientTaxCodeFilingTag =
+  | 'cash_accounting_settled' | 'cash_accounting_unsettled' | 'split_payment' | 'statement_of_intent'
+  | 'withholding' | 'bad_debt_adjustment' | 'triangular_party_b' | 'triangular_party_c';
+
 export interface ClientTaxCode {
   id: string;
   entityId: string;
@@ -542,13 +554,24 @@ export interface ClientTaxCode {
   country: string;
   /** Sub-national scope (e.g. a US state), or null for a country-wide code. */
   region: string | null;
-  /** EN16931 tax category code: S, AA, AB, AC, AE, K, G, E, O, or Z. */
-  taxCode: string;
+  movement: ClientTaxCodeMovement;
+  taxability: ClientTaxCodeTaxability;
+  /** Null means this code applies to either b2b or b2c. */
+  customerType: ClientTaxCodeCustomerType | null;
+  supplyType: ClientTaxCodeSupplyType;
+  /** Only meaningful when taxability=taxable and the movement/reverseCharge combination doesn't already fix the EN16931 code. */
+  rateBand: ClientTaxCodeRateBand | null;
+  reverseCharge: boolean;
+  useTaxSelfAssessed: boolean;
+  /** Pure metadata for a future Taxsure integration — never consumed by any computation. */
+  filingTag: ClientTaxCodeFilingTag | null;
   /** Optional scope. null (default) means the code applies to both sale and purchase. */
   direction: ClientTaxCodeDirection | null;
+  /** EN16931 tax category code: S, AA, AB, AC, AE, K, G, E, O, or Z. Response-only, computed live from the fields above — never a stored or caller-supplied value. */
+  taxCode: string;
   /**
-   * Response-only, computed live from country + taxCode (and, for a US row,
-   * the region's own state sales tax rate) — never a stored or
+   * Response-only, computed live from country + the derived taxCode (and,
+   * for a US row, the region's own state sales tax rate) — never a stored or
    * caller-supplied value. Decimal fraction (0.19 = 19%). null when the rate
    * can't currently be determined.
    */
@@ -562,21 +585,26 @@ export interface CreateClientTaxCodeInput {
   code: string;
   country: string;
   region?: string;
-  taxCode: string;
+  movement: ClientTaxCodeMovement;
+  taxability: ClientTaxCodeTaxability;
+  /** Omit for a code that applies to either b2b or b2c. */
+  customerType?: ClientTaxCodeCustomerType;
+  supplyType: ClientTaxCodeSupplyType;
+  /** Required when taxability=taxable and the movement/reverseCharge combination doesn't already fix the EN16931 code. */
+  rateBand?: ClientTaxCodeRateBand;
+  /** Defaults to false. Independent of movement. */
+  reverseCharge?: boolean;
+  /** Defaults to false. */
+  useTaxSelfAssessed?: boolean;
+  filingTag?: ClientTaxCodeFilingTag;
   direction?: ClientTaxCodeDirection;
   description?: string;
   /** Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;
 }
 
-export interface UpdateClientTaxCodeInput {
-  code?: string;
-  country?: string;
-  region?: string;
-  taxCode?: string;
-  direction?: ClientTaxCodeDirection;
-  description?: string;
-}
+/** Any subset of CreateClientTaxCodeInput's fields (minus entityId) — omitted fields keep their current value. */
+export type UpdateClientTaxCodeInput = Partial<Omit<CreateClientTaxCodeInput, 'entityId'>>;
 
 export interface DuplicateTreatmentWarning {
   code: 'DUPLICATE_TREATMENT';

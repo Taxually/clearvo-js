@@ -343,12 +343,34 @@ registrations
   });
 
 // ── clearvo tax-codes ────────────────────────────────────────────────────────
-// Client tax codes map your own ERP tax code (e.g. a SAP two-digit code) to
-// the tax treatment it represents. `send` accepts clientTaxCode on a line
-// item instead of taxCode+rate; `calculate` echoes your matching code back
-// in its response for ERP posting. `rate` is always computed live — never
-// pass one when creating or updating a code.
-const taxCodes = program.command('tax-codes').description('Manage client tax codes (ERP code → tax treatment mappings)');
+// A client tax code maps your own ERP tax code (e.g. a SAP two-digit code) to
+// a Clearvo Tax Decision — movement, taxability, customerType, supplyType,
+// reverseCharge, useTaxSelfAssessed, and (where meaningful) rateBand. The
+// EN16931 taxCode and rate are always computed live, never request fields.
+const taxCodes = program.command('tax-codes').description('Manage client tax codes');
+
+function taxCodeMutationBody(opts: {
+  code?: string; country?: string; region?: string;
+  movement?: string; taxability?: string; customerType?: string; supplyType?: string;
+  rateBand?: string; reverseCharge?: boolean; useTaxSelfAssessed?: boolean;
+  filingTag?: string; direction?: string; description?: string;
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (opts.code)        body.code = opts.code;
+  if (opts.country)     body.country = opts.country.toUpperCase();
+  if (opts.region)      body.region = opts.region.toUpperCase();
+  if (opts.movement)    body.movement = opts.movement;
+  if (opts.taxability)  body.taxability = opts.taxability;
+  if (opts.customerType) body.customerType = opts.customerType;
+  if (opts.supplyType)  body.supplyType = opts.supplyType;
+  if (opts.rateBand)    body.rateBand = opts.rateBand;
+  if (opts.reverseCharge !== undefined) body.reverseCharge = opts.reverseCharge;
+  if (opts.useTaxSelfAssessed !== undefined) body.useTaxSelfAssessed = opts.useTaxSelfAssessed;
+  if (opts.filingTag)   body.filingTag = opts.filingTag;
+  if (opts.direction)   body.direction = opts.direction;
+  if (opts.description) body.description = opts.description;
+  return body;
+}
 
 taxCodes
   .command('list')
@@ -363,48 +385,57 @@ taxCodes
 taxCodes
   .command('create')
   .description('Create a client tax code')
-  .requiredOption('--code <code>', 'Your own ERP tax code, e.g. "A1"')
-  .requiredOption('--country <code>', 'ISO 3166-1 alpha-2/3 country code (e.g. DE)')
-  .requiredOption('--tax-code <code>', 'EN16931 tax category: S, AA, AB, AC, AE, K, G, E, O, or Z')
-  .option('--region <region>', 'Sub-national scope (e.g. a US state code)')
+  .requiredOption('--code <code>', 'Your own ERP tax code, unique per entity')
+  .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 or alpha-3 country code (e.g. DE)')
+  .option('--region <region>', 'Sub-national scope (e.g. a US state)')
+  .requiredOption('--movement <movement>', 'local, intra_community, export, distance_sale, import, or own_goods_movement')
+  .requiredOption('--taxability <taxability>', 'taxable, exempt, or out_of_scope')
+  .option('--customer-type <type>', 'b2b or b2c — omit for a code that applies to either')
+  .requiredOption('--supply-type <type>', 'goods, digital_service, general_service, or unsupported')
+  .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero — required when taxability=taxable and the movement/reverseCharge combination doesn\'t already fix the EN16931 code')
+  .option('--reverse-charge', 'Independent of movement — some countries require domestic reverse charge even on a wholly local sale')
+  .option('--use-tax-self-assessed', 'Mark use tax as self-assessed')
+  .option('--filing-tag <tag>', 'Pure metadata for a future Taxsure integration — never consumed by any computation')
   .option('--direction <direction>', 'sale or purchase — omit for a code that applies to both')
-  .option('--description <text>', 'Free text describing the supply/treatment')
-  .option('--entity <entityId>', 'Entity to create the code under (required for account-scoped keys)')
+  .option('--description <text>', 'Optional longer description')
+  .option('--entity <entityId>', 'Entity to create the client tax code under (required for account-scoped keys)')
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (opts: {
-    code: string; country: string; taxCode: string; region?: string;
-    direction?: string; description?: string; entity?: string; pretty?: boolean;
+    code: string; country: string; region?: string; movement: string; taxability: string;
+    customerType?: string; supplyType: string; rateBand?: string; reverseCharge?: boolean;
+    useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
+    entity?: string; pretty?: boolean;
   }) => {
-    const body: Record<string, string> = { code: opts.code, country: opts.country.toUpperCase(), taxCode: opts.taxCode.toUpperCase() };
-    if (opts.region) body.region = opts.region.toUpperCase();
-    if (opts.direction) body.direction = opts.direction;
-    if (opts.description) body.description = opts.description;
+    const body = taxCodeMutationBody(opts);
     const result = await api('POST', '/tax/client-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
     print(result, !!opts.pretty);
   });
 
 taxCodes
   .command('update <id>')
-  .description('Update a client tax code')
-  .option('--code <code>', 'Updated ERP tax code')
+  .description('Update a client tax code (any subset of its fields)')
+  .option('--code <code>', 'Updated code')
   .option('--country <code>', 'Updated country')
-  .option('--region <region>', 'Updated sub-national scope')
-  .option('--tax-code <code>', 'Updated EN16931 tax category code')
-  .option('--direction <direction>', 'Updated direction: sale or purchase')
+  .option('--region <region>', 'Updated region')
+  .option('--movement <movement>', 'local, intra_community, export, distance_sale, import, or own_goods_movement')
+  .option('--taxability <taxability>', 'taxable, exempt, or out_of_scope')
+  .option('--customer-type <type>', 'b2b or b2c')
+  .option('--supply-type <type>', 'goods, digital_service, general_service, or unsupported')
+  .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero')
+  .option('--reverse-charge', 'Set reverseCharge to true')
+  .option('--use-tax-self-assessed', 'Set useTaxSelfAssessed to true')
+  .option('--filing-tag <tag>', 'Updated filing tag')
+  .option('--direction <direction>', 'sale or purchase')
   .option('--description <text>', 'Updated description')
-  .option('--entity <entityId>', 'Entity the code belongs to (required for account-scoped keys)')
+  .option('--entity <entityId>', 'Entity the client tax code belongs to (required for account-scoped keys)')
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (id: string, opts: {
-    code?: string; country?: string; region?: string; taxCode?: string;
-    direction?: string; description?: string; entity?: string; pretty?: boolean;
+    code?: string; country?: string; region?: string; movement?: string; taxability?: string;
+    customerType?: string; supplyType?: string; rateBand?: string; reverseCharge?: boolean;
+    useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
+    entity?: string; pretty?: boolean;
   }) => {
-    const body: Record<string, string> = {};
-    if (opts.code) body.code = opts.code;
-    if (opts.country) body.country = opts.country.toUpperCase();
-    if (opts.region) body.region = opts.region.toUpperCase();
-    if (opts.taxCode) body.taxCode = opts.taxCode.toUpperCase();
-    if (opts.direction) body.direction = opts.direction;
-    if (opts.description) body.description = opts.description;
+    const body = taxCodeMutationBody(opts);
     const result = await api('PATCH', `/tax/client-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
     print(result, !!opts.pretty);
   });
