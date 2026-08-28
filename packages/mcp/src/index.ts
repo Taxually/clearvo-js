@@ -912,25 +912,27 @@ const TOOLS = [
     description:
       'Record a tax exemption certificate belonging to one of this entity\'s BUYERS — not a certificate for the ' +
       'entity itself. An exemption certificate is a document a customer provides (e.g. a US resale certificate, ' +
-      'manufacturing exemption, or nonprofit exemption letter) proving they do not owe sales tax on a purchase. ' +
-      'Only call this when you know a specific customer holds one; there is no default or fallback certificate. ' +
-      'Once created, reference it via customer.ref matching customerRef during calculate_tax so the exemption ' +
-      'is automatically applied to eligible line items. Call upload_exemption_document afterwards if you have ' +
-      'the signed PDF to attach.',
+      'manufacturing exemption, nonprofit exemption letter, or Ireland\'s Section 56 export authorisation) ' +
+      'proving they do not owe tax on a purchase. Only call this when you know a specific customer holds one; ' +
+      'there is no default or fallback certificate. Valid certificateType/formType combinations depend on ' +
+      'country and are validated server-side — an unsupported combination (including any country other than ' +
+      'US or IE) is rejected with an error, not silently accepted. Once created, reference it via customer.ref ' +
+      'matching customerRef during calculate_tax so the exemption is automatically applied to eligible line ' +
+      'items. Call upload_exemption_document afterwards if you have the signed PDF to attach.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         certificateRef: { type: 'string', description: 'Your internal reference for this certificate (e.g. "EXEMPT-2024-001").' },
         customerRef: { type: 'string', description: 'Your internal customer reference. Matched against customer.ref on calculate_tax requests to auto-apply this exemption.' },
-        certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Type of exemption claimed.' },
-        formType: { type: 'string', enum: ['SST', 'MTC', 'CUSTOM'], description: 'Standard form type, if applicable.' },
+        certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER', 'EXPORT_AUTHORIZATION'], description: 'Type of exemption claimed. RESALE/MANUFACTURING/AGRICULTURAL/ENERGY/EXEMPT_ORG/GOVERNMENT/DIRECT_PAY/BLANKET_OTHER are for country="US". EXPORT_AUTHORIZATION is for country="IE" only — Ireland\'s Revenue-issued Section 56 ("56B") authorisation letting a habitual exporter buy most goods/services at 0% VAT (excludes food/drink, accommodation, entertainment, personal services).' },
+        formType: { type: 'string', enum: ['SST', 'MTC', 'CUSTOM', '56B'], description: 'Standard form type. Optional for US (SST/MTC/CUSTOM, or a state-specific form code not in this enum). Required and must be "56B" when certificateType is EXPORT_AUTHORIZATION.' },
         customerName: { type: 'string', description: 'Exempt customer\'s name.' },
         buyerTaxId: { type: 'string', description: 'Exempt customer\'s tax ID.' },
-        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Defaults to "US".' },
-        region: { type: 'string', description: 'State or region code the exemption applies to (e.g. "CA"). US exemptions are typically state-scoped.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Defaults to "US". Only "US" and "IE" are currently supported.' },
+        region: { type: 'string', description: 'State or region code the exemption applies to (e.g. "CA"). US exemptions are typically state-scoped. Omit for IE — Section 56 authorisations are national, not sub-regional.' },
         taxCategorySlug: { type: 'string', description: 'Optional — restrict the exemption to a specific product tax category instead of all products.' },
         effectiveFrom: { type: 'string', description: 'Date the certificate becomes valid, YYYY-MM-DD.' },
-        effectiveTo: { type: 'string', description: 'Expiry date, YYYY-MM-DD. Omit for open-ended certificates.' },
+        effectiveTo: { type: 'string', description: 'Expiry date, YYYY-MM-DD. Omit for open-ended certificates. For IE, use the expiry date printed on the Revenue authorisation.' },
         entityId: { type: 'string', description: 'Entity to create the certificate under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['certificateRef', 'customerRef', 'certificateType', 'effectiveFrom'],
