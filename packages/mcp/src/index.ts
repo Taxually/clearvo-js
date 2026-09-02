@@ -429,6 +429,48 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_eg_credentials',
+    description:
+      'Register Egypt ETA (Egyptian Tax Authority) electronic invoicing credentials for an entity: registration number, ' +
+      'OAuth2 client ID/secret, and the entity\'s own eSeal certificate. ' +
+      'Required before submitting invoices to Egypt. clientId/clientSecret are issued when this entity registers Clearvo ' +
+      'as its representative ("onbehalfof") on the ETA taxpayer portal — each taxpayer grants this independently, ' +
+      'there is no Clearvo-wide credential. certPem/keyPem are the entity\'s own eSeal X.509 certificate and matching ' +
+      'private key, PEM-encoded — also per-entity, unlike some other countries where Clearvo signs on the customer\'s behalf.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        registrationNumber: { type: 'string', description: '9-digit ETA Registration Number.' },
+        clientId: { type: 'string', description: 'ETA OAuth2 Client ID.' },
+        clientSecret: { type: 'string', description: 'ETA OAuth2 Client Secret.' },
+        certPem: { type: 'string', description: 'PEM-encoded eSeal X.509 certificate, starting with -----BEGIN CERTIFICATE-----.' },
+        keyPem: { type: 'string', description: 'PEM-encoded RSA private key matching certPem.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['registrationNumber', 'clientId', 'clientSecret', 'certPem', 'keyPem'],
+    },
+  },
+  {
+    name: 'set_jo_credentials',
+    description:
+      'Register Jordan JoFotara (ISTD) electronic invoicing credentials for an entity: taxpayer number, income source ' +
+      'sequence, and Client ID/Secret Key from the JoFotara portal\'s "Integrate Device" screen. ' +
+      'Required before submitting invoices to Jordan. Note: there is no Jordan sandbox — JoFotara exposes exactly one ' +
+      'operation (real invoice submission) with no side-effect-free way to verify a credential, so unlike most other ' +
+      'countries these credentials are saved without a live test call. The first real submission is the first real test.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        taxpayerNumber: { type: 'string', description: 'The entity\'s Jordanian ISTD taxpayer number.' },
+        incomeSourceSequence: { type: 'string', description: 'Income source sequence number (تسلسل مصدر الدخل) from the JoFotara portal\'s "Integrate Device" screen — numeric.' },
+        clientId: { type: 'string', description: 'Client ID ("Current ID") from the JoFotara portal.' },
+        secretKey: { type: 'string', description: 'Secret Key from the JoFotara portal.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['taxpayerNumber', 'incomeSourceSequence', 'clientId', 'secretKey'],
+    },
+  },
+  {
     name: 'invite_team_member',
     description:
       'Invite a teammate to this Clearvo account by email. ' +
@@ -1219,6 +1261,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'set_hu_credentials': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/hu/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_eg_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/eg/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_jo_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/jo/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'invite_team_member':
