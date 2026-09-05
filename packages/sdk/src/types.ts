@@ -45,7 +45,7 @@ export interface InvoiceSubmitResponse {
    * below) rather than rejected. Configure the code and resubmit under a
    * new idempotency key to unblock it.
    */
-  status: string;
+  status: ClearanceStatus;
   message?: string;
   /** Present only when status is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
   errorCode?: string;
@@ -94,6 +94,14 @@ export interface InvoiceSubmitResponse {
  */
 export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
+
+/**
+ * POST /v1/send's clearanceStatus values — same generated source as
+ * TaxTreatment above (components.schemas.ClearanceStatus in openapi.json),
+ * including HELD_UNMAPPED_TAX_CODE.
+ */
+export type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
+import type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
 
 export interface PartyInput {
   name: string;
@@ -250,7 +258,7 @@ export interface UnmappedTaxCodeReason {
 
 export interface InvoiceStatusResponse {
   referenceId: string;
-  clearanceStatus: string;
+  clearanceStatus: ClearanceStatus;
   clearanceStatusLabel?: string;
   ksefNumber?: string;
   updatedAt: string;

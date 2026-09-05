@@ -51,6 +51,7 @@ export type {
   ListClientTaxCodesResponse,
   ClientTaxCodeResponse,
   TaxTreatment,
+  ClearanceStatus,
   PartyInput,
   LineItemInput,
   ShippingInput,
