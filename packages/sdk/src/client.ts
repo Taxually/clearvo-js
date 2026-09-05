@@ -31,12 +31,9 @@ import type {
   TaxCalculationSummary,
   ListTaxCalculationsParams,
   ListTaxCalculationsResponse,
-  SubmitSiiRecordInput,
-  CorrectSiiRecordInput,
-  SubmitSiiRecordResponse,
-  ListSiiRecordsParams,
-  ListSiiRecordsResponse,
-  GetSiiRecordResponse,
+  ListReportingObligationsResponse,
+  UpdateReportingObligationsInput,
+  UpdateReportingObligationsResponse,
   QueryRequestParams,
   QueryResponse,
   QueryFieldsResponse,
@@ -234,30 +231,23 @@ export class ClearvoClient {
     return this.request('GET', `/tax/calculate${q ? `?${q}` : ''}`);
   }
 
-  // ── Spain SII ──────────────────────────────────────────────────────────────
+  // ── Tax Reporting obligations ────────────────────────────────────────────────
 
-  submitSiiRecord(input: SubmitSiiRecordInput): Promise<SubmitSiiRecordResponse> {
-    return this.request('POST', '/sii/submit', input);
+  /**
+   * Per-regime reporting toggles (France e-reporting, Spain SII) for the entity.
+   * Spain SII invoices go through submitInvoice() like every other country —
+   * the entity's es_sii row is what routes them to AEAT.
+   */
+  getReportingObligations(): Promise<ListReportingObligationsResponse> {
+    return this.request('GET', '/tax/reporting-obligations');
   }
 
-  correctSiiRecord(input: CorrectSiiRecordInput): Promise<SubmitSiiRecordResponse> {
-    return this.request('POST', '/sii/correct', input);
-  }
-
-  listSiiRecords(params: ListSiiRecordsParams = {}): Promise<ListSiiRecordsResponse> {
-    const qs = new URLSearchParams();
-    if (params.status)         qs.set('status',      params.status);
-    if (params.invoiceType)    qs.set('invoiceType',  params.invoiceType);
-    if (params.dateFrom)       qs.set('dateFrom',     params.dateFrom);
-    if (params.dateTo)         qs.set('dateTo',       params.dateTo);
-    if (params.page  != null)  qs.set('page',  String(params.page));
-    if (params.limit != null)  qs.set('limit', String(params.limit));
-    const q = qs.toString();
-    return this.request('GET', `/sii/records${q ? `?${q}` : ''}`);
-  }
-
-  getSiiRecord(id: string): Promise<GetSiiRecordResponse> {
-    return this.request('GET', `/sii/records/${encodeURIComponent(id)}`);
+  /**
+   * Enable/disable regimes. Enabling requires `effectiveFrom`; a bare `true`
+   * is rejected with EFFECTIVE_FROM_REQUIRED.
+   */
+  updateReportingObligations(input: UpdateReportingObligationsInput): Promise<UpdateReportingObligationsResponse> {
+    return this.request('PATCH', '/tax/reporting-obligations', input);
   }
 
   // ── Data Query Tool ────────────────────────────────────────────────────────

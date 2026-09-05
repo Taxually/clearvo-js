@@ -592,87 +592,77 @@ export interface ListTaxCalculationsResponse {
   pagination: { page: number; limit: number; total: number };
 }
 
-export type SiiInvoiceType = 'LFE' | 'LFR';
+// ── Tax Reporting obligations ────────────────────────────────────────────────
 
-export type SiiRecordStatus = 'PENDING' | 'VALIDATED' | 'SUBMITTED' | 'ACCEPTED' | 'REJECTED' | 'ERROR';
+/** Customer-toggleable reporting regimes surfaced by GET /tax/reporting-obligations. */
+export type ReportingObligationRegime = 'fr_ereporting' | 'es_sii';
 
-export interface SubmitSiiRecordInput {
-  invoiceType: SiiInvoiceType;
-  invoiceNumber: string;
-  invoiceDate: string;
-  counterpartyNif?: string | null;
-  counterpartyName?: string | null;
-  baseAmount: number;
-  taxAmount: number;
-  totalAmount: number;
-  /** Régimen especial / clave key, '01'..'16'. */
-  claveRegimen: string;
+/**
+ * Any regime code the platform knows — accepted as a key on PATCH (e.g. enabling
+ * es_verifactu alongside es_sii), not only the toggleable subset GET surfaces.
+ */
+export type RegimeCode =
+  | ReportingObligationRegime
+  | 'es_verifactu' | 'fr_einvoicing' | 'it_einvoicing' | 'pl_einvoicing' | 'sa_einvoicing'
+  | 'pt_einvoicing' | 'de_einvoicing' | 'ro_einvoicing' | 'hu_einvoicing' | 'gr_einvoicing'
+  | 'my_einvoicing' | 'il_einvoicing' | 'eg_einvoicing' | 'ar_einvoicing' | 'jo_einvoicing'
+  | 'peppol_einvoicing';
+
+export type RegimeSubmissionMode = 'immediate' | 'batch_auto' | 'batch_review';
+
+export type RegimeSetupStatus = 'not_started' | 'awaiting_customer' | 'awaiting_authority' | 'ready' | 'blocked';
+
+export interface ReportingObligation {
+  obligation: ReportingObligationRegime;
+  /** ISO 3166-1 alpha-2 country the regime applies to. */
+  country: string;
+  /** false when no row exists — never derived, never defaulted on. */
+  enabled: boolean;
+  /** Whether the entity holds a registration in that country. Informational — does not gate PATCH. */
+  registered: boolean;
+  /** Date the obligation started (or starts) applying; null when never enabled. */
+  effectiveFrom: string | null;
+  /** es_sii allows only 'immediate'; fr_ereporting allows all three. */
+  submissionMode: RegimeSubmissionMode | null;
+  /** Ops-maintained setup progress — read-only on the public surface. */
+  setupStatus: RegimeSetupStatus | null;
+  setupStatusNote: string | null;
 }
 
-export interface CorrectSiiRecordInput extends SubmitSiiRecordInput {
-  /** id of the SII record being corrected. */
-  originalRecordId: string;
-}
-
-export interface SubmitSiiRecordResponse {
+export interface ListReportingObligationsResponse {
   ok: boolean;
-  id: string;
-  status: string;
-  aeatCsv: string | null;
-  reportingDeadline: string;
+  entityId: string;
+  obligations: ReportingObligation[];
 }
 
-export interface SiiRecord {
-  id: string;
-  invoiceNumber: string;
-  invoiceDate: string;
-  invoiceType: SiiInvoiceType;
-  counterpartyNif: string | null;
-  counterpartyName: string | null;
-  baseAmount: number | null;
-  taxAmount: number | null;
-  totalAmount: number | null;
-  claveRegimen: string;
-  status: SiiRecordStatus;
-  /** A0 = original submission, A1 = correction. */
-  tipoComunicacion: 'A0' | 'A1';
-  /** Set only on a correction record — the id of the SII record it corrects. */
-  originalRecordId: string | null;
-  /** 0 for an original submission, incremented by 1 per correction. */
-  correctionSeq: number;
-  reportingDeadline: string;
-  submittedAt: string | null;
-  aeatCsv: string | null;
-  aeatStatusCode: string | null;
-  aeatErrorCode: string | null;
-  createdAt: string;
-  updatedAt: string;
+/**
+ * One value in the PATCH `obligations` map. A bare boolean is shorthand for
+ * `{ enabled }` and only ever succeeds for a disable — enabling requires the
+ * object form with `effectiveFrom` (EFFECTIVE_FROM_REQUIRED otherwise).
+ */
+export type ReportingObligationPatch =
+  | boolean
+  | {
+      enabled: boolean;
+      /** Required when enabled is true. YYYY-MM-DD. */
+      effectiveFrom?: string;
+      /** Must be one the regime allows — SUBMISSION_MODE_NOT_ALLOWED otherwise. */
+      submissionMode?: RegimeSubmissionMode;
+    };
+
+export interface UpdateReportingObligationsInput {
+  obligations?: Partial<Record<RegimeCode, ReportingObligationPatch>>;
+  /** Stamp the entity's tax-reporting confirmation, even when obligations is empty. */
+  confirm?: boolean;
 }
 
-/** Full detail for a single SII record. Superset of SiiRecord. */
-export interface SiiRecordDetail extends SiiRecord {
-  /** Full AEAT error message, present when aeatErrorCode is set. */
-  aeatErrorDetail: string | null;
-}
-
-export interface ListSiiRecordsParams {
-  status?: SiiRecordStatus;
-  invoiceType?: SiiInvoiceType;
-  /** invoiceDate >= this value, YYYY-MM-DD. */
-  dateFrom?: string;
-  /** invoiceDate <= this value, YYYY-MM-DD. */
-  dateTo?: string;
-  page?: number;
-  limit?: number;
-}
-
-export interface ListSiiRecordsResponse {
-  records: SiiRecord[];
-  pagination: { total: number; page: number; limit: number; pages: number; hasNext: boolean; hasPrev: boolean };
-}
-
-export interface GetSiiRecordResponse {
-  record: SiiRecordDetail;
+export interface UpdateReportingObligationsResponse {
+  ok: boolean;
+  entityId: string;
+  /** Regime code -> enabled, for every regime this request touched. */
+  obligations: Record<string, boolean>;
+  /** Present only when a non-blocking warning applies — today only SII_EXEMPTS_VERIFACTU. */
+  warnings?: Array<{ code: 'SII_EXEMPTS_VERIFACTU' | string; message: string }>;
 }
 
 // ── Data Query Tool ──────────────────────────────────────────────────────────

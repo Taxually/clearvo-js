@@ -123,10 +123,17 @@ const TOOLS = [
     name: 'submit_invoice',
     description:
       'Submit a B2B invoice to a national tax authority for clearance or registration. ' +
-      'Required in Italy (SDI), Poland (KSeF), Romania (ANAF), Spain (SII via VeriFACTU), ' +
+      'Required in Italy (SDI), Poland (KSeF), Romania (ANAF), Spain (SII or VeriFactu — ' +
+      'whichever this entity\'s reporting obligations enrolled it in; the two are mutually ' +
+      'exclusive per entity, resolved automatically, never chosen by the caller), ' +
       'Hungary (NAV), Greece (myDATA), and 20+ other countries. Also routes via Peppol for ' +
       'countries using the 4-corner network (Belgium, Netherlands, Germany B2G, etc.). ' +
-      'Returns a referenceId — call poll_status to track the clearance outcome. ' +
+      'Returns a referenceId — call poll_status to track the clearance outcome. Every ' +
+      'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED), ' +
+      '`mandate`, and `reviewRequired`; a Spain SII submission additionally carries ' +
+      '`siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate), `reportBy` ' +
+      '(the AEAT deadline) and, when held, `holdReason`/`actionOwner` — never the AEAT CSV, which ' +
+      'only exists once AEAT answers (see get_invoice\'s siiDetail). ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -558,7 +565,9 @@ const TOOLS = [
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
       'Returns everything in list_invoices plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
-      'and the submitted XML. ' +
+      'and the submitted XML. For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
+      'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
+      'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
       'or check whether a suggested action has been applied.',
     inputSchema: {
@@ -566,87 +575,6 @@ const TOOLS = [
       required: ['id'],
       properties: {
         id: { type: 'string', description: 'Clearvo invoice ID or authority reference ID (SDI ID, KSeF number, etc.)' },
-      },
-    },
-  },
-  {
-    name: 'submit_sii_record',
-    description:
-      'Submit a single Spain SII (Suministro Inmediato de Información) registro to AEAT. ' +
-      'Use this instead of submit_invoice for an entity enrolled in the SII census (obligation es_sii) — ' +
-      'SII and VeriFactu are mutually exclusive per entity, so a SII-obliged entity is never submitted via ' +
-      'submit_invoice/POST /send. Requires the entity to have completed the Annex I written authorization ' +
-      'and to hold a Spanish VAT registration — call get_setup_status first if unsure. ' +
-      'Returns a record id — call get_sii_record to check aeatStatusCode/aeatErrorCode after submission.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        invoiceType: { type: 'string', enum: ['LFE', 'LFR'], description: 'LFE = Facturas Expedidas (issued), LFR = Facturas Recibidas (received).' },
-        invoiceNumber: { type: 'string' },
-        invoiceDate: { type: 'string', description: 'ISO YYYY-MM-DD.' },
-        counterpartyNif: { type: 'string' },
-        counterpartyName: { type: 'string' },
-        baseAmount: { type: 'number' },
-        taxAmount: { type: 'number' },
-        totalAmount: { type: 'number' },
-        claveRegimen: { type: 'string', description: "Régimen especial / clave key, '01'..'16'." },
-      },
-      required: ['invoiceType', 'invoiceNumber', 'invoiceDate', 'baseAmount', 'taxAmount', 'totalAmount', 'claveRegimen'],
-    },
-  },
-  {
-    name: 'correct_sii_record',
-    description:
-      'Submit a correction (tipoComunicacion A1) for a previously-submitted SII record. ' +
-      'The original record\'s invoice fields are never updated — this always creates a new SII record ' +
-      'referencing the original via originalRecordId, with correctionSeq incremented by 1. ' +
-      'Pass the full corrected values for all fields, not just the ones that changed.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        originalRecordId: { type: 'string', description: 'id of the SII record being corrected.' },
-        invoiceType: { type: 'string', enum: ['LFE', 'LFR'] },
-        invoiceNumber: { type: 'string' },
-        invoiceDate: { type: 'string', description: 'ISO YYYY-MM-DD.' },
-        counterpartyNif: { type: 'string' },
-        counterpartyName: { type: 'string' },
-        baseAmount: { type: 'number' },
-        taxAmount: { type: 'number' },
-        totalAmount: { type: 'number' },
-        claveRegimen: { type: 'string', description: "Régimen especial / clave key, '01'..'16'." },
-      },
-      required: ['originalRecordId', 'invoiceType', 'invoiceNumber', 'invoiceDate', 'baseAmount', 'taxAmount', 'totalAmount', 'claveRegimen'],
-    },
-  },
-  {
-    name: 'list_sii_records',
-    description:
-      'List Spain SII records for the caller\'s entity. Filter by status, invoice type, or invoice date range. ' +
-      'Use this to audit submitted SII registros, find records still PENDING, or identify REJECTED/ERROR ' +
-      'records that need a correction via correct_sii_record.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        status: { type: 'string', enum: ['PENDING', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'ERROR'] },
-        invoiceType: { type: 'string', enum: ['LFE', 'LFR'] },
-        dateFrom: { type: 'string', description: 'invoiceDate >= this value, YYYY-MM-DD.' },
-        dateTo: { type: 'string', description: 'invoiceDate <= this value, YYYY-MM-DD.' },
-        page: { type: 'number', description: 'Default 1.' },
-        limit: { type: 'number', description: 'Results per page, default 50, max 200.' },
-      },
-    },
-  },
-  {
-    name: 'get_sii_record',
-    description:
-      'Fetch full detail for a single Spain SII record by id, scoped to the caller\'s entity. ' +
-      'Returns everything in list_sii_records plus aeatErrorDetail — the full AEAT error message, ' +
-      'present when aeatErrorCode is set. Use this to investigate a specific rejection before correcting it.',
-    inputSchema: {
-      type: 'object' as const,
-      required: ['id'],
-      properties: {
-        id: { type: 'string', description: 'The SII record id, e.g. from submit_sii_record or list_sii_records.' },
       },
     },
   },
@@ -722,8 +650,11 @@ const TOOLS = [
       'Register a new webhook endpoint to receive real-time invoice status events. ' +
       'The response includes a signing secret (shown once — store it securely) used to verify ' +
       'payload authenticity via HMAC-SHA256. ' +
-      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, ' +
-      'invoice.undelivered, invoice.pending, * (all events).',
+      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
+      'invoice.pending, product.classification_changed, ' +
+      'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
+      'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
+      '* (all events).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -731,7 +662,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending',
+          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors',
         },
       },
       required: ['url'],
@@ -970,6 +901,44 @@ const TOOLS = [
         defaultTaxCategorySlug: { type: ['string', 'null'], description: 'RECOMMENDED to set explicitly rather than leaving unset — the tax category applied when no product name/category is supplied on a line item. Unset silently falls back to a generic physical-goods category, which mistaxes a catalogue that is mostly one non-physical type (e.g. all SaaS). Pass null to clear it back to that fallback.' },
         usAddressPrecision: { type: 'string', enum: ['rooftop', 'zip'], description: "'rooftop' resolves the full street address for the most accurate US rate (recommended); 'zip' uses ZIP code only." },
         confirmed: { type: 'boolean', description: 'Set true once the user has reviewed these settings — marks the onboarding step complete, independent of whether any value changed.' },
+      },
+    },
+  },
+  {
+    name: 'get_reporting_obligations',
+    description:
+      'Read the domestic e-reporting/e-invoicing regime toggles under the "Tax Reporting" solution for this ' +
+      'entity — currently France e-reporting (fr_ereporting) and Spain SII (es_sii). Each entry returns enabled, ' +
+      'whether the entity is registered in that country (registered: false means toggling is not yet meaningful — ' +
+      'point the user at add_registration first), effectiveFrom (the date the regime actually started applying, ' +
+      'null if never enabled), submissionMode, and setupStatus/setupStatusNote (an internal ops-set progress ' +
+      'note — read-only here; update_reporting_obligations cannot set it). No regime defaults to enabled — a ' +
+      'missing/false row genuinely means the customer has not turned it on, never an inferred default.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'update_reporting_obligations',
+    description:
+      'Enable or disable domestic e-reporting/e-invoicing regimes for this entity (currently fr_ereporting, ' +
+      'es_sii, and es_verifactu). Call get_reporting_obligations first to see current state. Pass obligations as ' +
+      'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
+      '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
+      '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
+      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii only allows ' +
+      '"immediate" — AEAT real-time reporting has no batch concept; the call fails with SUBMISSION_MODE_NOT_ALLOWED ' +
+      'for an unsupported combination like es_sii + "batch_review"). Enabling es_sii alongside es_verifactu is ' +
+      'allowed but returns a warnings[] entry (SII_EXEMPTS_VERIFACTU) explaining VeriFactu becomes redundant once ' +
+      'SII is active — surface that to the user rather than silently proceeding. setupStatus/setupStatusNote ' +
+      'cannot be set through this tool (ops-only) — pass confirm:true only once the user has reviewed the ' +
+      'obligations they are setting.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        obligations: {
+          type: 'object',
+          description: 'Map of regime code -> boolean or { enabled, effectiveFrom, submissionMode }. See tool description for the enabling rules.',
+        },
+        confirm: { type: 'boolean', description: 'Set true once the user has reviewed these obligations — marks the "Tax Reporting" Getting Started step complete, independent of whether any value changed.' },
       },
     },
   },
@@ -1367,29 +1336,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', `/invoices/${encodeURIComponent(id)}`);
     }
 
-    case 'submit_sii_record':
-      return callApi('POST', '/sii/submit', args);
-
-    case 'correct_sii_record':
-      return callApi('POST', '/sii/correct', args);
-
-    case 'list_sii_records': {
-      const qs = new URLSearchParams();
-      if (args.status)      qs.set('status',      args.status      as string);
-      if (args.invoiceType) qs.set('invoiceType', args.invoiceType as string);
-      if (args.dateFrom)    qs.set('dateFrom',    args.dateFrom    as string);
-      if (args.dateTo)      qs.set('dateTo',      args.dateTo      as string);
-      if (args.page)        qs.set('page',        String(args.page));
-      if (args.limit)       qs.set('limit',       String(args.limit));
-      const q = qs.toString();
-      return callApi('GET', `/sii/records${q ? `?${q}` : ''}`);
-    }
-
-    case 'get_sii_record': {
-      const id = args.id as string;
-      return callApi('GET', `/sii/records/${encodeURIComponent(id)}`);
-    }
-
     case 'list_products': {
       const qs = new URLSearchParams();
       if (args.entityId) qs.set('entityId', args.entityId as string);
@@ -1471,6 +1417,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'update_tax_settings': {
       const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, confirmed } = args;
       return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, confirmed });
+    }
+
+    case 'get_reporting_obligations':
+      return callApi('GET', '/tax/reporting-obligations');
+
+    case 'update_reporting_obligations': {
+      const { obligations, confirm } = args as { obligations?: Record<string, unknown>; confirm?: boolean };
+      return callApi('PATCH', '/tax/reporting-obligations', { obligations, confirm });
     }
 
     case 'list_customers': {
