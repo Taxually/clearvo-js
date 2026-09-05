@@ -44,6 +44,9 @@ import type {
   CreateClientTaxCodeInput,
   UpdateClientTaxCodeInput,
   ClientTaxCodeResponse,
+  SubmitInvoiceInput,
+  ListTaxCodesParams,
+  ListTaxCodesResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -92,7 +95,7 @@ export class ClearvoClient {
 
   // ── E-Invoicing ──────────────────────────────────────────────────────────────
 
-  submitInvoice(input: Record<string, unknown>, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
+  submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;
     return this.request('POST', '/send', input, headers);
@@ -307,5 +310,16 @@ export class ClearvoClient {
       undefined,
       entityId ? { 'x-entity-id': entityId } : undefined
     );
+  }
+
+  /** GET /v1/tax/codes — every tax-code row this platform knows about, plus this entity's own client tax codes, in one shape. */
+  listTaxCodes(params: ListTaxCodesParams = {}): Promise<ListTaxCodesResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 }
