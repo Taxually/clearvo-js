@@ -127,7 +127,14 @@ const TOOLS = [
       'Hungary (NAV), Greece (myDATA), and 20+ other countries. Also routes via Peppol for ' +
       'countries using the 4-corner network (Belgium, Netherlands, Germany B2G, etc.). ' +
       'Returns a referenceId — call poll_status to track the clearance outcome. ' +
-      'Call get_requirements first if unsure what fields are needed for a country.',
+      'Call get_requirements first if unsure what fields are needed for a country. ' +
+      'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
+      'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
+      'create_client_tax_code / list_tax_codes), or a taxTreatment hint (exempt/out_of_scope/zero_rated/' +
+      'reverse_charge) for a line with no configured code. An unrecognised clientTaxCode/taxTreatment never ' +
+      'rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
+      'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
+      'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -193,18 +200,34 @@ const TOOLS = [
               description: { type: 'string' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number', description: 'Unit price excluding tax' },
-              vatRate: { type: 'number', description: 'VAT/tax rate as a percentage (e.g. 22 for 22%). Required for standard (S) and reduced (AA) rate lines. Use 0 for zero-rated, exempt, or reverse charge lines.' },
-              taxCode: {
+              vatRate: { type: 'number', description: 'VAT/tax rate as a percentage (e.g. 22 for 22%). Required unless clientTaxCode is supplied. A genuinely 0% line also needs taxTreatment — a bare 0% rate alone is ambiguous between zero-rated/exempt/out-of-scope/reverse-charge.' },
+              clientTaxCode: {
                 type: 'string',
-                description: 'EN16931 tax code: S=standard rate, AA=reduced rate, Z=zero-rated, AE=reverse charge (non-EU→EU), K=intra-EU reverse charge, G=export (zero-rated outside scope), E=exempt',
+                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
               },
+              taxTreatment: {
+                type: 'string',
+                enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'],
+                description: 'Explicit tax-treatment hint, used only when clientTaxCode is omitted — required whenever this line is genuinely 0% and the buyer/seller country pair alone does not already explain why. Mutually exclusive with clientTaxCode.',
+              },
+              buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level buyerType, consulted only when this line has no clientTaxCode.' },
+              supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
             },
-            required: ['description', 'quantity', 'unitPrice', 'vatRate', 'taxCode'],
+            required: ['description', 'quantity', 'unitPrice'],
           },
         },
         totalAmount: { type: 'number', description: 'Net total excluding tax' },
         taxAmount: { type: 'number', description: 'Total tax amount' },
         documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note"' },
+        clientTaxCode: {
+          type: 'string',
+          description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/vatRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
+        },
+        buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional buyer classification for the whole invoice — business vs. consumer. Can be overridden per line.' },
+        dryRun: {
+          type: 'boolean',
+          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting.',
+        },
         notifyBuyer: {
           type: 'boolean',
           description: 'Only meaningful for countries where no authority network delivers the invoice to the buyer (Spain, Portugal, France, Germany always; Italy only when the buyer has no SDI routing code — i.e. B2C; Poland only when the buyer has no Polish NIP — KSeF is pull-only and pull access requires the buyer\'s own registered NIP). When true and buyer.contact.email is set, Clearvo emails the buyer a link to view/download the invoice. Omit to use the entity default (see update_entity\'s notifyBuyerByDefault); true/false here overrides that default for this invoice only. Silently ignored for countries Clearvo already delivers electronically (Peppol, Italy B2B/B2G, Poland when the buyer has a NIP, Romania, Hungary, Greece, Argentina) — check the response\'s buyerNotification field to see what happened.',
@@ -217,7 +240,8 @@ const TOOLS = [
     name: 'poll_status',
     description:
       'Check the clearance or submission status of an invoice previously submitted via submit_invoice. ' +
-      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, or UNDELIVERED. ' +
+      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, UNDELIVERED, or ' +
+      'HELD_UNMAPPED_TAX_CODE (a line\'s clientTaxCode/taxTreatment isn\'t configured yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then resubmit under a new idempotency key). ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
     inputSchema: {
@@ -236,7 +260,7 @@ const TOOLS = [
       'Determines the applicable rate, treatment (standard, reverse charge, export, exempt, IOSS), ' +
       'and EN16931 tax code for each line item. Handles EU B2B reverse charge, OSS/IOSS schemes, ' +
       'US state-level sales tax, Canadian GST/HST/PST, and more. ' +
-      'The taxCode returned maps directly to the taxCode field in submit_invoice — no conversion needed. ' +
+      'The clientTaxCode returned (when a matching one exists for this entity) maps directly to lines[].clientTaxCode in submit_invoice — no conversion needed; there is no taxCode field on submit_invoice. ' +
       'Set commit=true to record the calculation in the audit trail (required for threshold monitoring). ' +
       'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
@@ -1133,12 +1157,33 @@ const TOOLS = [
     description:
       'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
       '(e.g. a SAP two-digit code) to a Clearvo Tax Decision. Reference one via clientTaxCode on submit_invoice ' +
-      'instead of sending taxCode/vatRate directly; calculate_tax returns your matching code back in its ' +
-      'response for ERP posting. The EN16931 taxCode and rate are always computed live, never stored.',
+      '(RECOMMENDED, instead of a taxTreatment hint); calculate_tax returns your matching code back in its ' +
+      'response for ERP posting. The EN16931 category and rate are always computed live, never stored. See ' +
+      'also list_tax_codes for the full canonical catalogue (this platform\'s own content plus your codes).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         entityId: { type: 'string', description: 'Entity ID to list client tax codes for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'list_tax_codes',
+    description:
+      'List/search every tax-code row this platform knows about — Clearvo\'s own content (system_enum: a ' +
+      'connector\'s raw enum value e.g. Xero TaxType; fact: a country\'s sale-side default treatment, the same ' +
+      'vocabulary submit_invoice\'s lines[].taxTreatment accepts) plus this entity\'s own client tax codes ' +
+      '(vocabulary=client, same rows as list_client_tax_codes, in the same shape). Use this to validate a ' +
+      'clientTaxCode/taxTreatment value before calling submit_invoice, or to build a tax-code picker.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Substring match against `code`, case-insensitive.' },
+        vocabulary: { type: 'string', enum: ['system_enum', 'fact', 'client', 'tax_calc'], description: 'Omit to list every vocabulary.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 — narrows to this country\'s rows.' },
+        sourceSystem: { type: 'string', description: 'e.g. "xero" — narrows to one connector\'s system_enum rows; never matches a client row.' },
+        date: { type: 'string', description: 'YYYY-MM-DD — resolves each row\'s live rate as of this date. Defaults to now.' },
+        entityId: { type: 'string', description: 'Entity ID to scope `client` vocabulary rows to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
     },
   },
@@ -1461,6 +1506,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'list_client_tax_codes': {
       const { entityId } = args as { entityId?: string };
       return callApi('GET', '/tax/client-codes', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_tax_codes': {
+      const { entityId, ...params } = args as { entityId?: string } & Record<string, unknown>;
+      const qs = new URLSearchParams();
+      for (const key of ['code', 'vocabulary', 'country', 'sourceSystem', 'date'] as const) {
+        if (params[key] !== undefined) qs.set(key, String(params[key]));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'create_client_tax_code': {

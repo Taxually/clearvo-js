@@ -36,8 +36,29 @@ export interface UpdateEntityInput {
 
 export interface InvoiceSubmitResponse {
   referenceId: string;
-  status: string;
+  /**
+   * clearanceStatus, e.g. PENDING/ACCEPTED/REJECTED/DELIVERED/UNROUTABLE/
+   * UNDELIVERED/DUPLICATE, or HELD_UNMAPPED_TAX_CODE — a line/shipping/
+   * allowance-charge's clientTaxCode or taxTreatment isn't configured for
+   * this entity yet. Never a malformed request: the invoice is accepted
+   * and held with a machine-readable reason (see errorCode/message/reason
+   * below) rather than rejected. Configure the code and resubmit under a
+   * new idempotency key to unblock it.
+   */
+  status: ClearanceStatus;
   message?: string;
+  /** Present only when status is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
+  errorCode?: string;
+  /** Present only when status is HELD_UNMAPPED_TAX_CODE — the machine-readable diagnostic for which code wasn't configured and where to fix it. */
+  reason?: UnmappedTaxCodeReason;
+  /** Echoed back only when the request set dryRun: true — no record was persisted. */
+  dryRun?: boolean;
+  /**
+   * Per-line tax-code resolution audit trail — one entry per submitted
+   * `lines[]`, in original order. Present on every real submission (and on
+   * a dryRun: true preview) except a credit note.
+   */
+  lines?: Array<{ lineNumber: number; taxResolution: LineTaxResolution }>;
   /**
    * Outcome of the buyer invoice notification feature — only present for
    * countries where no authority network delivers the invoice to the buyer
@@ -50,9 +71,194 @@ export interface InvoiceSubmitResponse {
   };
 }
 
+// ── Submit invoice (POST /v1/send) input ────────────────────────────────────
+//
+// Hard cut: there is no `taxCode` field anywhere on this input — on a line,
+// on `shipping`, or on an allowance/charge. The EN16931/BIS category is
+// ALWAYS a resolved OUTPUT (see LineTaxResolution below), never a
+// caller-supplied value. Supply `clientTaxCode` (RECOMMENDED — your own ERP
+// code, mapped in advance via createClientTaxCode) or a `taxTreatment` hint
+// instead — mutually exclusive, at most one per line/shipping/charge.
+
+/**
+ * An explicit tax-treatment hint for a line, `shipping`, or an
+ * allowance/charge — used only when `clientTaxCode` is omitted, to
+ * disambiguate a genuinely 0% line (a bare 0% rate alone is ambiguous
+ * between zero-rated/exempt/out-of-scope/reverse-charge).
+ *
+ * Re-exported from ./generated/openapi-tax-code-contract.js, which is
+ * regenerated straight from clearvo-marketing's openapi.json
+ * (components.schemas.TaxTreatment) — never hand-edit that file or
+ * hardcode this union here; run `node scripts/generate-from-openapi.mjs`
+ * at the repo root instead.
+ */
+export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
+import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
+
+/**
+ * POST /v1/send's clearanceStatus values — same generated source as
+ * TaxTreatment above (components.schemas.ClearanceStatus in openapi.json),
+ * including HELD_UNMAPPED_TAX_CODE.
+ */
+export type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
+import type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
+
+export interface PartyInput {
+  name: string;
+  taxId?: string;
+  taxIdCountry?: string;
+  legalRegistrationId?: string;
+  address: {
+    street?: string;
+    street2?: string;
+    city: string;
+    postalCode?: string;
+    countyCode?: string;
+    country: string;
+  };
+  contact?: { name?: string; phone?: string; email?: string };
+  endpointId?: string;
+  endpointSchemeId?: string;
+  /** Buyer only — resolve a previously-saved customer record instead of repeating its fields. */
+  customerRef?: string;
+}
+
+export interface LineItemInput {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  /** Required unless clientTaxCode is supplied (or resolved from the header-level clientTaxCode). */
+  taxRate?: number;
+  /**
+   * RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code),
+   * configured in advance via createClientTaxCode. Mutually exclusive with
+   * `taxTreatment`. An unrecognised code for this entity is never
+   * rejected outright — the invoice is held (status HELD_UNMAPPED_TAX_CODE)
+   * with a machine-readable reason instead.
+   */
+  clientTaxCode?: string;
+  /** Mutually exclusive with `clientTaxCode`. See TaxTreatment. */
+  taxTreatment?: TaxTreatment;
+  /** Per-line override of the invoice-level buyerType, consulted only when this line has no clientTaxCode. */
+  buyerType?: 'B2B' | 'B2C';
+  /** Consulted only when this line has no clientTaxCode. Defaults to 'goods'. */
+  supplyType?: 'goods' | 'digital_service' | 'general_service';
+  discount?: number;
+  unit?: string;
+  itemCode?: string;
+}
+
+export interface ShippingInput {
+  amount: number;
+  carrier?: string;
+  trackingNumber?: string;
+  /** Same resolution as LineItemInput.clientTaxCode — RECOMMENDED. */
+  clientTaxCode?: string;
+  /**
+   * Same resolution as LineItemInput.taxTreatment. Unlike a line item,
+   * shipping with neither this nor clientTaxCode set defaults to
+   * zero-rated rather than an error — shipping never drives Compliance
+   * Mandate resolution.
+   */
+  taxTreatment?: TaxTreatment;
+}
+
+export interface AllowanceChargeInput {
+  /** Absolute amount, always positive — sign is implied by whether this is under `allowances` or `charges`. */
+  amount: number;
+  reason: string;
+  /** Same resolution as LineItemInput.clientTaxCode — RECOMMENDED. */
+  clientTaxCode?: string;
+  /** Same resolution as LineItemInput.taxTreatment. Same zero-rated-by-default carve-out as ShippingInput.taxTreatment. */
+  taxTreatment?: TaxTreatment;
+}
+
+export interface SubmitInvoiceInput {
+  documentType?: 'invoice' | 'credit_note' | 'debit_note';
+  invoiceNumber: string;
+  issueDate: string;
+  dueDate?: string;
+  currency: string;
+  country: string;
+  taxIncluded?: boolean;
+  supplier?: PartyInput;
+  buyer: PartyInput;
+  /** Optional buyer classification for the whole invoice. Can be overridden per line via lines[].buyerType. */
+  buyerType?: 'B2B' | 'B2C';
+  lines: LineItemInput[];
+  allowances?: AllowanceChargeInput[];
+  charges?: AllowanceChargeInput[];
+  shipping?: ShippingInput;
+  /**
+   * RECOMMENDED. Header-level counterpart to lines[].clientTaxCode —
+   * applied to every line that supplies neither its own taxTreatment/
+   * taxRate nor its own lines[].clientTaxCode; a line's own value always
+   * wins.
+   */
+  clientTaxCode?: string;
+  /**
+   * Preview the resolved per-line tax decision without creating a record,
+   * generating XML, or enqueueing anything to an authority. The response
+   * echoes dryRun: true plus `lines[]` (including a would-be
+   * HELD_UNMAPPED_TAX_CODE outcome).
+   */
+  dryRun?: boolean;
+  prepaidAmount?: number;
+  originalInvoiceRef?: { invoiceNumber: string; issueDate: string };
+  correctsInvoiceId?: string;
+  customerReference?: string;
+  countrySpecific?: Record<string, unknown>;
+  notifyBuyer?: boolean;
+  rejectInsteadOfAutoCorrect?: boolean;
+  metadata?: Record<string, string>;
+}
+
+/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier (buyer/seller country pair + vatRate, optionally with a taxTreatment hint). */
+export type ResolvedBy = 'client_tax_code' | 'source_system_code' | 'facts';
+
+/**
+ * The full Tax Decision behind one line's resolution — how the caller's
+ * clientTaxCode/taxTreatment/vatRate input became an EN16931/BIS category.
+ */
+export interface LineTaxResolution {
+  resolvedBy: ResolvedBy;
+  input: {
+    clientTaxCode?: string;
+    sourceSystemCode?: { system: string; code: string };
+    facts?: {
+      buyerCountry: string;
+      buyerTaxId?: string;
+      buyerType?: 'b2b' | 'b2c';
+      supplyType?: 'goods' | 'digital_service' | 'general_service';
+      taxTreatment?: string;
+    };
+  };
+  mappingRowId: string | null;
+  mappingVersion: number | null;
+  category: string;
+  exemptionReason: string | null;
+  band: string | null;
+  rate: number;
+}
+
+/**
+ * The machine-readable diagnostic returned when a line/shipping/
+ * allowance-charge's clientTaxCode or taxTreatment isn't configured for
+ * this entity yet — sets status to HELD_UNMAPPED_TAX_CODE rather than
+ * rejecting the request.
+ */
+export interface UnmappedTaxCodeReason {
+  source_system: string | null;
+  code: string | null;
+  country: string | null;
+  direction: 'sale' | 'purchase' | null;
+  /** Dashboard deep link, pre-filled, for configuring this code. */
+  deepLink: string;
+}
+
 export interface InvoiceStatusResponse {
   referenceId: string;
-  clearanceStatus: string;
+  clearanceStatus: ClearanceStatus;
   clearanceStatusLabel?: string;
   ksefNumber?: string;
   updatedAt: string;
@@ -616,6 +822,58 @@ export interface DuplicateTreatmentWarning {
 export interface ListClientTaxCodesResponse {
   ok: boolean;
   clientTaxCodes: ClientTaxCode[];
+}
+
+// ── GET /v1/tax/codes — canonical tax-code catalogue ────────────────────────
+// Every tax-code row this platform knows about (Clearvo's own system_enum/
+// fact content) plus this caller's own client_tax_codes rows, folded into
+// one shape (vocabulary='client'). Use to validate a clientTaxCode/
+// taxTreatment value before calling submitInvoice, or to build a picker.
+
+export type TaxCodeVocabulary = 'system_enum' | 'fact' | 'client' | 'tax_calc';
+
+export interface ListTaxCodesParams {
+  /** Substring match against `code`, case-insensitive. */
+  code?: string;
+  /** Omit to list every vocabulary. */
+  vocabulary?: TaxCodeVocabulary;
+  /** ISO 3166-1 alpha-2 — narrows to this country's rows. */
+  country?: string;
+  /** e.g. 'xero' — narrows to one connector's system_enum rows; never matches a client row. */
+  sourceSystem?: string;
+  /** YYYY-MM-DD — resolves each row's live rate as of this date. Defaults to now. */
+  date?: string;
+  entityId?: string;
+}
+
+export interface CanonicalTaxCodeRow {
+  id: string;
+  vocabulary: TaxCodeVocabulary;
+  country: string;
+  region: string | null;
+  sourceSystem: string | null;
+  code: string;
+  movement: string;
+  taxability: string;
+  customerType: string | null;
+  supplyType: string;
+  rateBand: string | null;
+  reverseCharge: boolean;
+  label: string | null;
+  description: string | null;
+  /** Live-resolved rate as a percent (23 = 23%) — null when this platform can't currently price this row's jurisdiction/date. */
+  ratePercent: number | null;
+  outputPerFormat: Array<{
+    format: 'PEPPOL' | 'IT' | 'PL';
+    category: string | null;
+    exemptionReasonCode: string | null;
+    hold: boolean;
+  }> | null;
+}
+
+export interface ListTaxCodesResponse {
+  ok: boolean;
+  codes: CanonicalTaxCodeRow[];
 }
 
 export interface ClientTaxCodeResponse {

@@ -60,13 +60,25 @@ const program = new Command()
   .version('0.1.0');
 
 // ── clearvo send <file> ───────────────────────────────────────────────────────
+// Hard cut: there is no `taxCode` field anywhere in the request — not on a
+// line, `shipping`, or an allowance/charge. Set `clientTaxCode` (RECOMMENDED
+// — see `clearvo tax-codes create`) or a `taxTreatment` hint
+// (exempt/out_of_scope/zero_rated/reverse_charge) per line in the JSON file
+// instead; --client-tax-code below is the header-level convenience flag for
+// the common single-code-per-invoice case. An unrecognised code never
+// rejects the invoice — it's held (status HELD_UNMAPPED_TAX_CODE) with a
+// machine-readable reason in the response instead.
 program
   .command('send <file>')
   .description('Submit an invoice from a JSON file')
+  .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
+  .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
   .option('--pretty', 'Pretty-print JSON output')
-  .action(async (file: string, opts: { pretty?: boolean }) => {
+  .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string }) => {
     const raw = readFileSync(file, 'utf8');
     const body = JSON.parse(raw) as Record<string, unknown>;
+    if (opts.dryRun) body.dryRun = true;
+    if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
     // Derive a stable idempotency key from the invoice file content
     const idempotencyKey = createHash('sha256').update(raw).digest('hex').slice(0, 64);
     const result = await api('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
@@ -447,6 +459,33 @@ taxCodes
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
     const result = await api('DELETE', `/tax/client-codes/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+// GET /v1/tax/codes — the full canonical catalogue (Clearvo's own
+// system_enum/fact content plus this entity's own client tax codes, same
+// rows as `tax-codes list` in the same shape). Use to validate a
+// clientTaxCode/taxTreatment value before `clearvo send`, or to build a
+// picker.
+taxCodes
+  .command('search')
+  .description('List/search the full canonical tax-code catalogue (Clearvo content + your client tax codes)')
+  .option('--code <code>', 'Substring match against `code`, case-insensitive')
+  .option('--vocabulary <vocabulary>', 'system_enum, fact, client, or tax_calc — omit to list every vocabulary')
+  .option('--country <code>', 'ISO 3166-1 alpha-2 — narrows to this country\'s rows')
+  .option('--source-system <system>', 'e.g. xero — narrows to one connector\'s system_enum rows; never matches a client row')
+  .option('--date <date>', 'YYYY-MM-DD — resolves each row\'s live rate as of this date. Defaults to now')
+  .option('--entity <entityId>', 'Entity ID to scope `client` vocabulary rows to (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: { code?: string; vocabulary?: string; country?: string; sourceSystem?: string; date?: string; entity?: string; pretty?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (opts.code)         qs.set('code', opts.code);
+    if (opts.vocabulary)   qs.set('vocabulary', opts.vocabulary);
+    if (opts.country)      qs.set('country', opts.country.toUpperCase());
+    if (opts.sourceSystem) qs.set('sourceSystem', opts.sourceSystem);
+    if (opts.date)         qs.set('date', opts.date);
+    const q = qs.toString();
+    const result = await api('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
     print(result, !!opts.pretty);
   });
 
