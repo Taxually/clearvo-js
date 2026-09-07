@@ -592,87 +592,324 @@ export interface ListTaxCalculationsResponse {
   pagination: { page: number; limit: number; total: number };
 }
 
-export type SiiInvoiceType = 'LFE' | 'LFR';
+// ── Tax Reporting obligations ────────────────────────────────────────────────
 
-export type SiiRecordStatus = 'PENDING' | 'VALIDATED' | 'SUBMITTED' | 'ACCEPTED' | 'REJECTED' | 'ERROR';
+/** Customer-toggleable reporting regimes surfaced by GET /tax/reporting-obligations. */
+export type ReportingObligationRegime = 'fr_ereporting' | 'es_sii';
 
-export interface SubmitSiiRecordInput {
-  invoiceType: SiiInvoiceType;
-  invoiceNumber: string;
-  invoiceDate: string;
-  counterpartyNif?: string | null;
-  counterpartyName?: string | null;
-  baseAmount: number;
-  taxAmount: number;
-  totalAmount: number;
-  /** Régimen especial / clave key, '01'..'16'. */
-  claveRegimen: string;
+/**
+ * Any regime code the platform knows — accepted as a key on PATCH (e.g. enabling
+ * es_verifactu alongside es_sii), not only the toggleable subset GET surfaces.
+ */
+export type RegimeCode =
+  | ReportingObligationRegime
+  | 'es_verifactu' | 'fr_einvoicing' | 'it_einvoicing' | 'pl_einvoicing' | 'sa_einvoicing'
+  | 'pt_einvoicing' | 'de_einvoicing' | 'ro_einvoicing' | 'hu_einvoicing' | 'gr_einvoicing'
+  | 'my_einvoicing' | 'il_einvoicing' | 'eg_einvoicing' | 'ar_einvoicing' | 'jo_einvoicing'
+  | 'peppol_einvoicing';
+
+export type RegimeSubmissionMode = 'immediate' | 'batch_auto' | 'batch_review';
+
+export type RegimeSetupStatus = 'not_started' | 'awaiting_customer' | 'awaiting_authority' | 'ready' | 'blocked';
+
+export interface ReportingObligation {
+  obligation: ReportingObligationRegime;
+  /** ISO 3166-1 alpha-2 country the regime applies to. */
+  country: string;
+  /** false when no row exists — never derived, never defaulted on. */
+  enabled: boolean;
+  /**
+   * Whether the entity holds a current STANDARD tax registration in that country.
+   * false means an enabling PATCH is refused 400 REGISTRATION_REQUIRED — see
+   * `registrationGate` for the fixUrl to send the user to first. Disabling is never gated.
+   */
+  registered: boolean;
+  /** Date the obligation started (or starts) applying; null when never enabled. */
+  effectiveFrom: string | null;
+  /**
+   * es_sii and fr_ereporting allow 'immediate' | 'batch_auto' | 'batch_review'
+   * (default 'batch_review' — nothing is filed until a human confirms the batch).
+   * Null when never set.
+   */
+  submissionMode: RegimeSubmissionMode | null;
+  /** Ops-maintained setup progress — read-only on the public surface. */
+  setupStatus: RegimeSetupStatus | null;
+  setupStatusNote: string | null;
+  /** Display label for the regime, e.g. "Spain · SII". */
+  label: string;
+  /** Plain-language description of the regime. */
+  help: string;
+  /** Modes PATCH accepts for this regime (SUBMISSION_MODE_NOT_ALLOWED otherwise). */
+  allowedSubmissionModes: RegimeSubmissionMode[];
+  /** Mode a new enable starts on when none is chosen — 'batch_review' for es_sii/fr_ereporting. */
+  defaultSubmissionMode: RegimeSubmissionMode | null;
+  submissionModeLabel: string | null;
+  setupStatusLabel: string | null;
+  setupStatusNextStep: string | null;
+  setupStatusTone: 'neutral' | 'warning' | 'info' | 'success' | 'danger' | null;
+  /** Plain-language facts about this row's current state. */
+  notes: string[];
+  /**
+   * Non-null whenever `registered` is false (regardless of `enabled`): the row cannot be
+   * enabled yet. `fixUrl` is an absolute, tenant-aware URL to the Registrations page.
+   */
+  registrationGate: { message: string; fixUrl: string } | null;
+  /**
+   * Non-null only when the row is ENABLED but the registration has since lapsed —
+   * submissions are held until it is restored. `fixUrl` is a tenant-relative path.
+   */
+  registrationWarning: { message: string; fixUrl: string } | null;
+  /** True when a Spain SII batch is currently OPEN for this regime (see listReportingBatches). */
+  openBatch: boolean;
+  /** Non-null exactly when openBatch is true — a mode change won't affect the running batch. */
+  modeChangeNotice: string | null;
 }
 
-export interface CorrectSiiRecordInput extends SubmitSiiRecordInput {
-  /** id of the SII record being corrected. */
-  originalRecordId: string;
+export interface ReportingObligationsVocabulary {
+  submissionModes: Array<{ code: RegimeSubmissionMode; label: string; description: string }>;
+  setupStatuses: Array<{ code: RegimeSetupStatus; label: string; nextStep: string | null; tone: string }>;
 }
 
-export interface SubmitSiiRecordResponse {
+export interface ListReportingObligationsResponse {
   ok: boolean;
-  id: string;
-  status: string;
-  aeatCsv: string | null;
-  reportingDeadline: string;
+  entityId: string;
+  obligations: ReportingObligation[];
+  vocabulary: ReportingObligationsVocabulary;
 }
 
-export interface SiiRecord {
+/**
+ * One value in the PATCH `obligations` map. A bare boolean is shorthand for
+ * `{ enabled }` and only ever succeeds for a disable — enabling requires the
+ * object form with `effectiveFrom` (EFFECTIVE_FROM_REQUIRED otherwise).
+ */
+export type ReportingObligationPatch =
+  | boolean
+  | {
+      enabled: boolean;
+      /** Required when enabled is true. YYYY-MM-DD. */
+      effectiveFrom?: string;
+      /**
+       * Must be one the regime allows — SUBMISSION_MODE_NOT_ALLOWED otherwise. es_sii and
+       * fr_ereporting allow all three; omitted on a first enable, the regime's default
+       * ('batch_review') applies. A change never affects a batch that is already open.
+       */
+      submissionMode?: RegimeSubmissionMode;
+    };
+
+export interface UpdateReportingObligationsInput {
+  obligations?: Partial<Record<RegimeCode, ReportingObligationPatch>>;
+  /** Stamp the entity's tax-reporting confirmation, even when obligations is empty. */
+  confirm?: boolean;
+  /**
+   * Disable es_sii even though a reporting batch still needs attention (bypasses the
+   * 409 OBLIGATION_HAS_PENDING_BATCH). The batch is left completely untouched.
+   */
+  force?: boolean;
+}
+
+/**
+ * 400 body when enabling fr_ereporting/es_sii for a country the entity has no current
+ * registration in. `fixUrl` deep-links to the Registrations page for `country`.
+ */
+export interface RegistrationRequiredError {
+  ok: false;
+  code: 'REGISTRATION_REQUIRED';
+  message: string;
+  country: string;
+  entityId: string;
+  fixUrl: string;
+}
+
+/** 409 body when disabling es_sii while a batch is open / ready_for_review / overdue. */
+export interface ObligationHasPendingBatchError {
+  ok: false;
+  code: 'OBLIGATION_HAS_PENDING_BATCH';
+  error: string;
+  message: string;
+  batchIds: string[];
+  reportByDates: (string | null)[];
+  fixUrl: string;
+}
+
+/**
+ * 422 body from POST /send when a caller-supplied supplier.taxId differs from the entity's
+ * own registration for the resolved mandate's country (every regime). Omit supplier.taxId to
+ * have the registered value applied automatically.
+ */
+export interface SupplierTaxIdMismatchError {
+  ok: false;
+  code: 'SUPPLIER_TAX_ID_MISMATCH';
+  message: string;
+  country: string;
+  entityId: string;
+  fixUrl: string;
+  mandateCountry: string;
+  registeredTaxId: string;
+  suppliedTaxId: string;
+}
+
+export interface UpdateReportingObligationsResponse {
+  ok: boolean;
+  entityId: string;
+  /** Regime code -> enabled, for every regime this request touched. */
+  obligations: Record<string, boolean>;
+  /** Present only when a non-blocking warning applies — today only SII_EXEMPTS_VERIFACTU. */
+  warnings?: Array<{ code: 'SII_EXEMPTS_VERIFACTU' | string; message: string }>;
+}
+
+// ── Spain SII reporting batches ──────────────────────────────────────────────
+
+export type ReportingBatchStatus = 'open' | 'closed' | 'ready_for_review' | 'submitted' | 'filed';
+export type ReportingBatchSubmissionMode = 'batch_auto' | 'batch_review';
+export type SiiBook = 'issued' | 'received';
+/** AEAT per-record estado, PENDING before submission, or EXCLUDED for a record moved out of this batch. */
+export type ReportingBatchRecordState = 'PENDING' | 'Correcto' | 'AceptadoConErrores' | 'Incorrecto' | 'EXCLUDED';
+
+export interface ReportingBatch {
+  /** Batch UUID — the path parameter for getReportingBatch/confirm/exclude. */
   id: string;
-  invoiceNumber: string;
-  invoiceDate: string;
-  invoiceType: SiiInvoiceType;
-  counterpartyNif: string | null;
-  counterpartyName: string | null;
-  baseAmount: number | null;
-  taxAmount: number | null;
-  totalAmount: number | null;
-  claveRegimen: string;
-  status: SiiRecordStatus;
-  /** A0 = original submission, A1 = correction. */
-  tipoComunicacion: 'A0' | 'A1';
-  /** Set only on a correction record — the id of the SII record it corrects. */
-  originalRecordId: string | null;
-  /** 0 for an original submission, incremented by 1 per correction. */
-  correctionSeq: number;
-  reportingDeadline: string;
+  /** Human-readable batch key — the `batchId` POST /send returns and the reporting_batch.* webhooks carry. */
+  batchId: string;
+  entityId: string;
+  country: string;
+  obligation: string;
+  book: SiiBook | null;
+  status: ReportingBatchStatus;
+  statusLabel: string;
+  /** Fixed for the life of the batch — a later obligation change applies from the next batch. */
+  submissionMode: ReportingBatchSubmissionMode | string | null;
+  submissionModeLabel: string | null;
+  periodStart: string | null;
+  /** The batch's filing deadline — same value as reportBy. */
+  periodEnd: string | null;
+  /** Earliest AEAT report-by date across the batch's records. */
+  reportBy: string | null;
+  /** Server-computed "N Spanish business day(s) overdue"; null when not overdue. */
+  overdueLabel: string | null;
+  recordCount: number;
+  submittedLate: boolean;
+  closedAt: string | null;
   submittedAt: string | null;
-  aeatCsv: string | null;
-  aeatStatusCode: string | null;
-  aeatErrorCode: string | null;
+  filedAt: string | null;
+  readyAt: string | null;
   createdAt: string;
-  updatedAt: string;
 }
 
-/** Full detail for a single SII record. Superset of SiiRecord. */
-export interface SiiRecordDetail extends SiiRecord {
-  /** Full AEAT error message, present when aeatErrorCode is set. */
-  aeatErrorDetail: string | null;
+export interface ReportingBatchRecordWarning {
+  ruleCode: string;
+  fieldPath: string;
+  errorCode: string;
+  suggestedAction: string;
+  checkFamily: string;
+  legalBasisTag: string;
+  fixUrl: string | null;
+  createdAt: string;
 }
 
-export interface ListSiiRecordsParams {
-  status?: SiiRecordStatus;
-  invoiceType?: SiiInvoiceType;
-  /** invoiceDate >= this value, YYYY-MM-DD. */
-  dateFrom?: string;
-  /** invoiceDate <= this value, YYYY-MM-DD. */
-  dateTo?: string;
+export interface ReportingBatchRecord {
+  /** Mandate transaction id — the `transactionId` for excludeFromReportingBatch. */
+  id: string;
+  /** Invoice record id (getInvoice), when linked. */
+  recordId: string | null;
+  invoiceNumber: string | null;
+  counterpartyNif: string | null;
+  /** AEAT TipoFactura (F1, F2, R1–R5, …). */
+  tipo: string | null;
+  tipoLabel: string | null;
+  book: SiiBook | null;
+  base: number | null;
+  cuota: number | null;
+  classification: { code: string | null; label: string | null };
+  warnings: ReportingBatchRecordWarning[];
+  reportBy: string | null;
+  isLate: boolean;
+  isRectification: boolean;
+  overdueLabel: string | null;
+  aeatOutcome: { estado: ReportingBatchRecordState | string; code: string | null; text: string | null };
+  excludedBy: { reason: string; actor: string | null; at: string; movedToPeriodId: string | null } | null;
+}
+
+export interface ReportingBatchDetail extends ReportingBatch {
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  /** Optimistic-concurrency token — echo it on confirmReportingBatch (409 BATCH_STALE otherwise). */
+  snapshotVersion: number;
+  snapshotHash: string | null;
+  records: ReportingBatchRecord[];
+}
+
+export interface ReportingBatchVocabulary {
+  periodStatuses: Record<string, { label: string; description: string }>;
+  recordStates: Record<string, { label: string; description: string }>;
+  submissionModes: Array<{ code: ReportingBatchSubmissionMode; label: string }>;
+  books: Record<string, string>;
+  tipoFactura: Record<string, string>;
+  claveRegimen: { issued: Record<string, string>; received: Record<string, string> };
+}
+
+export interface ListReportingBatchesParams {
+  status?: ReportingBatchStatus;
+  /** Organisation-scoped keys only; must be a UUID (400 otherwise). */
+  entityId?: string;
   page?: number;
+  /** 1–200, default 50. */
   limit?: number;
 }
 
-export interface ListSiiRecordsResponse {
-  records: SiiRecord[];
+export interface ListReportingBatchesResponse {
+  ok: true;
+  batches: ReportingBatch[];
   pagination: { total: number; page: number; limit: number; pages: number; hasNext: boolean; hasPrev: boolean };
+  vocabulary: ReportingBatchVocabulary;
 }
 
-export interface GetSiiRecordResponse {
-  record: SiiRecordDetail;
+export interface GetReportingBatchResponse {
+  ok: true;
+  batch: ReportingBatchDetail;
+  vocabulary: ReportingBatchVocabulary;
+}
+
+export interface ConfirmReportingBatchInput {
+  /** The batch's CURRENT snapshotVersion from getReportingBatch(). */
+  snapshotVersion: number;
+}
+
+export interface ConfirmReportingBatchResponse {
+  ok: true;
+  /** Present and true when the batch had already been confirmed — idempotent no-op. */
+  alreadyConfirmed?: true;
+  batch: { id: string; status: ReportingBatchStatus; enqueued?: boolean };
+}
+
+export interface ExcludeFromReportingBatchInput {
+  /** A `records[].id` from getReportingBatch(). */
+  transactionId: string;
+  /** Required, non-empty — written to the audit trail. */
+  reason: string;
+}
+
+export interface ExcludeFromReportingBatchResponse {
+  ok: true;
+  /** The batch the record now belongs to. */
+  movedToPeriodId: string;
+  /** The SOURCE batch's recomputed report-by deadline. */
+  reportBy: string | null;
+}
+
+export interface RunReportingBatchSweepInput {
+  /** YYYY-MM-DD; defaults to the entity's earliest open batch report-by date. */
+  today?: string;
+  /** YYYY-MM-DD Europe/Madrid clock; defaults the same way as today. */
+  madridToday?: string;
+}
+
+export interface RunReportingBatchSweepResponse {
+  ok: true;
+  today: string | null;
+  madridToday: string | null;
+  closeSweep: Record<string, unknown>;
+  scheduler: Record<string, unknown>;
+  batchNotify: Record<string, unknown>;
 }
 
 // ── Data Query Tool ──────────────────────────────────────────────────────────

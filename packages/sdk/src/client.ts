@@ -31,12 +31,18 @@ import type {
   TaxCalculationSummary,
   ListTaxCalculationsParams,
   ListTaxCalculationsResponse,
-  SubmitSiiRecordInput,
-  CorrectSiiRecordInput,
-  SubmitSiiRecordResponse,
-  ListSiiRecordsParams,
-  ListSiiRecordsResponse,
-  GetSiiRecordResponse,
+  ListReportingObligationsResponse,
+  UpdateReportingObligationsInput,
+  UpdateReportingObligationsResponse,
+  ListReportingBatchesParams,
+  ListReportingBatchesResponse,
+  GetReportingBatchResponse,
+  ConfirmReportingBatchInput,
+  ConfirmReportingBatchResponse,
+  ExcludeFromReportingBatchInput,
+  ExcludeFromReportingBatchResponse,
+  RunReportingBatchSweepInput,
+  RunReportingBatchSweepResponse,
   QueryRequestParams,
   QueryResponse,
   QueryFieldsResponse,
@@ -234,30 +240,82 @@ export class ClearvoClient {
     return this.request('GET', `/tax/calculate${q ? `?${q}` : ''}`);
   }
 
-  // ── Spain SII ──────────────────────────────────────────────────────────────
+  // ── Tax Reporting obligations ────────────────────────────────────────────────
 
-  submitSiiRecord(input: SubmitSiiRecordInput): Promise<SubmitSiiRecordResponse> {
-    return this.request('POST', '/sii/submit', input);
+  /**
+   * Per-regime reporting toggles (France e-reporting, Spain SII) for the entity.
+   * Spain SII invoices go through submitInvoice() like every other country —
+   * the entity's es_sii row is what routes them to AEAT, and its submissionMode
+   * decides whether each one is sent immediately or joins a reporting batch
+   * (see listReportingBatches). Rows carry `registrationGate` when the entity
+   * holds no registration for the regime's country — enabling is refused
+   * REGISTRATION_REQUIRED until one is added.
+   */
+  getReportingObligations(): Promise<ListReportingObligationsResponse> {
+    return this.request('GET', '/tax/reporting-obligations');
   }
 
-  correctSiiRecord(input: CorrectSiiRecordInput): Promise<SubmitSiiRecordResponse> {
-    return this.request('POST', '/sii/correct', input);
+  /**
+   * Enable/disable regimes. Enabling requires `effectiveFrom` (EFFECTIVE_FROM_REQUIRED
+   * otherwise) and, for es_sii/fr_ereporting, a current registration in that country
+   * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii and
+   * fr_ereporting accept submissionMode 'immediate' | 'batch_auto' | 'batch_review'
+   * (default 'batch_review'). Disabling es_sii while a batch is open / ready_for_review /
+   * overdue is refused 409 OBLIGATION_HAS_PENDING_BATCH unless `force: true`.
+   */
+  updateReportingObligations(input: UpdateReportingObligationsInput): Promise<UpdateReportingObligationsResponse> {
+    return this.request('PATCH', '/tax/reporting-obligations', input);
   }
 
-  listSiiRecords(params: ListSiiRecordsParams = {}): Promise<ListSiiRecordsResponse> {
+  // ── Spain SII reporting batches ─────────────────────────────────────────────
+
+  /**
+   * List the Spain SII reporting batches this key can see (es_sii submissionMode
+   * batch_auto/batch_review), newest first. `status: 'ready_for_review'` finds the
+   * batches waiting for confirmReportingBatch().
+   */
+  listReportingBatches(params: ListReportingBatchesParams = {}): Promise<ListReportingBatchesResponse> {
     const qs = new URLSearchParams();
-    if (params.status)         qs.set('status',      params.status);
-    if (params.invoiceType)    qs.set('invoiceType',  params.invoiceType);
-    if (params.dateFrom)       qs.set('dateFrom',     params.dateFrom);
-    if (params.dateTo)         qs.set('dateTo',       params.dateTo);
-    if (params.page  != null)  qs.set('page',  String(params.page));
-    if (params.limit != null)  qs.set('limit', String(params.limit));
+    if (params.status)   qs.set('status',   params.status);
+    if (params.entityId) qs.set('entityId', params.entityId);
+    if (params.page  != null) qs.set('page',  String(params.page));
+    if (params.limit != null) qs.set('limit', String(params.limit));
     const q = qs.toString();
-    return this.request('GET', `/sii/records${q ? `?${q}` : ''}`);
+    return this.request('GET', `/reporting-batches${q ? `?${q}` : ''}`);
   }
 
-  getSiiRecord(id: string): Promise<GetSiiRecordResponse> {
-    return this.request('GET', `/sii/records/${encodeURIComponent(id)}`);
+  /** One batch with its records, AEAT outcomes, and the `snapshotVersion` confirm needs. */
+  getReportingBatch(id: string): Promise<GetReportingBatchResponse> {
+    return this.request('GET', `/reporting-batches/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Confirm a batch so it is submitted to AEAT now. Pass the batch's CURRENT
+   * snapshotVersion — 409 BATCH_STALE if it changed since you read it (re-read and retry),
+   * 409 ALREADY_SUBMITTED if already in flight, 503 ENQUEUE_FAILED if confirmed but the
+   * hand-off failed (retried automatically on the next scheduler run).
+   */
+  confirmReportingBatch(id: string, input: ConfirmReportingBatchInput): Promise<ConfirmReportingBatchResponse> {
+    return this.request('POST', `/reporting-batches/${encodeURIComponent(id)}/confirm`, input);
+  }
+
+  /**
+   * Move one record out of a closed/ready_for_review batch into the next open batch.
+   * 409 BATCH_OPEN (not closed yet), BATCH_LOCKED (confirmed, mid-dispatch),
+   * ALREADY_SUBMITTED, or EXCLUDE_WOULD_EMPTY_BATCH (last record — leave the batch
+   * unconfirmed instead).
+   */
+  excludeFromReportingBatch(id: string, input: ExcludeFromReportingBatchInput): Promise<ExcludeFromReportingBatchResponse> {
+    return this.request('POST', `/reporting-batches/${encodeURIComponent(id)}/exclude`, input);
+  }
+
+  /**
+   * SANDBOX ONLY (csk_test_* key; 403 SANDBOX_ONLY otherwise). Runs the daily
+   * close/dispatch/notify sweeps for this entity right now so a batch can be driven
+   * through its lifecycle in a test without waiting for the Spanish-business-day clock.
+   */
+  runReportingBatchSweep(input: RunReportingBatchSweepInput = {}): Promise<RunReportingBatchSweepResponse> {
+    return this.request('POST', '/test-helpers/reporting-batches/run-sweep', input);
   }
 
   // ── Data Query Tool ────────────────────────────────────────────────────────
