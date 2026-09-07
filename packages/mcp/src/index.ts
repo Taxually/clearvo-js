@@ -130,10 +130,24 @@ const TOOLS = [
       'countries using the 4-corner network (Belgium, Netherlands, Germany B2G, etc.). ' +
       'Returns a referenceId — call poll_status to track the clearance outcome. Every ' +
       'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED), ' +
-      '`mandate`, and `reviewRequired`; a Spain SII submission additionally carries ' +
-      '`siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate), `reportBy` ' +
-      '(the AEAT deadline) and, when held, `holdReason`/`actionOwner` — never the AEAT CSV, which ' +
-      'only exists once AEAT answers (see get_invoice\'s siiDetail). ' +
+      '`mandate`, and `reviewRequired`. A transaction the tax-mandate engine cannot map to any ' +
+      'country\'s compliance rule (a configuration gap, never a data problem with this specific ' +
+      'invoice) is held as `HELD_UNMAPPED_DECISION` for ANY country — not Spain-specific — with ' +
+      '`holdReason`/`actionOwner` (\'platform\') attached; a Spain SII submission additionally ' +
+      'carries `siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate), `reportBy` ' +
+      '(the AEAT deadline) and its own held/actionOwner when applicable — never the AEAT CSV, which ' +
+      'only exists once AEAT answers (see get_invoice\'s siiDetail). When the entity\'s es_sii ' +
+      'submissionMode is batch_auto or batch_review the response is 202 ACCUMULATED with `batchId`, ' +
+      '`reportBy` and `submissionMode` — the registro joined a reporting batch instead of going to AEAT ' +
+      'right away (see list_reporting_batches). ' +
+      'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
+      'resolved country is applied automatically (an entity can hold registrations in more than ' +
+      'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
+      'country). If supplied, it must match that registered tax ID exactly (a country prefix ' +
+      'is stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH ' +
+      '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). A Spain SII/VeriFactu invoice for ' +
+      'an entity with no current Spanish registration is held NEEDS_INFO (errorCode ' +
+      'MISSING_SUPPLIER_REGISTRATION, fixUrl) — add the registration, then resubmit. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -154,7 +168,7 @@ const TOOLS = [
           description: 'The issuing company (your entity). Pull name and taxId from your entity settings.',
           properties: {
             name: { type: 'string' },
-            taxId: { type: 'string', description: 'Supplier VAT registration number (include country prefix, e.g. IT12345678901)' },
+            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH.' },
             address: {
               type: 'object',
               properties: {
@@ -166,7 +180,7 @@ const TOOLS = [
               required: ['city', 'country'],
             },
           },
-          required: ['name', 'taxId', 'address'],
+          required: ['name', 'address'],
         },
         buyer: {
           type: 'object',
@@ -654,6 +668,8 @@ const TOOLS = [
       'invoice.pending, product.classification_changed, ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
       'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
+      'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
+      '(the Spain SII reporting-batch reminder ladder for es_sii batch_auto/batch_review — payload carries batchId, book, recordCount, reportBy, daysOverdue; submissionId is the batch UUID), ' +
       '* (all events).',
     inputSchema: {
       type: 'object' as const,
@@ -662,7 +678,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors',
+          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder',
         },
       },
       required: ['url'],
@@ -913,7 +929,13 @@ const TOOLS = [
       'point the user at add_registration first), effectiveFrom (the date the regime actually started applying, ' +
       'null if never enabled), submissionMode, and setupStatus/setupStatusNote (an internal ops-set progress ' +
       'note — read-only here; update_reporting_obligations cannot set it). No regime defaults to enabled — a ' +
-      'missing/false row genuinely means the customer has not turned it on, never an inferred default.',
+      'missing/false row genuinely means the customer has not turned it on, never an inferred default. Each ' +
+      'entry also carries registrationGate: null when registered is true, otherwise ' +
+      '{ message, fixUrl } — an absolute URL to send the user to before attempting to enable this regime. Note: ' +
+      'the underlying tax registration is not itself SII/e-reporting enrollment — enabling the regime with its ' +
+      'own effectiveFrom is the separate, explicit declaration. Rows also carry allowedSubmissionModes/' +
+      'defaultSubmissionMode (batch_review for es_sii and fr_ereporting), registrationWarning (enabled but the ' +
+      'registration has since lapsed), and openBatch/modeChangeNotice when a Spain SII batch is accumulating.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
   {
@@ -924,9 +946,17 @@ const TOOLS = [
       'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
       '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
       '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
-      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii only allows ' +
-      '"immediate" — AEAT real-time reporting has no batch concept; the call fails with SUBMISSION_MODE_NOT_ALLOWED ' +
-      'for an unsupported combination like es_sii + "batch_review"). Enabling es_sii alongside es_verifactu is ' +
+      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii and fr_ereporting allow ' +
+      '"immediate", "batch_auto" and "batch_review" — default "batch_review": nothing is sent until a human confirms the ' +
+      'batch; e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). Enabling fr_ereporting/es_sii also requires ' +
+      'the entity already hold a current STANDARD registration for that regime\'s own country — otherwise the call ' +
+      'fails REGISTRATION_REQUIRED with a { ok:false, code, message, country, entityId, fixUrl } body (fixUrl is ' +
+      'an absolute URL at "/registrations?country=<cc>&returnTo=/jurisdictions" on this API\'s own host); point ' +
+      'the user at add_registration for that country first, then retry. Disabling is never subject to this ' +
+      'check — but disabling es_sii specifically fails with a 409 OBLIGATION_HAS_PENDING_BATCH ' +
+      '{ ok:false, code, batchIds, reportByDates, message, fixUrl } body when the entity has an open, ' +
+      'ready_for_review, or overdue reporting batch — pass force:true to disable anyway (the batch itself is left ' +
+      'completely untouched; it still carries a real AEAT deadline and remains confirmable). Enabling es_sii alongside es_verifactu is ' +
       'allowed but returns a warnings[] entry (SII_EXEMPTS_VERIFACTU) explaining VeriFactu becomes redundant once ' +
       'SII is active — surface that to the user rather than silently proceeding. setupStatus/setupStatusNote ' +
       'cannot be set through this tool (ops-only) — pass confirm:true only once the user has reviewed the ' +
@@ -939,6 +969,50 @@ const TOOLS = [
           description: 'Map of regime code -> boolean or { enabled, effectiveFrom, submissionMode }. See tool description for the enabling rules.',
         },
         confirm: { type: 'boolean', description: 'Set true once the user has reviewed these obligations — marks the "Tax Reporting" Getting Started step complete, independent of whether any value changed.' },
+        force: { type: 'boolean', description: 'Set true to disable es_sii anyway despite an OBLIGATION_HAS_PENDING_BATCH 409 — confirm with the user first, since a pending batch still needs their attention.' },
+      },
+    },
+  },
+  {
+    name: 'list_reporting_batches',
+    description:
+      'List or fetch AEAT Spain SII reporting batches — the accumulated groups of invoices this entity\'s ' +
+      'batch_auto/batch_review submissionMode builds up before sending them to AEAT together. Omit id to list ' +
+      'batches (optionally filtered by status and entityId); pass id to fetch one batch\'s full detail, including ' +
+      'every record it holds (invoice number, counterparty NIF, tipo, book, base/cuota, classification, ' +
+      'warnings, reportBy, isLate, the AEAT outcome once submitted, and whether it was excluded from the batch). ' +
+      'Every response includes a vocabulary block with labels for every batch status and record state, plus a ' +
+      'server-computed overdueLabel ("N Spanish business days overdue") wherever a deadline has passed — never ' +
+      'reconstruct these from the raw status codes. A batch_review batch in status ready_for_review is waiting ' +
+      'for a human confirm (POST /v1/reporting-batches/{id}/confirm with its snapshotVersion) — nothing is sent ' +
+      'to AEAT until then.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'A specific batch ID (UUID) to fetch full detail for. Omit to list batches instead.' },
+        status: { type: 'string', enum: ['open', 'closed', 'ready_for_review', 'submitted', 'filed'], description: 'List only: filter by batch status.' },
+        entityId: { type: 'string', description: 'List only: filter by entity (organisation-scoped keys only).' },
+        page: { type: 'number', description: 'List only: 1-based page number (default 1).' },
+        limit: { type: 'number', description: 'List only: results per page (default 50, max 200).' },
+      },
+    },
+  },
+  {
+    name: 'run_reporting_batch_sweep',
+    description:
+      'SANDBOX-ONLY: manually run the reporting-batch lifecycle\'s daily close/dispatch/notify sweeps for this ' +
+      'entity right now, instead of waiting for the real overnight cron and the real Spanish-business-day clock. ' +
+      'Use this to drive an ES Spain SII batch through its full lifecycle for testing: open -> this tool closes ' +
+      'the batch and either freezes it ready_for_review (submissionMode batch_review — call ' +
+      'reporting-batches confirm next) or hands it off to AEAT (batch_auto). Fails with SANDBOX_ONLY (403) ' +
+      'against a production API key — provision a sandbox entity/key first if you don\'t have one. Both dates ' +
+      'default to this entity\'s own earliest open batch report_by date when omitted, which is what makes the ' +
+      'batch close immediately rather than waiting for its real deadline.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        today: { type: 'string', description: 'Override for the close-sweep clock (YYYY-MM-DD). Omit to default to this entity\'s own earliest open batch report_by date.' },
+        madridToday: { type: 'string', description: 'Override for the Europe/Madrid civil-date clock (YYYY-MM-DD) the ES_SII batch trigger and notify sweep gate on. Omit to default the same way as today.' },
       },
     },
   },
@@ -1423,8 +1497,22 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/tax/reporting-obligations');
 
     case 'update_reporting_obligations': {
-      const { obligations, confirm } = args as { obligations?: Record<string, unknown>; confirm?: boolean };
-      return callApi('PATCH', '/tax/reporting-obligations', { obligations, confirm });
+      const { obligations, confirm, force } = args as { obligations?: Record<string, unknown>; confirm?: boolean; force?: boolean };
+      return callApi('PATCH', '/tax/reporting-obligations', { obligations, confirm, force });
+    }
+
+    case 'list_reporting_batches': {
+      const { id } = args as { id?: string };
+      if (id) return callApi('GET', `/reporting-batches/${encodeURIComponent(id)}`);
+      const qs = new URLSearchParams();
+      for (const k of ['status', 'entityId', 'page', 'limit'] as const) if (args[k] !== undefined) qs.set(k, String(args[k]));
+      const q = qs.toString();
+      return callApi('GET', `/reporting-batches${q ? `?${q}` : ''}`);
+    }
+
+    case 'run_reporting_batch_sweep': {
+      const { today, madridToday } = args as { today?: string; madridToday?: string };
+      return callApi('POST', '/test-helpers/reporting-batches/run-sweep', { today, madridToday });
     }
 
     case 'list_customers': {
