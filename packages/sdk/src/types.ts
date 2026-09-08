@@ -207,10 +207,49 @@ export interface SubmitInvoiceInput {
   originalInvoiceRef?: { invoiceNumber: string; issueDate: string };
   correctsInvoiceId?: string;
   customerReference?: string;
+  /**
+   * ES SII block 3: `{ es: { duaNumber } }` — NumeroDUA, required and only
+   * meaningful when a `transactionDirection: 'purchase'` line's tipoFactura
+   * resolves to F5 (import). Missing on an import produces NEEDS_INFO naming
+   * `countrySpecific.es.duaNumber`.
+   */
   countrySpecific?: Record<string, unknown>;
   notifyBuyer?: boolean;
   rejectInsteadOfAutoCorrect?: boolean;
   metadata?: Record<string, string>;
+  /**
+   * ES SII block 3. Defaults to `'sale'` (this entity's own outbound/issued document —
+   * LFE). `'purchase'` records a vendor's document on this entity's received side
+   * (LFR) — Spain SII only; every other live country's purchase-direction submission
+   * currently resolves to no reporting mandate at all. `supplier` is still required
+   * for a purchase and is the VENDOR/counterparty (the entity's own Spanish
+   * registration is applied automatically, same derivation as the sale-side
+   * `supplier.taxId` rule).
+   */
+  transactionDirection?: 'sale' | 'purchase';
+  /**
+   * PURCHASE documents only, Spain SII, YYYY-MM-DD. The accounting-entry date
+   * (FechaRegContable) — anchors both the compliance-mandate effective-date gate
+   * and the received-book (LFR) submission deadline. Optional even for a purchase
+   * (falls back to `issueDate` when omitted), but the vendor's own `issueDate` is
+   * legally the wrong date for this gate — supply it whenever the entity books on
+   * receipt.
+   */
+  accountingDate?: string;
+  /**
+   * PURCHASE documents only, Spain SII. CuotaDeducible — the deductible portion of
+   * input VAT on this purchase, always taken as given, never derived from the
+   * lines' own charged amounts. An explicit `0` is a valid, distinct declaration
+   * (an exempt/non-deductible purchase) — NOT the same as omitting the field, which
+   * produces `NEEDS_INFO` naming this field.
+   */
+  deductibleVatAmount?: number;
+  /**
+   * Received book only, Spain SII. The VAT declaration period this deduction is
+   * actually taken in, when it differs from `accountingDate`'s own month. Optional
+   * — omitted, the liquidation period defaults to `accountingDate`'s own month.
+   */
+  deductionPeriod?: { ejercicio: string; periodo: string };
 }
 
 /** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier (buyer/seller country pair + vatRate, optionally with a taxTreatment hint). */
@@ -910,6 +949,88 @@ export interface RunReportingBatchSweepResponse {
   closeSweep: Record<string, unknown>;
   scheduler: Record<string, unknown>;
   batchNotify: Record<string, unknown>;
+}
+
+// ── Spain SII block 3: amend (A1) / cancel (Baja) / Consulta reconciliation ─
+
+/**
+ * Identical shape to SubmitInvoiceInput (the full corrected invoice) — an amendment
+ * corrects CONTENT of an already-registered registro, so `invoiceNumber`/`issueDate`
+ * must exactly match the original registro; it is never a rectificativa and never
+ * changes the invoice number.
+ */
+export type AmendReportInput = SubmitInvoiceInput;
+
+export interface AmendReportResponse {
+  ok: true;
+  /** The SAME record id as the original A0 — an amendment never creates a new record. */
+  id: string;
+  operation: 'A1';
+  /** The new AEAT communication ledger row id — distinct per attempt, so a full A0→A1→A1 history is always reconstructible. */
+  communicationId: string;
+  /** The communication's own lifecycle state (e.g. PENDING until AEAT's real answer comes back). */
+  state: string;
+  /** true only when this response is a same-idempotency-key replay of an already-recorded attempt, not a fresh one. */
+  idempotentReplay?: boolean;
+}
+
+export interface CancelReportInput {
+  /** Optional free text (<=100 chars) — recorded for audit, never sent to AEAT (Baja's own envelope is identity-only). */
+  reason?: string;
+}
+
+/** POST /v1/invoices/{id}/cancel-report's 200 — either a fresh Baja was filed, or the invoice was already cancelled (idempotent no-op, no error). */
+export type CancelReportResponse =
+  | { ok: true; id: string; operation: 'BAJA'; communicationId: string; state: string; idempotentReplay?: boolean }
+  | { ok: true; id: string; cancelled: true; cancelledAt: string };
+
+export interface SiiAuthorityView {
+  ranAt: string;
+  /** The sandbox tier this run executed under — mock/prewww1/prod. */
+  tier: string;
+  /** Count of registros AEAT's own Consulta returned for this (book, ejercicio, periodo). */
+  aeatCount: number;
+  /** Count of this platform's own locally-registered registros for the same scope. */
+  localCount: number;
+  /** Count where AEAT's own state (including an Anulada observed via Consulta) was adopted locally. */
+  adopted: number;
+  /** Count registered locally as accepted but absent from AEAT's own Consulta response — a platform-fault alert condition, never silently ignored. */
+  missingAtAeat: number;
+  /** Count where AEAT's own estado disagrees with what this platform has stored. */
+  mismatchedEstado: number;
+  /** Number of Consulta result pages the sweep paged through. */
+  pageCount: number;
+  /** Non-null only when the run itself failed partway through. */
+  error: string | null;
+}
+
+export interface SiiReconciliationRun extends SiiAuthorityView {
+  id: string;
+  entityId: string;
+  book: SiiBook;
+  /** 4-digit year. */
+  ejercicio: string;
+  /** 2-digit month. */
+  periodo: string;
+}
+
+export interface GetSiiReconciliationSummaryResponse {
+  ok: true;
+  /** Null only when the Consulta sweep has never run for this entity. */
+  id: string | null;
+  authorityView: {
+    status: 'never_checked' | 'matched' | 'mismatch';
+    lastCheckedAt: string | null;
+    matchedCount: number;
+    mismatchCount: number;
+  };
+}
+
+export interface GetSiiReconciliationResponse {
+  ok: true;
+  run: SiiReconciliationRun;
+  /** The SAME run's counters restructured under a name that reads as authority-observed fact — "what AEAT's own Consulta showed us". */
+  authorityView: SiiAuthorityView;
 }
 
 // ── Data Query Tool ──────────────────────────────────────────────────────────

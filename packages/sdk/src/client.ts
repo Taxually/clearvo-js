@@ -43,6 +43,12 @@ import type {
   ExcludeFromReportingBatchResponse,
   RunReportingBatchSweepInput,
   RunReportingBatchSweepResponse,
+  AmendReportInput,
+  AmendReportResponse,
+  CancelReportInput,
+  CancelReportResponse,
+  GetSiiReconciliationSummaryResponse,
+  GetSiiReconciliationResponse,
   QueryRequestParams,
   QueryResponse,
   QueryFieldsResponse,
@@ -316,6 +322,55 @@ export class ClearvoClient {
    */
   runReportingBatchSweep(input: RunReportingBatchSweepInput = {}): Promise<RunReportingBatchSweepResponse> {
     return this.request('POST', '/test-helpers/reporting-batches/run-sweep', input);
+  }
+
+  // ── Spain SII block 3: amend (A1) / cancel (Baja) / Consulta reconciliation ─
+
+  /**
+   * File an AEAT Spain SII "A1" amendment against an already-registered SII invoice — a
+   * COMPLETE corrected re-registration of the document's content (same invoiceNumber/
+   * issueDate as the original; never a rectificativa, never changes the invoice number).
+   * `idempotencyKey` is required by the API (400 otherwise) — a same-key retry returns the
+   * stored ledger row instead of rebuilding/re-enqueueing. Refuses 409 when the record isn't
+   * currently ACCEPTED at AEAT (Correcto/AceptadoConErrores), an earlier amend/cancel is still
+   * in flight, a batch containing it is in flight, or the corrected payload would change the
+   * IDFactura identity — never silently falls back to a fresh A0.
+   */
+  amendSiiReport(id: string, input: AmendReportInput, idempotencyKey: string): Promise<AmendReportResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/amend-report`, input, { 'x-idempotency-key': idempotencyKey });
+  }
+
+  /**
+   * File an AEAT Spain SII Baja (withdrawal) against an already-registered SII invoice.
+   * Identity-only — does not cancel or refund the invoice itself (issue a credit note via
+   * submitInvoice for that). Idempotent: cancelling an already-cancelled invoice returns the
+   * `{ cancelled: true, cancelledAt }` shape rather than erroring, regardless of the
+   * `idempotencyKey` presented. `idempotencyKey` is required by the API (400 otherwise).
+   * Refuses 409 when the record is not currently registered at AEAT.
+   */
+  cancelSiiReport(id: string, input: CancelReportInput, idempotencyKey: string): Promise<CancelReportResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, input, { 'x-idempotency-key': idempotencyKey });
+  }
+
+  /**
+   * The current entity's latest AEAT Spain SII Consulta reconciliation run — id plus the
+   * same condensed reassurance-line status the dashboard's Spain SII page shows. Call this
+   * first to get an `id` for getSiiReconciliation() below; `id` is null only when the
+   * Consulta sweep has never run for this entity. Read-only, scheduled — there is no way to
+   * trigger a run on demand.
+   */
+  getSiiReconciliationSummary(): Promise<GetSiiReconciliationSummaryResponse> {
+    return this.request('GET', '/sii/reconciliation');
+  }
+
+  /**
+   * Fetch one AEAT Spain SII Consulta reconciliation run's stored comparison result — what
+   * AEAT's own view of a (book, ejercicio, periodo) showed against this platform's own
+   * records, including any platform-fault alert (`authorityView.missingAtAeat`). `id` comes
+   * from getSiiReconciliationSummary() or the dashboard.
+   */
+  getSiiReconciliation(id: string): Promise<GetSiiReconciliationResponse> {
+    return this.request('GET', `/sii/reconciliation/${encodeURIComponent(id)}`);
   }
 
   // ── Data Query Tool ────────────────────────────────────────────────────────

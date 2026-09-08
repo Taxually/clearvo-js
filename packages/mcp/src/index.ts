@@ -253,8 +253,112 @@ const TOOLS = [
           type: 'boolean',
           description: 'Only meaningful for countries where no authority network delivers the invoice to the buyer (Spain, Portugal, France, Germany always; Italy only when the buyer has no SDI routing code — i.e. B2C; Poland only when the buyer has no Polish NIP — KSeF is pull-only and pull access requires the buyer\'s own registered NIP). When true and buyer.contact.email is set, Clearvo emails the buyer a link to view/download the invoice. Omit to use the entity default (see update_entity\'s notifyBuyerByDefault); true/false here overrides that default for this invoice only. Silently ignored for countries Clearvo already delivers electronically (Peppol, Italy B2B/B2G, Poland when the buyer has a NIP, Romania, Hungary, Greece, Argentina) — check the response\'s buyerNotification field to see what happened.',
         },
+        transactionDirection: {
+          type: 'string',
+          enum: ['sale', 'purchase'],
+          description: 'ES SII block 3. Defaults to "sale" (this entity\'s own outbound/issued document — LFE). "purchase" records a vendor\'s document on this entity\'s received side (LFR) — Spain SII only; every other live country\'s purchase-direction submission currently resolves to no reporting mandate at all. supplier is still required and is the VENDOR/counterparty for a purchase (the entity\'s own Spanish registration is applied automatically, same derivation as the sale-side supplier.taxId rule).',
+        },
+        accountingDate: {
+          type: 'string',
+          description: 'PURCHASE documents only (transactionDirection: "purchase"), Spain SII, YYYY-MM-DD. The accounting-entry date (FechaRegContable) — anchors both the compliance-mandate effective-date gate and the received-book (LFR) submission deadline. Optional even for a purchase (falls back to issueDate when omitted), but the vendor\'s own issueDate is legally the wrong date for this gate, so supply it whenever the entity books on receipt.',
+        },
+        deductibleVatAmount: {
+          type: 'number',
+          description: 'PURCHASE documents only, Spain SII. CuotaDeducible — the deductible portion of input VAT on this purchase, always taken as given, never derived from the lines\' own charged amounts. An explicit 0 is a valid, distinct declaration (an exempt/non-deductible purchase) — NOT the same as omitting the field, which produces NEEDS_INFO naming this field.',
+        },
+        deductionPeriod: {
+          type: 'object',
+          description: 'Received book only, Spain SII. The VAT declaration period this deduction is actually taken in, when it differs from accountingDate\'s own month. Optional — omitted, the liquidation period defaults to accountingDate\'s own month.',
+          properties: {
+            ejercicio: { type: 'string', description: '4-digit year, e.g. "2026".' },
+            periodo: { type: 'string', description: '2-digit month, e.g. "06".' },
+          },
+        },
+        countrySpecific: {
+          type: 'object',
+          description: 'Country-specific invoice fields.',
+          properties: {
+            es: {
+              type: 'object',
+              description: 'Spain SII / VeriFactu fields.',
+              properties: {
+                duaNumber: {
+                  type: 'string',
+                  description: 'NumeroDUA (Documento Único Administrativo) — required, and only meaningful, when this purchase\'s tipoFactura resolves to F5 (import). Missing on an import produces NEEDS_INFO naming countrySpecific.es.duaNumber.',
+                },
+              },
+            },
+          },
+        },
       },
       required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'buyer', 'lines', 'totalAmount', 'taxAmount'],
+    },
+  },
+  {
+    name: 'amend_sii_report',
+    description:
+      'File an AEAT Spain SII "A1" amendment against an already-registered SII invoice — a COMPLETE ' +
+      'corrected re-registration of the document\'s content, submitted with the identical CustomerInvoiceInput ' +
+      'shape as submit_invoice. This only builds and enqueues the amendment; it never calls AEAT directly ' +
+      '(same P1/P2 split submit_invoice itself uses for Spain). Never falls back to a fresh A0 — every refusal ' +
+      'below is terminal for this request. Refuses 409 SII_NOT_ACCEPTED_AT_AEAT (the record isn\'t currently ' +
+      'Correcto/AceptadoConErrores), 409 SII_OPERATION_IN_FLIGHT (an earlier amend/cancel is still awaiting ' +
+      'AEAT\'s answer), 409 SII_BATCH_IN_FLIGHT (a batch containing it is mid-dispatch), 409 ' +
+      'AMEND_IS_RECTIFICATIVA (this is really a content correction to a rectificativa — submit a new one via ' +
+      'submit_invoice instead; amending an invoice that is ALREADY a credit/debit note is fine), 409 ' +
+      'AMEND_IDENTITY_CHANGE_NOT_ALLOWED (the corrected payload would change the IDFactura identity — supplier ' +
+      'taxId, invoiceNumber, or issueDate must exactly match the original registro), and 422 for an obligation ' +
+      'that is disabled or out of its effective date range. On success the record\'s own clearance status stays ' +
+      'ACCEPTED (this never creates a new record or changes the invoice number) — only the AEAT communication ' +
+      'ledger gains a new entry.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID (or referenceId) whose SII registration to amend — from submit_invoice or list_invoices.' },
+        idempotencyKey: { type: 'string', description: 'Optional — a stable key so a retry with the same corrected content reuses the same amendment rather than filing a second A1. Omit to derive one automatically from id + the corrected invoiceNumber/issueDate.' },
+        // The remaining properties are submit_invoice's own inputSchema (invoiceNumber,
+        // issueDate, supplier, buyer, lines, ...) — the FULL corrected document, not a
+        // field-level patch. Not re-declared here field-by-field; see submit_invoice.
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'cancel_sii_report',
+    description:
+      'File an AEAT Spain SII Baja (withdrawal) against an already-registered SII invoice — identity-only, ' +
+      'no invoice content is sent. This withdraws the SII REGISTRATION, not the invoice itself: if the invoice ' +
+      'is wrong or was refunded, issue a credit note via submit_invoice instead. Idempotent: cancelling an ' +
+      'already-cancelled invoice returns the stored cancelledAt rather than erroring, regardless of the ' +
+      'idempotencyKey presented. Refuses 409 SII_NOT_REGISTERED_AT_AEAT when the record is not currently ' +
+      'registered. On success clearance status moves to the terminal CANCELLED state.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID (or referenceId) whose SII registration to cancel — from submit_invoice or list_invoices.' },
+        reason: { type: 'string', description: 'Optional free text (<=100 chars) — recorded for audit, never sent to AEAT (the Baja envelope itself is identity-only).' },
+        idempotencyKey: { type: 'string', description: 'Optional — omit to derive one automatically from id. A same-key retry returns the stored ledger row instead of re-filing.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'get_sii_reconciliation',
+    description:
+      'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
+      'platform\'s own SII records against what AEAT itself reports for a (book, ejercicio, periodo). ' +
+      'Read-only and scheduled — there is no way to trigger a run on demand from here. Surfaces adopted counts ' +
+      '(AEAT\'s own state adopted locally for a sent-but-unanswered record), missingAtAeat (a platform-fault ' +
+      'alert — registered locally as accepted but absent from AEAT\'s own view, never silently ignored), and ' +
+      'mismatchedEstado — useful for a caller building an audit narrative. This reconciliation runs on a ' +
+      'schedule (a Container Apps job); it never accepts a request to run now. GET /v1/sii/reconciliation ' +
+      '(no id — not yet its own MCP tool) returns the latest run\'s id plus a condensed status.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The reconciliation run ID (a UUID).' },
+      },
+      required: ['id'],
     },
   },
   {
@@ -1309,6 +1413,23 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       // Default documentType to 'invoice' if not provided
       const body = { documentType: 'invoice', ...args };
       return callApi('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
+    }
+
+    case 'amend_sii_report': {
+      const { id, idempotencyKey, ...body } = args as { id: string; idempotencyKey?: string } & Record<string, unknown>;
+      const key = idempotencyKey ?? createHash('sha256').update(`amend|${id}|${JSON.stringify(body)}`).digest('hex').slice(0, 64);
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/amend-report`, body, { 'x-idempotency-key': key });
+    }
+
+    case 'cancel_sii_report': {
+      const { id, idempotencyKey, ...body } = args as { id: string; idempotencyKey?: string } & Record<string, unknown>;
+      const key = idempotencyKey ?? createHash('sha256').update(`cancel|${id}`).digest('hex').slice(0, 64);
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': key });
+    }
+
+    case 'get_sii_reconciliation': {
+      const { id } = args as { id: string };
+      return callApi('GET', `/sii/reconciliation/${encodeURIComponent(id)}`);
     }
 
     case 'poll_status': {

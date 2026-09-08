@@ -85,6 +85,58 @@ program
     print(result, !!opts.pretty);
   });
 
+// ── clearvo amend-report <id> <file> ─────────────────────────────────────────
+// ES SII block 3. Files an AEAT "A1" amendment against an already-registered SII
+// invoice — <file> is the FULL corrected invoice, same JSON shape `send` takes
+// (same invoiceNumber/issueDate as the original; never a rectificativa, never
+// changes the invoice number). Refuses 409 when the record isn't currently
+// ACCEPTED at AEAT, an earlier amend/cancel is still in flight, or the corrected
+// payload would change the IDFactura identity.
+program
+  .command('amend-report <id> <file>')
+  .description('File an AEAT Spain SII A1 amendment (full corrected invoice from a JSON file)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, file: string, opts: { pretty?: boolean }) => {
+    const raw = readFileSync(file, 'utf8');
+    const body = JSON.parse(raw) as Record<string, unknown>;
+    const idempotencyKey = createHash('sha256').update(`amend|${id}|${raw}`).digest('hex').slice(0, 64);
+    const result = await api('POST', `/invoices/${encodeURIComponent(id)}/amend-report`, body, { 'x-idempotency-key': idempotencyKey });
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo cancel-report <id> ────────────────────────────────────────────────
+// ES SII block 3. Files an AEAT Baja (withdrawal) against an already-registered SII
+// invoice — identity-only, does not cancel or refund the invoice itself (issue a
+// credit note via `send` for that). Idempotent: cancelling an already-cancelled
+// invoice returns the stored cancelledAt rather than erroring.
+program
+  .command('cancel-report <id>')
+  .description('File an AEAT Spain SII Baja (withdrawal) against an already-registered invoice')
+  .option('--reason <text>', 'Optional free text (<=100 chars), recorded for audit, never sent to AEAT')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: { reason?: string; pretty?: boolean }) => {
+    const body: Record<string, unknown> = {};
+    if (opts.reason) body.reason = opts.reason;
+    const idempotencyKey = createHash('sha256').update(`cancel|${id}`).digest('hex').slice(0, 64);
+    const result = await api('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': idempotencyKey });
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo reconciliation [id] ───────────────────────────────────────────────
+// ES SII block 3. Read-only: the AEAT Consulta reconciliation sweep runs on its
+// own schedule, never triggerable on demand. With no id, returns the latest run's
+// id plus a condensed reassurance-line status; pass an id (from that summary, or
+// the dashboard) to fetch the full stored comparison for one run.
+program
+  .command('reconciliation [id]')
+  .description('Fetch the latest Spain SII Consulta reconciliation summary, or one run by id')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string | undefined, opts: { pretty?: boolean }) => {
+    const path = id ? `/sii/reconciliation/${encodeURIComponent(id)}` : '/sii/reconciliation';
+    const result = await api('GET', path);
+    print(result, !!opts.pretty);
+  });
+
 // ── clearvo status <referenceId> ─────────────────────────────────────────────
 program
   .command('status <referenceId>')
