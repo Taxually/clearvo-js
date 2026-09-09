@@ -62,12 +62,17 @@ const program = new Command()
 // ── clearvo send <file> ───────────────────────────────────────────────────────
 // Hard cut: there is no `taxCode` field anywhere in the request — not on a
 // line, `shipping`, or an allowance/charge. Set `clientTaxCode` (RECOMMENDED
-// — see `clearvo tax-codes create`) or a `taxTreatment` hint
+// — see `clearvo tax-codes create`) or an AUTHORITATIVE `taxTreatment`
 // (exempt/out_of_scope/zero_rated/reverse_charge) per line in the JSON file
-// instead; --client-tax-code below is the header-level convenience flag for
-// the common single-code-per-invoice case. An unrecognised code never
-// rejects the invoice — it's held (status HELD_UNMAPPED_TAX_CODE) with a
-// machine-readable reason in the response instead.
+// instead — a stated taxTreatment is mapped as-is, never overridden by
+// country inference; --client-tax-code below is the header-level convenience
+// flag for the common single-code-per-invoice case. A positive taxRate with
+// no clientTaxCode/taxTreatment is reported as a domestic taxable supply at
+// that rate (the client's rate is authoritative, never rejected as
+// unrecognised); a bare 0% with neither is held NEEDS_INFO asking why it is
+// zero. An unrecognised clientTaxCode never rejects the invoice — it's held
+// (status HELD_UNMAPPED_TAX_CODE) with a machine-readable reason in the
+// response instead.
 program
   .command('send <file>')
   .description('Submit an invoice from a JSON file')
