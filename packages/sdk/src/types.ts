@@ -77,14 +77,17 @@ export interface InvoiceSubmitResponse {
 // on `shipping`, or on an allowance/charge. The EN16931/BIS category is
 // ALWAYS a resolved OUTPUT (see LineTaxResolution below), never a
 // caller-supplied value. Supply `clientTaxCode` (RECOMMENDED — your own ERP
-// code, mapped in advance via createClientTaxCode) or a `taxTreatment` hint
-// instead — mutually exclusive, at most one per line/shipping/charge.
+// code, mapped in advance via createClientTaxCode) or an AUTHORITATIVE
+// `taxTreatment` instead — mutually exclusive, at most one per line/shipping/charge.
 
 /**
- * An explicit tax-treatment hint for a line, `shipping`, or an
- * allowance/charge — used only when `clientTaxCode` is omitted, to
- * disambiguate a genuinely 0% line (a bare 0% rate alone is ambiguous
- * between zero-rated/exempt/out-of-scope/reverse-charge).
+ * An explicit, AUTHORITATIVE tax treatment for a line, `shipping`, or an
+ * allowance/charge — used when `clientTaxCode` is omitted. The stated
+ * treatment is mapped as-is, never overridden by country inference. A
+ * positive rate with no treatment maps to a domestic taxable supply at that
+ * rate (the client's rate is authoritative, never rejected as unrecognised);
+ * a bare 0% with no treatment is held NEEDS_INFO asking why it is zero
+ * (exempt/zero_rated/reverse_charge/intra_community/export) — never guessed.
  *
  * Re-exported from ./generated/openapi-tax-code-contract.js, which is
  * regenerated straight from clearvo-marketing's openapi.json
@@ -252,7 +255,7 @@ export interface SubmitInvoiceInput {
   deductionPeriod?: { ejercicio: string; periodo: string };
 }
 
-/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier (buyer/seller country pair + vatRate, optionally with a taxTreatment hint). */
+/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive vatRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is held NEEDS_INFO — movement is never inferred from the buyer/seller countries. */
 export type ResolvedBy = 'client_tax_code' | 'source_system_code' | 'facts';
 
 /**

@@ -151,9 +151,12 @@ const TOOLS = [
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
-      'create_client_tax_code / list_tax_codes), or a taxTreatment hint (exempt/out_of_scope/zero_rated/' +
-      'reverse_charge) for a line with no configured code. An unrecognised clientTaxCode/taxTreatment never ' +
-      'rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
+      'create_client_tax_code / list_tax_codes), or an AUTHORITATIVE taxTreatment (exempt/out_of_scope/zero_rated/' +
+      'reverse_charge) for a line with no configured code — a stated taxTreatment is mapped as-is, never overridden ' +
+      'by country inference. A positive vatRate with neither is reported as a domestic taxable supply at that rate ' +
+      '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held ' +
+      'NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export). An unrecognised ' +
+      'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
       'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
       'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
     inputSchema: {
@@ -221,7 +224,7 @@ const TOOLS = [
               description: { type: 'string' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number', description: 'Unit price excluding tax' },
-              vatRate: { type: 'number', description: 'VAT/tax rate as a percentage (e.g. 22 for 22%). Required unless clientTaxCode is supplied. A genuinely 0% line also needs taxTreatment — a bare 0% rate alone is ambiguous between zero-rated/exempt/out-of-scope/reverse-charge.' },
+              vatRate: { type: 'number', description: 'VAT/tax rate as a percentage (e.g. 22 for 22%). Required unless clientTaxCode is supplied. A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is held NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export); it is never guessed.' },
               clientTaxCode: {
                 type: 'string',
                 description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
@@ -229,7 +232,7 @@ const TOOLS = [
               taxTreatment: {
                 type: 'string',
                 enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'],
-                description: 'Explicit tax-treatment hint, used only when clientTaxCode is omitted — required whenever this line is genuinely 0% and the buyer/seller country pair alone does not already explain why. Mutually exclusive with clientTaxCode.',
+                description: 'Explicit, AUTHORITATIVE tax treatment for this line, used when clientTaxCode is omitted — it is mapped as-is, never overridden by country inference. REQUIRED whenever the line is 0% (a bare 0% is held NEEDS_INFO asking why it is zero); a positive rate with no treatment maps to a domestic taxable supply at that rate. Cross-border/exempt/reverse-charge must be stated here, never inferred. Mutually exclusive with clientTaxCode.',
               },
               buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level buyerType, consulted only when this line has no clientTaxCode.' },
               supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
@@ -1304,7 +1307,7 @@ const TOOLS = [
     description:
       'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
       '(e.g. a SAP two-digit code) to a Clearvo Tax Decision. Reference one via clientTaxCode on submit_invoice ' +
-      '(RECOMMENDED, instead of a taxTreatment hint); calculate_tax returns your matching code back in its ' +
+      '(RECOMMENDED, instead of an explicit taxTreatment); calculate_tax returns your matching code back in its ' +
       'response for ERP posting. The EN16931 category and rate are always computed live, never stored. See ' +
       'also list_tax_codes for the full canonical catalogue (this platform\'s own content plus your codes).',
     inputSchema: {
