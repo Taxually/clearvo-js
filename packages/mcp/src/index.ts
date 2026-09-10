@@ -506,7 +506,8 @@ const TOOLS = [
       'anywhere yet (e.g. a new or pre-nexus business that only wants Compliance Radar to monitor for a ' +
       'future threshold breach) — this satisfies the "add-registration" onboarding step without a ' +
       'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
-      'Also handles notifyBuyerByDefault — see submit_invoice\'s notifyBuyer for what this controls.',
+      'Also handles notifyBuyerByDefault — see submit_invoice\'s notifyBuyer for what this controls. ' +
+      'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -518,6 +519,8 @@ const TOOLS = [
         postalCode: { type: 'string', description: 'Postal / ZIP code.' },
         confirmNoRegistrations: { type: 'boolean', description: 'Set true to confirm this entity has no tax registrations anywhere yet (satisfies the add-registration onboarding step without a fake registration). Set false to clear a previous confirmation.' },
         notifyBuyerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyBuyer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyBuyer override.' },
+        mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
+        mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
       },
       required: ['entityId'],
     },
@@ -623,6 +626,62 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_mx_credentials',
+    description:
+      'Register Mexico e.firma (FIEL) credentials for an entity — the certificate/key pair SAT issued, NOT a CSD ' +
+      '(Certificado de Sello Digital, which SAT never accepts for this purpose is refused outright). Required only ' +
+      'for the sat_pull ingestion mode, where Clearvo polls SAT\'s Descarga Masiva service on the entity\'s behalf; ' +
+      'the client_push mode (push_mx_cfdi) needs no credential at all. The certificate\'s own RFC must equal this ' +
+      'entity\'s registered Mexico tax registration — a mismatch is refused. The password unlocks the key for this ' +
+      'one save request only and is never stored. There is no sandbox test mode — there is no SAT sandbox to verify against.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        certificateBase64: { type: 'string', description: 'base64(DER-encoded X.509 .cer file), exactly as issued by SAT.' },
+        keyBase64: { type: 'string', description: 'base64(DER-encoded, password-encrypted PKCS#8 .key file), exactly as issued by SAT.' },
+        password: { type: 'string', description: 'The e.firma\'s password. Never stored — used once to unlock the key for this save.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['certificateBase64', 'keyBase64', 'password'],
+    },
+  },
+  {
+    name: 'push_mx_cfdi',
+    description:
+      'Push a received Mexico CFDI 4.0 document (client_push ingestion) — for an AP/ERP system that already holds ' +
+      'a CFDI\'s XML, as an alternative to Clearvo polling SAT itself. Always accepted regardless of the entity\'s ' +
+      'ingestion mode; no e.firma credential needed. Idempotent on the CFDI\'s own UUID: pushing an already-stored ' +
+      'document returns duplicate:true, never an error. clearanceStatus PENDING means SAT has not yet published the ' +
+      'document on its own backend (or was briefly unreachable) — this is never a rejection; retry later, or rely ' +
+      'on the automatic recheck if sat_pull is also configured. Refused (with a coded, plain-English error) for a ' +
+      'CFDI whose Receptor RFC does not match this entity\'s own registered Mexico RFC, for the generic "público en ' +
+      'general"/"extranjero sin RFC" placeholder RFCs, or for anything other than CFDI 4.0.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        documentXml: { type: 'string', description: 'The raw, byte-identical CFDI 4.0 XML as received from the issuer.' },
+        entityId: { type: 'string', description: 'Entity to receive this document into. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['documentXml'],
+    },
+  },
+  {
+    name: 'get_mx_sync_status',
+    description:
+      'Check the health of the Mexico SAT-pull poll job for an entity: when it last ran, when it last succeeded, ' +
+      'and any error. status is "not_started" (never polled — normal and permanent for a client_push-only entity, ' +
+      'which has no poll job at all), "ok" (a clean pass within the last 24h), "stale" (no clean pass in over 24h — ' +
+      'SAT\'s own backend is often slow, this is not necessarily a problem), or "error" (the last cycle hit a hard ' +
+      'failure — check the e.firma credential via set_mx_credentials). Meaningless for client_push mode.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'invite_team_member',
     description:
       'Invite a teammate to this Clearvo account by email. ' +
@@ -676,6 +735,7 @@ const TOOLS = [
         limit:     { type: 'number', description: 'Results per page (default 25, max 100)' },
         after_id:  { type: 'string', description: 'Return invoices submitted before this invoice ID (use nextCursor from a previous response)' },
         before_id: { type: 'string', description: 'Return invoices submitted after this invoice ID (use prevCursor from a previous response)' },
+        receivedAfter: { type: 'string', description: 'ISO 8601 timestamp — only invoices whose Clearvo-side received/created timestamp is strictly after this. A monotonic "what\'s new since I last checked" cursor, distinct from issueDate — most relevant for Mexico CFDIs, where SAT can publish a document days after its own issue date.' },
       },
     },
   },
@@ -1485,6 +1545,21 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/jo/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'set_mx_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/mx/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'push_mx_cfdi': {
+      const { entityId, documentXml } = args as { entityId?: string; documentXml: string };
+      return callApi('POST', '/mx/inbound/cfdi', { documentXml }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_mx_sync_status': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/mx/sync-status', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'invite_team_member':
       return callApi('POST', '/team/invites', args);
 
@@ -1525,6 +1600,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.limit)     qs.set('limit',     String(args.limit));
       if (args.after_id)  qs.set('after_id',  args.after_id  as string);
       if (args.before_id) qs.set('before_id', args.before_id as string);
+      if (args.receivedAfter) qs.set('receivedAfter', args.receivedAfter as string);
       const q = qs.toString();
       return callApi('GET', `/invoices${q ? `?${q}` : ''}`);
     }
