@@ -164,7 +164,15 @@ program
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (file: string, opts: { commit?: boolean; pretty?: boolean }) => {
     const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
-    if (opts.commit) body.commit = true;
+    // The API itself now defaults an omitted `commit` to true (persisted/billed).
+    // This command is documented as "default: dry run", so send an explicit
+    // `false` unless --commit was passed or the input file already set its own
+    // value — never rely on the API's own default here.
+    if (opts.commit) {
+      body.commit = true;
+    } else if (!('commit' in body)) {
+      body.commit = false;
+    }
     const result = await api('POST', '/tax/calculate', body);
     print(result, !!opts.pretty);
   });

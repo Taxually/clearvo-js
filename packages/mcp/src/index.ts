@@ -1442,7 +1442,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'calculate_tax':
-      return callApi('POST', '/tax/calculate', args);
+      // The API itself now defaults an omitted `commit` to true (persisted/
+      // billed/counted toward Compliance Radar). This tool's own description
+      // still says "Default: false (ephemeral)" and an agent asking "what
+      // would the tax be?" has no reason to think to set commit itself — so
+      // default it here rather than inheriting the API's new default.
+      return callApi('POST', '/tax/calculate', { commit: false, ...(args as Record<string, unknown>) });
 
     case 'validate_tax_number': {
       const { country, taxNumber, registryType, force } = args as { country: string; taxNumber: string; registryType?: string; force?: boolean };
