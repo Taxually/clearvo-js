@@ -59,6 +59,12 @@ import type {
   SubmitInvoiceInput,
   ListTaxCodesParams,
   ListTaxCodesResponse,
+  BulkUploadFile,
+  SubmitInvoicesBulkResponse,
+  SubmitInvoicesBulkAsyncResponse,
+  BulkUploadStatusResponse,
+  ListBulkUploadErrorsParams,
+  ListBulkUploadErrorsResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -105,6 +111,40 @@ export class ClearvoClient {
     return response.json() as Promise<T>;
   }
 
+  /** Same error/response handling as request(), but posts `file` as multipart/form-data (a
+   *  "file" field) instead of JSON — used only by the bulk CSV endpoints. Relies on the global
+   *  FormData/Blob available in Node 18+ and every browser; no extra dependency. */
+  private async requestMultipart<T>(
+    method: string,
+    path: string,
+    file: BulkUploadFile,
+  ): Promise<T> {
+    const form = new FormData();
+    const blob = new Blob([file.content], { type: 'text/csv' });
+    form.append('file', blob, file.filename ?? 'upload.csv');
+
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: {
+        'x-api-key': this.apiKey,
+        'Accept': 'application/json',
+      },
+      body: form,
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ClearvoError(
+        response.status,
+        String(data.error ?? `HTTP ${response.status}`),
+        typeof data.hint === 'string' ? data.hint : undefined,
+        typeof data.field === 'string' ? data.field : undefined
+      );
+    }
+
+    return response.json() as Promise<T>;
+  }
+
   // ── E-Invoicing ──────────────────────────────────────────────────────────────
 
   submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
@@ -129,6 +169,48 @@ export class ClearvoClient {
     if (params.status)           qs.set('status',    params.status);
     const q = qs.toString();
     return this.request('GET', `/invoices${q ? `?${q}` : ''}`);
+  }
+
+  // ── Bulk CSV submission ───────────────────────────────────────────────────────
+
+  /**
+   * Bulk CSV ingestion through the same unified pipeline as submitInvoice() — every row runs
+   * the exact same validation → mandate-resolution → dispatch chain a single submit does, so
+   * one file can mix rows that resolve to e-invoicing, aggregate e-reporting, and no obligation.
+   * Synchronous: waits for every row (up to 500) and returns full per-row results. For a larger
+   * file, use submitInvoicesBulkAsync instead — this throws 413 FILE_TOO_LARGE past the row cap.
+   */
+  submitInvoicesBulk(file: BulkUploadFile): Promise<SubmitInvoicesBulkResponse> {
+    return this.requestMultipart('POST', '/send/bulk', file);
+  }
+
+  /**
+   * The async counterpart to submitInvoicesBulk, for a file too large to process inline
+   * (hundreds of thousands of rows). Returns immediately with a `batchId` once the file is
+   * queued — poll getBulkUploadStatus for progress and listBulkUploadErrors for structural
+   * errors. Re-uploading a file already fully processed returns `duplicate: true`.
+   */
+  submitInvoicesBulkAsync(file: BulkUploadFile): Promise<SubmitInvoicesBulkAsyncResponse> {
+    return this.requestMultipart('POST', '/send/bulk-async', file);
+  }
+
+  /** Poll after submitInvoicesBulkAsync to watch a batch move through processing. */
+  getBulkUploadStatus(batchId: string): Promise<BulkUploadStatusResponse> {
+    return this.request('GET', `/send/bulk-async/${encodeURIComponent(batchId)}`);
+  }
+
+  /**
+   * Paginated, machine-readable structural errors for one async bulk upload batch — a row the
+   * pipeline could not even attempt to classify. A row that reached resolution and landed on
+   * NEEDS_INFO/HELD is not a structural error; it's an ordinary row (see listMandateTransactions
+   * with an `uploadBatchId` filter, once that method exists on this SDK).
+   */
+  listBulkUploadErrors(batchId: string, params: ListBulkUploadErrorsParams = {}): Promise<ListBulkUploadErrorsResponse> {
+    const qs = new URLSearchParams();
+    if (params.page  != null) qs.set('page',  String(params.page));
+    if (params.limit != null) qs.set('limit', String(params.limit));
+    const q = qs.toString();
+    return this.request('GET', `/send/bulk-async/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`);
   }
 
   // ── Tax Calculation ───────────────────────────────────────────────────────────
@@ -266,7 +348,9 @@ export class ClearvoClient {
    * otherwise) and, for es_sii/fr_ereporting, a current registration in that country
    * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii and
    * fr_ereporting accept submissionMode 'immediate' | 'batch_auto' | 'batch_review'
-   * (default 'batch_review'). Disabling es_sii while a batch is open / ready_for_review /
+   * (default 'batch_review'). Enabling fr_ereporting additionally requires `vatRegime`
+   * (FR_REGIME_REQUIRED / FR_REGIME_INVALID otherwise) — it sets the filing cadence and is
+   * never defaulted. Disabling es_sii while a batch is open / ready_for_review /
    * overdue is refused 409 OBLIGATION_HAS_PENDING_BATCH unless `force: true`.
    */
   updateReportingObligations(input: UpdateReportingObligationsInput): Promise<UpdateReportingObligationsResponse> {
@@ -276,12 +360,13 @@ export class ClearvoClient {
   // ── Spain SII reporting batches ─────────────────────────────────────────────
 
   /**
-   * List the Spain SII reporting batches this key can see (es_sii submissionMode
-   * batch_auto/batch_review), newest first. `status: 'ready_for_review'` finds the
-   * batches waiting for confirmReportingBatch().
+   * List reporting batches this key can see, newest first — es_sii (submissionMode
+   * batch_auto/batch_review) by default, or fr_ereporting via `params.obligation`.
+   * `status: 'ready_for_review'` finds the batches waiting for confirmReportingBatch().
    */
   listReportingBatches(params: ListReportingBatchesParams = {}): Promise<ListReportingBatchesResponse> {
     const qs = new URLSearchParams();
+    if (params.obligation) qs.set('obligation', params.obligation);
     if (params.status)   qs.set('status',   params.status);
     if (params.entityId) qs.set('entityId', params.entityId);
     if (params.page  != null) qs.set('page',  String(params.page));

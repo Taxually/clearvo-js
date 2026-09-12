@@ -321,6 +321,98 @@ export interface ListInvoicesResponse {
   prevCursor: string | null;
 }
 
+// ── Bulk CSV submission ───────────────────────────────────────────────────────
+
+/** A file to submit to submitInvoicesBulk/submitInvoicesBulkAsync — CSV text or raw bytes. */
+export interface BulkUploadFile {
+  /** CSV content, header row included. */
+  content: string | Uint8Array;
+  /** Must end in .csv — rejected UNSUPPORTED_MEDIA_TYPE otherwise. */
+  filename?: string;
+}
+
+export type BulkSendRowOutcome = 'ACCEPTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'SKIPPED_DUPLICATE' | 'HELD' | 'NO_OBLIGATION' | 'ERRORED';
+
+export interface BulkSendRowResult {
+  rowNumber: number;
+  outcome: BulkSendRowOutcome;
+  /** The transaction's Clearvo id once it reached dispatch. */
+  id: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+/** POST /send/bulk (sync, up to 500 rows) response — every row's outcome, available immediately. */
+export interface SubmitInvoicesBulkResponse {
+  ok: boolean;
+  summary: {
+    total: number;
+    accepted: number;
+    accumulated: number;
+    needsInfo: number;
+    skippedDuplicate: number;
+    held: number;
+    noObligation: number;
+    errored: number;
+  };
+  rows: BulkSendRowResult[];
+  /** True when the file exceeded MAX_BULK_ROWS and remaining rows were not processed — use submitInvoicesBulkAsync instead for files this large. */
+  truncated?: boolean;
+}
+
+export type BulkUploadBatchStatus = 'processing' | 'completed' | 'failed';
+
+/** POST /send/bulk-async response — the file is queued; poll getBulkUploadStatus for progress. */
+export interface SubmitInvoicesBulkAsyncResponse {
+  ok: boolean;
+  batchId: string;
+  status: BulkUploadBatchStatus | string;
+  /** True when this exact file was already fully processed for this entity — returns the existing batch rather than reprocessing. */
+  duplicate?: boolean;
+}
+
+export interface BulkUploadStatusResponse {
+  batchId: string;
+  status: BulkUploadBatchStatus;
+  filename: string | null;
+  uploadedBy: string | null;
+  total: number;
+  /** Same keys as SubmitInvoicesBulkResponse's own per-row `outcome`. Zero for any outcome this batch had no rows land in. */
+  outcomeCounts: Partial<Record<BulkSendRowOutcome, number>>;
+  /** e.g. "4,102 accepted, 12 missing information, 3 errored" — always derived from outcomeCounts. */
+  summary: string;
+  /** The full, static per-outcome word set `summary` is built from — render a per-outcome chip from this. */
+  outcomeLabels: Record<BulkSendRowOutcome, string>;
+  createdAt: string;
+  validatedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface BulkUploadStructuralError {
+  rowNumber: number;
+  errorCode: string;
+  errorMessage: string | null;
+  /** The offending CSV row's own fields, as parsed. */
+  rawRow: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ListBulkUploadErrorsParams {
+  /** 1-based, default 1. */
+  page?: number;
+  /** default 50, max 200. */
+  limit?: number;
+}
+
+export interface ListBulkUploadErrorsResponse {
+  batchId: string;
+  status: BulkUploadBatchStatus;
+  page: number;
+  limit: number;
+  total: number;
+  errors: BulkUploadStructuralError[];
+}
+
 export interface TaxCalculateRequest {
   currency: string;
   commit?: boolean;
@@ -705,7 +797,17 @@ export interface ReportingObligation {
   openBatch: boolean;
   /** Non-null exactly when openBatch is true — a mode change won't affect the running batch. */
   modeChangeNotice: string | null;
+  /**
+   * fr_ereporting only — the entity's confirmed France VAT-return regime, which determines
+   * this obligation's filing cadence. Always null for es_sii. Required to enable fr_ereporting
+   * (FR_REGIME_REQUIRED otherwise).
+   */
+  vatRegime: FrVatRegime | null;
+  /** fr_ereporting only — the valid vatRegime values to offer, with labels. Empty for es_sii. */
+  vatRegimeOptions: Array<{ value: FrVatRegime; label: string }>;
 }
+
+export type FrVatRegime = 'reel_normal_mensuel' | 'reel_normal_trimestriel' | 'reel_simplifie' | 'franchise_en_base';
 
 export interface ReportingObligationsVocabulary {
   submissionModes: Array<{ code: RegimeSubmissionMode; label: string; description: string }>;
@@ -736,6 +838,12 @@ export type ReportingObligationPatch =
        * ('batch_review') applies. A change never affects a batch that is already open.
        */
       submissionMode?: RegimeSubmissionMode;
+      /**
+       * Required to enable fr_ereporting (FR_REGIME_REQUIRED otherwise; FR_REGIME_INVALID if
+       * not one of FrVatRegime's values). Not accepted for any other regime. Omit on a disable,
+       * or a patch that doesn't touch fr_ereporting, to keep the stored value.
+       */
+      vatRegime?: FrVatRegime;
     };
 
 export interface UpdateReportingObligationsInput {
@@ -806,6 +914,25 @@ export type ReportingBatchSubmissionMode = 'batch_auto' | 'batch_review';
 export type SiiBook = 'issued' | 'received';
 /** AEAT per-record estado, PENDING before submission, or EXCLUDED for a record moved out of this batch. */
 export type ReportingBatchRecordState = 'PENDING' | 'Correcto' | 'AceptadoConErrores' | 'Incorrecto' | 'EXCLUDED';
+/**
+ * Non-null when a batch needs a human's attention for a reason `status` alone can't express.
+ * es_sii never populates this (no period-level rejection/correction concept — it corrects
+ * per-invoice); fr_ereporting can, for a rejected transmission or a post-filing correction.
+ */
+export type ReportingBatchAttentionReason = 'REJECTED' | 'RECTIFICATION_REQUIRED' | 'TRANSMISSION_NOT_LIVE';
+
+export interface ReportingBatchNeedsAttention {
+  code: ReportingBatchAttentionReason;
+  label: string;
+  description: string;
+  /** Always null today — no per-period authority rejection text is captured upstream yet. */
+  authorityError: string | null;
+  actionLabel: string;
+  /** Relative link to this batch's own Filings detail page. */
+  actionHref: string;
+  /** True only for RECTIFICATION_REQUIRED — that period has no deadline of its own until a correction is prepared, so reportBy/overdueLabel are null while this is true. */
+  suppressDeadline: boolean;
+}
 
 export interface ReportingBatch {
   /** Batch UUID — the path parameter for getReportingBatch/confirm/exclude. */
@@ -826,8 +953,10 @@ export interface ReportingBatch {
   periodEnd: string | null;
   /** Earliest AEAT report-by date across the batch's records. */
   reportBy: string | null;
-  /** Server-computed "N Spanish business day(s) overdue"; null when not overdue. */
+  /** Server-computed overdue text — "N Spanish business day(s) overdue" (es_sii) or "N day(s) overdue" (fr_ereporting); null when not overdue, or when needsAttention.suppressDeadline is true. */
   overdueLabel: string | null;
+  /** Non-null when this batch needs attention for a reason `status` alone can't express. Always null for es_sii today. */
+  needsAttention: ReportingBatchNeedsAttention | null;
   recordCount: number;
   submittedLate: boolean;
   closedAt: string | null;
@@ -872,12 +1001,27 @@ export interface ReportingBatchRecord {
 }
 
 export interface ReportingBatchDetail extends ReportingBatch {
+  /** 'records' — es_sii; `records` is populated, `aggregate`/`deadlineBasis` are null. 'aggregate' — fr_ereporting; `records` is always [], `aggregate`/`deadlineBasis` carry totals instead. */
+  kind: 'records' | 'aggregate';
   reviewedBy: string | null;
   reviewedAt: string | null;
   /** Optimistic-concurrency token — echo it on confirmReportingBatch (409 BATCH_STALE otherwise). */
   snapshotVersion: number;
   snapshotHash: string | null;
   records: ReportingBatchRecord[];
+  /** kind:'aggregate' only — this batch's totals/drilldown, computed over its member transactions. Null for kind:'records'. */
+  aggregate: ReportingBatchAggregate | null;
+  /** kind:'aggregate' only — "Deadline assumes: <VAT regime label>" sentence. Null for kind:'records', or an entity with no confirmed regime yet. */
+  deadlineBasis: string | null;
+}
+
+export interface ReportingBatchAggregate {
+  byCurrency: Array<{ currency: string; taxableBase: number; vatAmount: number }>;
+  byRateAndType: Array<{ frTransactionType: string; vatRate: number | null; currency: string; taxableBase: number; vatAmount: number }>;
+  drilldown: {
+    b2cAggregates: Array<{ date: string; currency: string; vatRate: number | null; frTransactionType: string; taxableBase: number; vatAmount: number }>;
+    crossBorderInvoices: Array<{ id: string; date: string; currency: string; frTransactionType: string; vatRate: number | null; taxableBase: number; vatAmount: number; grossAmount: number | null; sourceReference: string | null; buyerCountry: string | null; buyerVatNumber: string | null }>;
+  };
 }
 
 export interface ReportingBatchVocabulary {
@@ -887,9 +1031,15 @@ export interface ReportingBatchVocabulary {
   books: Record<string, string>;
   tipoFactura: Record<string, string>;
   claveRegimen: { issued: Record<string, string>; received: Record<string, string> };
+  /** attention_reason code → label/description/actionLabel/suppressDeadline. */
+  attentionReasons: Record<string, { label: string; description: string; actionLabel: string; suppressDeadline: boolean }>;
+  /** fr_ereporting transaction-type code (DOMESTIC/OSS_DISTANCE_SALE/INTRA_EU/EXPORT) → plain-language label. */
+  frTransactionTypes: Record<string, string>;
 }
 
 export interface ListReportingBatchesParams {
+  /** Regime to list batches for — 'es_sii' or 'fr_ereporting' (case-insensitive). Omit to default to 'es_sii'. */
+  obligation?: string;
   status?: ReportingBatchStatus;
   /** Organisation-scoped keys only; must be a UUID (400 otherwise). */
   entityId?: string;

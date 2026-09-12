@@ -54,6 +54,28 @@ function print(data: unknown, pretty: boolean) {
   console.log(pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data));
 }
 
+/** Same error handling as api(), but posts a CSV file as multipart/form-data — used only by
+ *  the bulk send commands. */
+async function apiMultipart(method: string, path: string, filePath: string): Promise<unknown> {
+  const content = readFileSync(filePath);
+  const form = new FormData();
+  form.append('file', new Blob([content], { type: 'text/csv' }), filePath.split('/').pop() ?? 'upload.csv');
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method,
+    headers: { 'x-api-key': getApiKey(), 'Accept': 'application/json' },
+    body: form,
+  });
+  const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+  if (!res.ok) {
+    const parts = [`HTTP ${res.status}: ${data.error ?? 'Unknown error'}`];
+    if (data.code) parts.push(`Code: ${data.code}`);
+    if (data.hint) parts.push(`Hint: ${data.hint}`);
+    console.error(parts.join('\n'));
+    process.exit(1);
+  }
+  return data;
+}
+
 const program = new Command()
   .name('clearvo')
   .description('Clearvo CLI — submit invoices, calculate tax, validate tax numbers')
@@ -87,6 +109,59 @@ program
     // Derive a stable idempotency key from the invoice file content
     const idempotencyKey = createHash('sha256').update(raw).digest('hex').slice(0, 64);
     const result = await api('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo send-bulk <file> ─────────────────────────────────────────────────
+// Synchronous bulk CSV submission through the same unified pipeline as `send` —
+// every row runs the exact same validation -> mandate-resolution -> dispatch
+// chain, so one file can mix rows that resolve to e-invoicing, aggregate
+// e-reporting, and no obligation. Waits for every row (up to 500) and prints
+// full per-row results. Use send-bulk-async for a larger file.
+program
+  .command('send-bulk <file>')
+  .description('Submit many invoices at once via CSV (sync, up to 500 rows)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (file: string, opts: { pretty?: boolean }) => {
+    const result = await apiMultipart('POST', '/send/bulk', file);
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo send-bulk-async <file> ───────────────────────────────────────────
+// Async counterpart to send-bulk, for a file too large to process inline (no
+// row cap). Returns a batchId immediately — poll with `bulk-status`.
+program
+  .command('send-bulk-async <file>')
+  .description('Submit many invoices at once via CSV (async, no row cap) — returns a batchId to poll')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (file: string, opts: { pretty?: boolean }) => {
+    const result = await apiMultipart('POST', '/send/bulk-async', file);
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo bulk-status <batchId> ────────────────────────────────────────────
+program
+  .command('bulk-status <batchId>')
+  .description('Check the status of an async bulk upload started via send-bulk-async')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (batchId: string, opts: { pretty?: boolean }) => {
+    const result = await api('GET', `/send/bulk-async/${encodeURIComponent(batchId)}`);
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo bulk-errors <batchId> ────────────────────────────────────────────
+program
+  .command('bulk-errors <batchId>')
+  .description('List the structural errors for an async bulk upload batch')
+  .option('--page <n>', 'Page number (default 1)')
+  .option('--limit <n>', 'Results per page (default 50, max 200)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (batchId: string, opts: { page?: string; limit?: string; pretty?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (opts.page)  qs.set('page',  opts.page);
+    if (opts.limit) qs.set('limit', opts.limit);
+    const q = qs.toString();
+    const result = await api('GET', `/send/bulk-async/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`);
     print(result, !!opts.pretty);
   });
 
