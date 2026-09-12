@@ -389,7 +389,7 @@ const TOOLS = [
       'and EN16931 tax code for each line item. Handles EU B2B reverse charge, OSS/IOSS schemes, ' +
       'US state-level sales tax, Canadian GST/HST/PST, and more. ' +
       'The clientTaxCode returned (when a matching one exists for this entity) maps directly to lines[].clientTaxCode in submit_invoice — no conversion needed; there is no taxCode field on submit_invoice. ' +
-      'Set commit=true to record the calculation in the audit trail (required for threshold monitoring). ' +
+      'Calculations are recorded in the audit trail and count toward compliance thresholds by default (commit defaults to true) — set commit=false explicitly for a preview/quote that should not be recorded or billed. ' +
       'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
       'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing. ' +
@@ -399,7 +399,7 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         currency: { type: 'string', description: 'ISO 4217 currency code' },
-        commit: { type: 'boolean', description: 'If true, records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Default: false (ephemeral — not stored). Set to true for real transactions.' },
+        commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
         seller: {
           type: 'object',
           properties: {
@@ -1442,12 +1442,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'calculate_tax':
-      // The API itself now defaults an omitted `commit` to true (persisted/
-      // billed/counted toward Compliance Radar). This tool's own description
-      // still says "Default: false (ephemeral)" and an agent asking "what
-      // would the tax be?" has no reason to think to set commit itself — so
-      // default it here rather than inheriting the API's new default.
-      return callApi('POST', '/tax/calculate', { commit: false, ...(args as Record<string, unknown>) });
+      // Forward as-is — the API defaults an omitted `commit` to true
+      // (persisted/billed/counted toward Compliance Radar), and this tool
+      // intentionally matches that default rather than overriding it. Set
+      // commit: false explicitly to get a preview instead.
+      return callApi('POST', '/tax/calculate', args);
 
     case 'validate_tax_number': {
       const { country, taxNumber, registryType, force } = args as { country: string; taxNumber: string; registryType?: string; force?: boolean };
