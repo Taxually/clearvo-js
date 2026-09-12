@@ -160,11 +160,20 @@ program
 program
   .command('calculate <file>')
   .description('Calculate tax for a transaction from a JSON file')
-  .option('--commit', 'Record in audit trail (default: dry run)')
+  .option('--commit', 'Record in audit trail (redundant — this is the default; kept for backward compatibility)')
+  .option('--dry-run', 'Preview only — do not record or bill this calculation')
   .option('--pretty', 'Pretty-print JSON output')
-  .action(async (file: string, opts: { commit?: boolean; pretty?: boolean }) => {
+  .action(async (file: string, opts: { commit?: boolean; dryRun?: boolean; pretty?: boolean }) => {
     const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
-    if (opts.commit) body.commit = true;
+    // The API defaults an omitted `commit` to true (persisted/billed) — this
+    // command matches that default rather than overriding it. --dry-run is
+    // the explicit opt-out; --commit is a harmless no-op kept so existing
+    // scripts that already pass it don't break.
+    if (opts.dryRun) {
+      body.commit = false;
+    } else if (opts.commit) {
+      body.commit = true;
+    }
     const result = await api('POST', '/tax/calculate', body);
     print(result, !!opts.pretty);
   });
