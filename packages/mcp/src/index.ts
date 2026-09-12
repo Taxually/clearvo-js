@@ -700,6 +700,80 @@ const TOOLS = [
     },
   },
   {
+    name: 'submit_invoices_bulk',
+    description:
+      'Submit many invoices at once via CSV, through the same unified pipeline submit_invoice uses per row — ' +
+      'so one file can freely mix rows that resolve to e-invoicing, aggregate e-reporting, and no obligation; ' +
+      'the platform decides per row, never the caller. Synchronous: waits for every row (up to 500) and returns ' +
+      'full per-row results immediately, with a `summary` count per outcome and a `rows[]` array (rowNumber, ' +
+      'outcome, id, errorCode, errorMessage). Re-submitting the same file is safe — already-processed rows ' +
+      'return SKIPPED_DUPLICATE rather than reprocessing. For more than 500 rows, use submit_invoices_bulk_async ' +
+      'instead (this fails FILE_TOO_LARGE past the cap). Required CSV columns (header names lower-case): ' +
+      'transaction_date, currency, country, net_amount, vat_amount. Common optional columns: document_type ' +
+      '(invoice|credit_note|debit_note), invoice_number, source_reference, buyer_country, buyer_vat_number, ' +
+      'buyer_name (required only if the row resolves to e-invoicing), tax_code (EN16931 category, default S), ' +
+      'oss_declared (true|false).',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['csvContent'],
+      properties: {
+        csvContent: { type: 'string', description: 'The full CSV file content, header row included.' },
+        filename: { type: 'string', description: 'Optional filename to send with the upload (must end in .csv). Defaults to "upload.csv".' },
+      },
+    },
+  },
+  {
+    name: 'submit_invoices_bulk_async',
+    description:
+      'The async counterpart to submit_invoices_bulk, for a file too large to process inline (no row cap — ' +
+      'hundreds of thousands of rows). Returns immediately with a batchId once the file is queued for ' +
+      'processing, rather than waiting for every row — poll get_bulk_upload_status for progress and per-outcome ' +
+      'counts, and list_bulk_upload_errors for machine-readable structural errors once status is no longer ' +
+      '"processing". Re-submitting a file already fully processed for this entity returns duplicate:true rather ' +
+      'than reprocessing it. Same CSV schema as submit_invoices_bulk.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['csvContent'],
+      properties: {
+        csvContent: { type: 'string', description: 'The full CSV file content, header row included.' },
+        filename: { type: 'string', description: 'Optional filename to send with the upload (must end in .csv). Defaults to "upload.csv".' },
+      },
+    },
+  },
+  {
+    name: 'get_bulk_upload_status',
+    description:
+      'Poll the status of an async bulk upload started via submit_invoices_bulk_async. Returns status ' +
+      '("processing"/"completed"/"failed"), total row count, outcomeCounts (same outcome keys as ' +
+      'submit_invoices_bulk\'s per-row `outcome`), a human summary sentence, and outcomeLabels for rendering a ' +
+      'chip per outcome without hardcoding wording. A batchId belonging to a different entity than this key is ' +
+      'scoped to is a plain not-found error.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['batchId'],
+      properties: {
+        batchId: { type: 'string', description: 'The batchId returned by submit_invoices_bulk_async.' },
+      },
+    },
+  },
+  {
+    name: 'list_bulk_upload_errors',
+    description:
+      'List the machine-readable structural errors for one async bulk upload batch — a row the pipeline could ' +
+      'not even attempt to classify (a malformed date, an unrecognised currency), distinct from a row that ' +
+      'reached resolution and landed on NEEDS_INFO/HELD (those are ordinary rows, not structural errors). Each ' +
+      'error carries rowNumber, errorCode, errorMessage, and the offending row\'s own parsed fields (rawRow).',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['batchId'],
+      properties: {
+        batchId: { type: 'string', description: 'The batchId returned by submit_invoices_bulk_async.' },
+        page: { type: 'number', description: '1-based page number (default 1).' },
+        limit: { type: 'number', description: 'Results per page (default 50, max 200).' },
+      },
+    },
+  },
+  {
     name: 'list_products',
     description:
       'List the product catalogue for an entity. ' +
@@ -1042,7 +1116,10 @@ const TOOLS = [
       'the underlying tax registration is not itself SII/e-reporting enrollment — enabling the regime with its ' +
       'own effectiveFrom is the separate, explicit declaration. Rows also carry allowedSubmissionModes/' +
       'defaultSubmissionMode (batch_review for es_sii and fr_ereporting), registrationWarning (enabled but the ' +
-      'registration has since lapsed), and openBatch/modeChangeNotice when a Spain SII batch is accumulating.',
+      'registration has since lapsed), and openBatch/modeChangeNotice when a Spain SII batch is accumulating. ' +
+      'The fr_ereporting row additionally carries vatRegime (the entity\'s confirmed France VAT-return regime — ' +
+      'null until set; required to enable the obligation) and vatRegimeOptions (the valid values with labels); ' +
+      'both are always null/empty for es_sii.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
   {
@@ -1051,11 +1128,15 @@ const TOOLS = [
       'Enable or disable domestic e-reporting/e-invoicing regimes for this entity (currently fr_ereporting, ' +
       'es_sii, and es_verifactu). Call get_reporting_obligations first to see current state. Pass obligations as ' +
       'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
-      '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
+      '{ enabled, effectiveFrom, submissionMode, vatRegime }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
       '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
       'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii and fr_ereporting allow ' +
       '"immediate", "batch_auto" and "batch_review" — default "batch_review": nothing is sent until a human confirms the ' +
-      'batch; e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). Enabling fr_ereporting/es_sii also requires ' +
+      'batch; e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). ' +
+      'Enabling fr_ereporting additionally REQUIRES vatRegime (one of "reel_normal_mensuel", "reel_normal_trimestriel", ' +
+      '"reel_simplifie", "franchise_en_base" — ask the user which applies rather than guessing; never defaulted) — ' +
+      'the call fails FR_REGIME_REQUIRED if omitted, FR_REGIME_INVALID if not one of those values; not accepted for ' +
+      'any other regime. Enabling fr_ereporting/es_sii also requires ' +
       'the entity already hold a current STANDARD registration for that regime\'s own country — otherwise the call ' +
       'fails REGISTRATION_REQUIRED with a { ok:false, code, message, country, entityId, fixUrl } body (fixUrl is ' +
       'an absolute URL at "/registrations?country=<cc>&returnTo=/jurisdictions" on this API\'s own host); point ' +
@@ -1073,7 +1154,7 @@ const TOOLS = [
       properties: {
         obligations: {
           type: 'object',
-          description: 'Map of regime code -> boolean or { enabled, effectiveFrom, submissionMode }. See tool description for the enabling rules.',
+          description: 'Map of regime code -> boolean or { enabled, effectiveFrom, submissionMode, vatRegime }. vatRegime is required to enable fr_ereporting and not accepted for any other regime. See tool description for the enabling rules.',
         },
         confirm: { type: 'boolean', description: 'Set true once the user has reviewed these obligations — marks the "Tax Reporting" Getting Started step complete, independent of whether any value changed.' },
         force: { type: 'boolean', description: 'Set true to disable es_sii anyway despite an OBLIGATION_HAS_PENDING_BATCH 409 — confirm with the user first, since a pending batch still needs their attention.' },
@@ -1083,20 +1164,26 @@ const TOOLS = [
   {
     name: 'list_reporting_batches',
     description:
-      'List or fetch AEAT Spain SII reporting batches — the accumulated groups of invoices this entity\'s ' +
-      'batch_auto/batch_review submissionMode builds up before sending them to AEAT together. Omit id to list ' +
-      'batches (optionally filtered by status and entityId); pass id to fetch one batch\'s full detail, including ' +
-      'every record it holds (invoice number, counterparty NIF, tipo, book, base/cuota, classification, ' +
-      'warnings, reportBy, isLate, the AEAT outcome once submitted, and whether it was excluded from the batch). ' +
-      'Every response includes a vocabulary block with labels for every batch status and record state, plus a ' +
-      'server-computed overdueLabel ("N Spanish business days overdue") wherever a deadline has passed — never ' +
-      'reconstruct these from the raw status codes. A batch_review batch in status ready_for_review is waiting ' +
-      'for a human confirm (POST /v1/reporting-batches/{id}/confirm with its snapshotVersion) — nothing is sent ' +
-      'to AEAT until then.',
+      'List or fetch reporting batches for either regime this platform batches — Spain SII (es_sii, the default) ' +
+      'or France e-reporting (fr_ereporting, via obligation) — the accumulated groups of invoices an entity\'s ' +
+      'batch_auto/batch_review submissionMode builds up before sending them to the tax authority together. Omit ' +
+      'id to list batches (optionally filtered by obligation, status, entityId); pass id to fetch one batch\'s ' +
+      'full detail. An es_sii batch has kind:"records" — every record it holds (invoice number, counterparty ' +
+      'NIF, tipo, book, base/cuota, classification, warnings, reportBy, isLate, the AEAT outcome once submitted, ' +
+      'whether it was excluded); an fr_ereporting batch has kind:"aggregate" — no per-record list, an ' +
+      '`aggregate` totals/drilldown block instead. Every response includes a vocabulary block with labels for ' +
+      'every batch status, record state, and attention reason, plus a server-computed overdueLabel wherever a ' +
+      'deadline has passed — never reconstruct these from the raw status codes. A `needsAttention` chip ' +
+      '(fr_ereporting only — REJECTED/RECTIFICATION_REQUIRED/TRANSMISSION_NOT_LIVE) surfaces when a batch needs ' +
+      'attention beyond its plain status. A batch_review batch in status ready_for_review is waiting for a ' +
+      'human confirm (POST /v1/reporting-batches/{id}/confirm with its snapshotVersion) — nothing is sent to the ' +
+      'authority until then; for fr_ereporting, confirm is also refused until the period\'s own end date has ' +
+      'passed.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         id: { type: 'string', description: 'A specific batch ID (UUID) to fetch full detail for. Omit to list batches instead.' },
+        obligation: { type: 'string', enum: ['es_sii', 'fr_ereporting'], description: 'List only: which regime to list batches for. Omit to default to es_sii.' },
         status: { type: 'string', enum: ['open', 'closed', 'ready_for_review', 'submitted', 'filed'], description: 'List only: filter by batch status.' },
         entityId: { type: 'string', description: 'List only: filter by entity (organisation-scoped keys only).' },
         page: { type: 'number', description: 'List only: 1-based page number (default 1).' },
@@ -1534,6 +1621,29 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', `/invoices/${encodeURIComponent(id)}`);
     }
 
+    case 'submit_invoices_bulk':
+    case 'submit_invoices_bulk_async': {
+      const { csvContent, filename } = args as { csvContent: string; filename?: string };
+      const formData = new FormData();
+      formData.append('file', new Blob([csvContent], { type: 'text/csv' }), filename ?? 'upload.csv');
+      const path = name === 'submit_invoices_bulk' ? '/send/bulk' : '/send/bulk-async';
+      return callApi('POST', path, formData);
+    }
+
+    case 'get_bulk_upload_status': {
+      const batchId = args.batchId as string;
+      return callApi('GET', `/send/bulk-async/${encodeURIComponent(batchId)}`);
+    }
+
+    case 'list_bulk_upload_errors': {
+      const { batchId, page, limit } = args as { batchId: string; page?: number; limit?: number };
+      const qs = new URLSearchParams();
+      if (page)  qs.set('page',  String(page));
+      if (limit) qs.set('limit', String(limit));
+      const q = qs.toString();
+      return callApi('GET', `/send/bulk-async/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`);
+    }
+
     case 'list_products': {
       const qs = new URLSearchParams();
       if (args.entityId) qs.set('entityId', args.entityId as string);
@@ -1629,7 +1739,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const { id } = args as { id?: string };
       if (id) return callApi('GET', `/reporting-batches/${encodeURIComponent(id)}`);
       const qs = new URLSearchParams();
-      for (const k of ['status', 'entityId', 'page', 'limit'] as const) if (args[k] !== undefined) qs.set(k, String(args[k]));
+      for (const k of ['obligation', 'status', 'entityId', 'page', 'limit'] as const) if (args[k] !== undefined) qs.set(k, String(args[k]));
       const q = qs.toString();
       return callApi('GET', `/reporting-batches${q ? `?${q}` : ''}`);
     }

@@ -52,7 +52,7 @@ Add to `~/.claude/settings.json`:
 
 Then ask Claude: *"Submit a test invoice for €1,000 to Acme SpA (IT12345678901) for software licence Q3"*
 
-**Available tools**: `submit_invoice`, `poll_status`, `calculate_tax`, `validate_tax_number`, `validate_tax_numbers_batch`, `list_entities`, `create_entity`, `get_requirements`, `list_invoices`, `get_invoice`, `list_products`, `create_product`, `update_product`, `list_webhooks`, `create_webhook`, `delete_webhook`, `list_registrations`, `add_registration`, `set_registration_collection`, `list_tax_calculations`, `get_query_fields`, `query_data`, `get_setup_status`, `get_tax_settings`, `update_tax_settings`, `get_reporting_obligations`, `update_reporting_obligations`, `list_customers`, `create_customer`, `update_customer`, `delete_customer`, `list_client_tax_codes`, `create_client_tax_code`, `update_client_tax_code`, `delete_client_tax_code`, `list_tax_codes`, `list_reporting_batches`, `run_reporting_batch_sweep`
+**Available tools**: `submit_invoice`, `submit_invoices_bulk`, `submit_invoices_bulk_async`, `get_bulk_upload_status`, `list_bulk_upload_errors`, `poll_status`, `calculate_tax`, `validate_tax_number`, `validate_tax_numbers_batch`, `list_entities`, `create_entity`, `get_requirements`, `list_invoices`, `get_invoice`, `list_products`, `create_product`, `update_product`, `list_webhooks`, `create_webhook`, `delete_webhook`, `list_registrations`, `add_registration`, `set_registration_collection`, `list_tax_calculations`, `get_query_fields`, `query_data`, `get_setup_status`, `get_tax_settings`, `update_tax_settings`, `get_reporting_obligations`, `update_reporting_obligations`, `list_customers`, `create_customer`, `update_customer`, `delete_customer`, `list_client_tax_codes`, `create_client_tax_code`, `update_client_tax_code`, `delete_client_tax_code`, `list_tax_codes`, `list_reporting_batches` (es_sii or fr_ereporting via `obligation`), `run_reporting_batch_sweep`
 
 `submit_invoice` line items have no `taxCode` field — the EN16931 category is always a resolved output. Pass `clientTaxCode` (RECOMMENDED) or a `taxTreatment` hint (`exempt`/`out_of_scope`/`zero_rated`/`reverse_charge`) instead, and set `dryRun: true` to preview the resolution without submitting for real.
 
@@ -102,6 +102,10 @@ clearvo entities list --pretty
 clearvo requirements --country IT --pretty
 clearvo validate-tin --country DE --number DE123456789
 clearvo send invoice.json --pretty
+clearvo send-bulk invoices.csv --pretty
+clearvo send-bulk-async invoices.csv --pretty
+clearvo bulk-status <batchId> --pretty
+clearvo bulk-errors <batchId> --pretty
 clearvo status ref-abc123 --pretty
 ```
 
