@@ -148,6 +148,16 @@ const TOOLS = [
       '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). A Spain SII/VeriFactu invoice for ' +
       'an entity with no current Spanish registration is held NEEDS_INFO (errorCode ' +
       'MISSING_SUPPLIER_REGISTRATION, fixUrl) — add the registration, then resubmit. ' +
+      'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
+      'and — for any buyer that is not a private individual — a buyer street address plus (only ' +
+      'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
+      'these being missing or malformed fails with 422 (MISSING_HU_SUPPLIER_TAX_NUMBER, ' +
+      'MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_BUYER_TAX_NUMBER, MISSING_HU_BUYER_ADDRESS) rather ' +
+      'than a silent 200 NEEDS_INFO hold — the same behavior change applies to Germany\'s three ' +
+      'XRechnung mandatory-field gates (MISSING_LEITWEG_ID, MISSING_DE_XRECHNUNG_SELLER_CONTACT, ' +
+      'DE_XRECHNUNG_BIC_FORBIDDEN). An explicit buyerType: \'B2C\' always maps this HU buyer to NAV\'s ' +
+      'PRIVATE_PERSON classification regardless of the buyer\'s own country, exempting it from the ' +
+      'buyer-address requirement above. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -247,7 +257,11 @@ const TOOLS = [
           type: 'string',
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/vatRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
         },
-        buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional buyer classification for the whole invoice — business vs. consumer. Can be overridden per line.' },
+        buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional buyer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the buyer\'s own country, which also exempts the buyer from HU\'s mandatory street-address requirement.' },
+        correctsInvoiceId: {
+          type: 'string',
+          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; submit under a fresh idempotencyKey alongside this field.',
+        },
         dryRun: {
           type: 'boolean',
           description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting.',
@@ -368,8 +382,12 @@ const TOOLS = [
     name: 'poll_status',
     description:
       'Check the clearance or submission status of an invoice previously submitted via submit_invoice. ' +
-      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, UNDELIVERED, or ' +
-      'HELD_UNMAPPED_TAX_CODE (a line\'s clientTaxCode/taxTreatment isn\'t configured yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then resubmit under a new idempotency key). ' +
+      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, UNDELIVERED, ' +
+      'NEEDS_INFO, SETUP_NEEDED, or HELD_UNMAPPED_TAX_CODE (a line\'s clientTaxCode/taxTreatment isn\'t configured ' +
+      'yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then ' +
+      'resubmit under a new idempotency key). ' +
+      'NEEDS_INFO and SETUP_NEEDED are not dead ends: call submit_invoice again with correctsInvoiceId set to ' +
+      'this invoice\'s id (a fresh idempotencyKey too) once the underlying data or setup gap is fixed. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
     inputSchema: {
