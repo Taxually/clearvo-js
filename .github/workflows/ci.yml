@@ -17,6 +17,13 @@ jobs:
         with:
           repository: Taxually/clearvo-marketing
           path: clearvo-marketing
+          # The default GITHUB_TOKEN is scoped to this repo only and cannot read
+          # a second private repo — that is why this step previously failed with
+          # "Not Found" on every run. A read-only deploy key registered on
+          # clearvo-marketing, stored here as the CLEARVO_MARKETING_DEPLOY_KEY
+          # secret, grants exactly the cross-repo read this checkout needs and
+          # nothing more.
+          ssh-key: ${{ secrets.CLEARVO_MARKETING_DEPLOY_KEY }}
           # Public-contract PRs land the openapi.json change in clearvo-marketing
           # first; point this at that branch when the two are shipped together,
           # otherwise this tracks its default branch.
