@@ -208,13 +208,30 @@ export interface SubmitInvoiceInput {
   dryRun?: boolean;
   prepaidAmount?: number;
   originalInvoiceRef?: { invoiceNumber: string; issueDate: string };
+  /**
+   * Id (from a prior submit response) of the invoice this submission corrects
+   * — either a fiscal credit/debit note reversing it, or a plain resubmission
+   * re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO
+   * invoice can all be corrected this way (previously only REJECTED/
+   * UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Submit
+   * under a fresh idempotency key alongside this field.
+   */
   correctsInvoiceId?: string;
   customerReference?: string;
   /**
-   * ES SII block 3: `{ es: { duaNumber } }` — NumeroDUA, required and only
-   * meaningful when a `transactionDirection: 'purchase'` line's tipoFactura
-   * resolves to F5 (import). Missing on an import produces NEEDS_INFO naming
-   * `countrySpecific.es.duaNumber`.
+   * Country-specific fields, keyed by lowercase ISO country code. Known keys:
+   * - `es.duaNumber` — NumeroDUA (Documento Único Administrativo), required
+   *   and only meaningful when a `transactionDirection: 'purchase'` line's
+   *   tipoFactura resolves to F5 (import). Missing on an import produces
+   *   NEEDS_INFO naming `countrySpecific.es.duaNumber`.
+   * - `hu.exchangeRate` — exchange rate to HUF for this invoice date.
+   *   Required whenever `currency` is not HUF.
+   * - `hu.invoiceAppearance` — one of PAPER/ELECTRONIC/EDI/UNKNOWN, overriding
+   *   the default appearance (PAPER for a resolved PRIVATE_PERSON buyer,
+   *   ELECTRONIC otherwise).
+   * - `de.invoiceFormat` — per-request override of ZUGFERD vs. XRECHNUNG.
+   * - `de.leitwegId` — BT-10 German public-sector routing ID (XRechnung
+   *   only); falls back to the top-level `buyerReference` when omitted.
    */
   countrySpecific?: Record<string, unknown>;
   notifyBuyer?: boolean;
