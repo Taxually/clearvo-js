@@ -77,6 +77,12 @@ const result = await client.calculateTax({
     billingAddress: { country: 'FR' },
   },
   lineItems: [{ id: '1', amount: 10000, productName: 'SaaS subscription' }],
+  // Per line, supply EITHER `amount` OR `unitPrice` with `quantity` — e.g.
+  // `{ id: '2', unitPrice: 2500, quantity: 4, productName: 'Seats' }`, which
+  // the engine multiplies and rounds once (amount = 10000) so you don't
+  // absorb per-unit rounding. US line results also carry a per-authority
+  // `jurisdictionBreakdown` (state/county/city/district) that sums to the
+  // line's tax.
 });
 // result.taxCode === 'K'  (intra-EU reverse charge)
 // result.summary.totalTax === 0
