@@ -376,7 +376,28 @@ export interface TaxCalculateRequest {
   };
   lineItems: Array<{
     id: string;
-    amount: number;
+    /**
+     * Line total in the transaction currency. Supply EITHER `amount` OR
+     * `unitPrice` together with `quantity` — never both forms, and never
+     * neither (the API rejects both cases). When you supply `unitPrice`
+     * instead, the engine derives `amount = round2(unitPrice * quantity)` and
+     * taxes that.
+     */
+    amount?: number;
+    /**
+     * Per-unit price in the transaction currency — the alternative to
+     * supplying `amount` directly. When present, `quantity` is REQUIRED and
+     * the line total is computed once as `round2(unitPrice * quantity)` and
+     * taxed as `amount`, so you do not pre-multiply and absorb per-unit
+     * rounding error. Mutually exclusive with `amount`; a `unitPrice` with no
+     * `quantity` is rejected (never silently assumed to be 1). Non-negative.
+     */
+    unitPrice?: number;
+    /**
+     * Number of units. REQUIRED when `unitPrice` is supplied (the two together
+     * define the line total); otherwise informational only — when `amount` is
+     * supplied directly, quantity is not consumed by the engine. Non-negative.
+     */
     quantity?: number;
     productName: string;
     taxCategory?: string;
@@ -462,6 +483,29 @@ export interface TaxCalculateResponse {
       bandTier?: 'OVERRIDE' | 'COMMODITY_CODE' | 'EXPLICIT' | 'COUNTRY' | 'SCOPE_EU' | 'SCOPE_US' | 'SCOPE_GLOBAL' | 'FALLBACK' | 'DEGRADED';
       [key: string]: unknown;
     };
+    /**
+     * US only: this line's tax broken out per taxing authority (state / county
+     * / district / city / local), summing to this line's `taxAmount`. Surfaces
+     * the same per-authority split the engine persists and reports at the
+     * transaction level, so a filing/reconciliation integrator can see and
+     * file each authority's share. Present only when this line was taxed at
+     * exactly the resolved combined rate — absent for non-US lines, lines with
+     * a rate override, a partial taxable basis, or a home-rule city-component
+     * split (where the components would not reconcile to the charged tax), and
+     * on the engine-error fallback path.
+     */
+    jurisdictionBreakdown?: Array<{
+      /** STATE, COUNTY, DISTRICT (county district), CITY, or LOCAL (city district). */
+      level: string;
+      /** Taxing-authority name as reported by the rate source, e.g. "CALIFORNIA". */
+      name: string;
+      /** Rate-source tax_type code: 01 state, 02 county, 03 county district, 04 city, 05 city district. */
+      taxType: string;
+      /** This authority's own rate as a fraction, e.g. 0.0725 for 7.25%. */
+      rate: number;
+      /** This authority's share of the line's tax. */
+      taxAmount: number;
+    }>;
   }>;
 }
 
