@@ -587,16 +587,20 @@ const TOOLS = [
       'notes) OR an AT webservice sub-user + password with no series — in which case FT/NC/ND series are registered ' +
       'with AT automatically (RegistarSerie/ConsultarSeries). subUser must be this entity\'s own NIF ("NIF/n") or the ' +
       'call fails with 400 PT_SUBUSER_NIF_MISMATCH. Required before issuing live Portuguese invoices — every invoice ' +
-      'carries ATCUD = validationCode-sequence. Sandbox needs none of this.',
+      'carries ATCUD = validationCode-sequence. Sandbox needs none of this. Re-saving without the series keeps the ' +
+      'stored series (never wipes or re-registers); re-saving without the password keeps the stored password. The ' +
+      'response echoes series { FT, NC, ND } (each { series, validationCode, source: manual|auto|sandbox } or null), ' +
+      'seriesRegistration { status: manual|registered|pending_platform_certification|drift|none, message } and ' +
+      'credentialStatus (ok|setup_needed|pending_platform_certification).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         nif:                      { type: 'string', description: '9-digit Portuguese NIF, no "PT" prefix.' },
         invoiceSeries:            { type: 'string', description: 'Series registered with AT for invoices (FT), e.g. "A2026". Letters and digits only. Omit (with subUser + password set) to have Clearvo register FT/NC/ND with AT automatically.' },
         invoiceValidationCode:    { type: 'string', description: 'ATCUD validation code AT issued for the invoice series. Required iff invoiceSeries is set.' },
-        creditNoteSeries:         { type: 'string', description: 'Series registered for credit notes (NC). Falls back to the invoice series when omitted.' },
+        creditNoteSeries:         { type: 'string', description: 'Series registered for credit notes (NC). Without one, a live credit note holds SETUP_NEEDED (PT_SERIES_NOT_CONFIGURED) — there is no fallback onto the invoice series.' },
         creditNoteValidationCode: { type: 'string', description: 'ATCUD validation code for the credit-note series. Required iff creditNoteSeries is set.' },
-        debitNoteSeries:          { type: 'string', description: 'Series registered for debit notes (ND). Falls back to the invoice series when omitted.' },
+        debitNoteSeries:          { type: 'string', description: 'Series registered for debit notes (ND). Without one, a live debit note holds SETUP_NEEDED (PT_SERIES_NOT_CONFIGURED) — there is no fallback onto the invoice series.' },
         debitNoteValidationCode:  { type: 'string', description: 'ATCUD validation code for the debit-note series. Required iff debitNoteSeries is set.' },
         subUser:                  { type: 'string', description: 'AT webservice sub-user in the form NIF/n (e.g. 500000000/1) — must share this entity\'s own NIF. With password and no manual series, triggers automatic AT series registration.' },
         password:                 { type: 'string', description: 'Sub-user password. Required iff subUser is set. Never returned.' },
@@ -1450,21 +1454,25 @@ const TOOLS = [
       required: ['clientTaxCodeId'],
     },
   },
-  // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Always requests
-  // the JSON summary shape (format=summary): callApi() parses every response as JSON, so the
-  // raw XML file body itself is never a fit shape for this transport — a caller who wants the
-  // actual XML uses GET /v1/pt/saft directly.
+  // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Only ever requests a
+  // JSON shape (format=summary by default, or format=status): callApi() parses every response as
+  // JSON, so the raw XML file body itself is never a fit shape for this transport — a caller who
+  // wants the actual XML uses GET /v1/pt/saft directly.
   {
     name: 'get_pt_monthly_saft',
     description:
-      'Get the coverage summary for this entity\'s Portugal AT SAF-T (PT) 1.04_01 monthly billing file — ' +
+      'Get the coverage picture for this entity\'s Portugal AT monthly tax-authority file (SAF-T (PT) 1.04_01) — ' +
       'every FT/NC/ND Clearvo issued for the entity in the given calendar month, per Portaria 302/2016. ' +
-      'Always returns the JSON manifest (equivalent to GET /v1/pt/saft?format=summary): { ok, period, nif, ' +
-      'numberOfEntries, sha256, manifest, xsdValidated, xsdValid, filename } — manifest lists every ' +
-      'document (invoiceNo, seriesType, seqNum, issueDate, grossTotal). This tool never returns the XML ' +
-      'file itself; download it via GET /v1/pt/saft?period=... directly. A month with no PT documents at ' +
-      'all is a valid, empty result (numberOfEntries 0), never an error. 400 means period is missing/not ' +
-      'YYYY-MM, or the entity has no registered PT NIF. 409 means generation was refused: code ' +
+      'format "summary" (default) returns the JSON manifest (equivalent to GET /v1/pt/saft?format=summary): ' +
+      '{ ok, period, nif, numberOfEntries, sha256, manifest, xsdValidated, xsdValid, filename } — manifest lists ' +
+      'every document (invoiceNo, seriesType, seqNum, issueDate, grossTotal); this builds the whole file. ' +
+      'format "status" is the CHEAP counts-only view (no file build): { ok, applicable, period, defaultPeriod, ' +
+      'documentCount, reportedToAt, notReportedToAt, dueDate, attention, attentionMessage, summaryLabel } — use it ' +
+      'to answer "is August done / what is still not reported to AT / when is it due"; applicable:false (200) ' +
+      'when the entity has no PT registration. This tool never returns the XML file itself; download it via ' +
+      'GET /v1/pt/saft?period=... directly. A month with no PT documents at all is a valid, empty result ' +
+      '(numberOfEntries 0), never an error. 400 means period is missing/not YYYY-MM, or (summary only) the ' +
+      'entity has no registered PT NIF. 409 (summary only) means generation was refused: code ' +
       'PT_SAFT_SERIES_GAP (an unexplained numbering gap — see gaps for exactly which numbers) or ' +
       'PT_SAFT_NEEDS_INFO (one or more documents need more information before the file can be built — see ' +
       'issues for which ones and why).',
@@ -1472,6 +1480,7 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         period: { type: 'string', description: 'Calendar month to summarise, as "YYYY-MM" (e.g. "2026-06").' },
+        format: { type: 'string', enum: ['summary', 'status'], description: '"summary" (default) builds the file and returns its manifest; "status" returns the cheap counts/attention view without building anything.' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['period'],
@@ -1783,8 +1792,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'get_pt_monthly_saft': {
-      const { period, entityId } = args as { period: string; entityId?: string };
-      const qs = new URLSearchParams({ period, format: 'summary' });
+      const { period, entityId, format } = args as { period: string; entityId?: string; format?: string };
+      // Only the two JSON shapes are ever requested here — never the XML file (see the tool's
+      // own comment above). Anything other than 'status' falls back to the summary manifest.
+      const qs = new URLSearchParams({ period, format: format === 'status' ? 'status' : 'summary' });
       return callApi('GET', `/pt/saft?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
