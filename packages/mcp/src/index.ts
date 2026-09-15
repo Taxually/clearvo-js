@@ -582,26 +582,31 @@ const TOOLS = [
   {
     name: 'set_pt_credentials',
     description:
-      'Register Portugal AT (Autoridade Tributária) e-invoicing credentials for an entity: the NIF, the document series ' +
-      'registered with AT and its ATCUD validation code (invoices; optionally credit notes and debit notes), and optionally ' +
-      'the AT webservice sub-user + password. Required before issuing live Portuguese invoices — every invoice carries ' +
-      'ATCUD = validationCode-sequence, and AT issues the validation code to the taxpayer when they register a series ' +
-      '(Portal das Finanças → Faturação → Séries). Sandbox needs none of this.',
+      'Register Portugal AT (Autoridade Tributária) e-invoicing credentials for an entity: the NIF, plus EITHER the ' +
+      'document series registered with AT and its ATCUD validation code (invoices; optionally credit notes and debit ' +
+      'notes) OR an AT webservice sub-user + password with no series — in which case FT/NC/ND series are registered ' +
+      'with AT automatically (RegistarSerie/ConsultarSeries). subUser must be this entity\'s own NIF ("NIF/n") or the ' +
+      'call fails with 400 PT_SUBUSER_NIF_MISMATCH. Required before issuing live Portuguese invoices — every invoice ' +
+      'carries ATCUD = validationCode-sequence. Sandbox needs none of this. Re-saving without the series keeps the ' +
+      'stored series (never wipes or re-registers); re-saving without the password keeps the stored password. The ' +
+      'response echoes series { FT, NC, ND } (each { series, validationCode, source: manual|auto|sandbox } or null), ' +
+      'seriesRegistration { status: manual|registered|pending_platform_certification|drift|none, message } and ' +
+      'credentialStatus (ok|setup_needed|pending_platform_certification).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         nif:                      { type: 'string', description: '9-digit Portuguese NIF, no "PT" prefix.' },
-        invoiceSeries:            { type: 'string', description: 'Series registered with AT for invoices (FT), e.g. "A2026". Letters and digits only.' },
-        invoiceValidationCode:    { type: 'string', description: 'ATCUD validation code AT issued for the invoice series.' },
-        creditNoteSeries:         { type: 'string', description: 'Series registered for credit notes (NC). Falls back to the invoice series when omitted.' },
+        invoiceSeries:            { type: 'string', description: 'Series registered with AT for invoices (FT), e.g. "A2026". Letters and digits only. Omit (with subUser + password set) to have Clearvo register FT/NC/ND with AT automatically.' },
+        invoiceValidationCode:    { type: 'string', description: 'ATCUD validation code AT issued for the invoice series. Required iff invoiceSeries is set.' },
+        creditNoteSeries:         { type: 'string', description: 'Series registered for credit notes (NC). Without one, a live credit note holds SETUP_NEEDED (PT_SERIES_NOT_CONFIGURED) — there is no fallback onto the invoice series.' },
         creditNoteValidationCode: { type: 'string', description: 'ATCUD validation code for the credit-note series. Required iff creditNoteSeries is set.' },
-        debitNoteSeries:          { type: 'string', description: 'Series registered for debit notes (ND). Falls back to the invoice series when omitted.' },
+        debitNoteSeries:          { type: 'string', description: 'Series registered for debit notes (ND). Without one, a live debit note holds SETUP_NEEDED (PT_SERIES_NOT_CONFIGURED) — there is no fallback onto the invoice series.' },
         debitNoteValidationCode:  { type: 'string', description: 'ATCUD validation code for the debit-note series. Required iff debitNoteSeries is set.' },
-        subUser:                  { type: 'string', description: 'AT webservice sub-user in the form NIF/n (e.g. 500000000/1). Optional — stored for series-communication and SAF-T submission.' },
+        subUser:                  { type: 'string', description: 'AT webservice sub-user in the form NIF/n (e.g. 500000000/1) — must share this entity\'s own NIF. With password and no manual series, triggers automatic AT series registration.' },
         password:                 { type: 'string', description: 'Sub-user password. Required iff subUser is set. Never returned.' },
         entityId:                 { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
-      required: ['nif', 'invoiceSeries', 'invoiceValidationCode'],
+      required: ['nif'],
     },
   },
   {
@@ -1076,7 +1081,8 @@ const TOOLS = [
     name: 'get_reporting_obligations',
     description:
       'Read the domestic e-reporting/e-invoicing regime toggles under the "Tax Reporting" solution for this ' +
-      'entity — currently France e-reporting (fr_ereporting) and Spain SII (es_sii). Each entry returns enabled, ' +
+      'entity — currently France e-reporting (fr_ereporting), Spain SII (es_sii), and Portugal invoice-data ' +
+      'communication to AT (pt_efatura). Each entry returns enabled, ' +
       'whether the entity is registered in that country (registered: false means toggling is not yet meaningful — ' +
       'point the user at add_registration first), effectiveFrom (the date the regime actually started applying, ' +
       'null if never enabled), submissionMode, and setupStatus/setupStatusNote (an internal ops-set progress ' +
@@ -1094,13 +1100,13 @@ const TOOLS = [
     name: 'update_reporting_obligations',
     description:
       'Enable or disable domestic e-reporting/e-invoicing regimes for this entity (currently fr_ereporting, ' +
-      'es_sii, and es_verifactu). Call get_reporting_obligations first to see current state. Pass obligations as ' +
+      'es_sii, es_verifactu, and pt_efatura). Call get_reporting_obligations first to see current state. Pass obligations as ' +
       'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
       '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
       '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
       'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii and fr_ereporting allow ' +
       '"immediate", "batch_auto" and "batch_review" — default "batch_review": nothing is sent until a human confirms the ' +
-      'batch; e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). Enabling fr_ereporting/es_sii also requires ' +
+      'batch; pt_efatura and e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). Enabling fr_ereporting/es_sii/pt_efatura also requires ' +
       'the entity already hold a current STANDARD registration for that regime\'s own country — otherwise the call ' +
       'fails REGISTRATION_REQUIRED with a { ok:false, code, message, country, entityId, fixUrl } body (fixUrl is ' +
       'an absolute URL at "/registrations?country=<cc>&returnTo=/jurisdictions" on this API\'s own host); point ' +
@@ -1448,6 +1454,38 @@ const TOOLS = [
       required: ['clientTaxCodeId'],
     },
   },
+  // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Only ever requests a
+  // JSON shape (format=summary by default, or format=status): callApi() parses every response as
+  // JSON, so the raw XML file body itself is never a fit shape for this transport — a caller who
+  // wants the actual XML uses GET /v1/pt/saft directly.
+  {
+    name: 'get_pt_monthly_saft',
+    description:
+      'Get the coverage picture for this entity\'s Portugal AT monthly tax-authority file (SAF-T (PT) 1.04_01) — ' +
+      'every FT/NC/ND Clearvo issued for the entity in the given calendar month, per Portaria 302/2016. ' +
+      'format "summary" (default) returns the JSON manifest (equivalent to GET /v1/pt/saft?format=summary): ' +
+      '{ ok, period, nif, numberOfEntries, sha256, manifest, xsdValidated, xsdValid, filename } — manifest lists ' +
+      'every document (invoiceNo, seriesType, seqNum, issueDate, grossTotal); this builds the whole file. ' +
+      'format "status" is the CHEAP counts-only view (no file build): { ok, applicable, period, defaultPeriod, ' +
+      'documentCount, reportedToAt, notReportedToAt, dueDate, attention, attentionMessage, summaryLabel } — use it ' +
+      'to answer "is August done / what is still not reported to AT / when is it due"; applicable:false (200) ' +
+      'when the entity has no PT registration. This tool never returns the XML file itself; download it via ' +
+      'GET /v1/pt/saft?period=... directly. A month with no PT documents at all is a valid, empty result ' +
+      '(numberOfEntries 0), never an error. 400 means period is missing/not YYYY-MM, or (summary only) the ' +
+      'entity has no registered PT NIF. 409 (summary only) means generation was refused: code ' +
+      'PT_SAFT_SERIES_GAP (an unexplained numbering gap — see gaps for exactly which numbers) or ' +
+      'PT_SAFT_NEEDS_INFO (one or more documents need more information before the file can be built — see ' +
+      'issues for which ones and why).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        period: { type: 'string', description: 'Calendar month to summarise, as "YYYY-MM" (e.g. "2026-06").' },
+        format: { type: 'string', enum: ['summary', 'status'], description: '"summary" (default) builds the file and returns its manifest; "status" returns the cheap counts/attention view without building anything.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['period'],
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -1751,6 +1789,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'delete_client_tax_code': {
       const { clientTaxCodeId, entityId } = args as { clientTaxCodeId: string; entityId?: string };
       return callApi('DELETE', `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_pt_monthly_saft': {
+      const { period, entityId, format } = args as { period: string; entityId?: string; format?: string };
+      // Only the two JSON shapes are ever requested here — never the XML file (see the tool's
+      // own comment above). Anything other than 'status' falls back to the summary manifest.
+      const qs = new URLSearchParams({ period, format: format === 'status' ? 'status' : 'summary' });
+      return callApi('GET', `/pt/saft?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     default:
