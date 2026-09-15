@@ -597,7 +597,6 @@ const TOOLS = [
         debitNoteValidationCode:  { type: 'string', description: 'ATCUD validation code for the debit-note series. Required iff debitNoteSeries is set.' },
         subUser:                  { type: 'string', description: 'AT webservice sub-user in the form NIF/n (e.g. 500000000/1). Optional — stored for series-communication and SAF-T submission.' },
         password:                 { type: 'string', description: 'Sub-user password. Required iff subUser is set. Never returned.' },
-        environment:              { type: 'string', enum: ['production', 'test'], description: 'Defaults to "production".' },
         entityId:                 { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['nif', 'invoiceSeries', 'invoiceValidationCode'],
