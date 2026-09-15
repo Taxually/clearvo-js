@@ -578,6 +578,31 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_pt_credentials',
+    description:
+      'Register Portugal AT (Autoridade Tributária) e-invoicing credentials for an entity: the NIF, the document series ' +
+      'registered with AT and its ATCUD validation code (invoices; optionally credit notes and debit notes), and optionally ' +
+      'the AT webservice sub-user + password. Required before issuing live Portuguese invoices — every invoice carries ' +
+      'ATCUD = validationCode-sequence, and AT issues the validation code to the taxpayer when they register a series ' +
+      '(Portal das Finanças → Faturação → Séries). Sandbox needs none of this.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        nif:                      { type: 'string', description: '9-digit Portuguese NIF, no "PT" prefix.' },
+        invoiceSeries:            { type: 'string', description: 'Series registered with AT for invoices (FT), e.g. "A2026". Letters and digits only.' },
+        invoiceValidationCode:    { type: 'string', description: 'ATCUD validation code AT issued for the invoice series.' },
+        creditNoteSeries:         { type: 'string', description: 'Series registered for credit notes (NC). Falls back to the invoice series when omitted.' },
+        creditNoteValidationCode: { type: 'string', description: 'ATCUD validation code for the credit-note series. Required iff creditNoteSeries is set.' },
+        debitNoteSeries:          { type: 'string', description: 'Series registered for debit notes (ND). Falls back to the invoice series when omitted.' },
+        debitNoteValidationCode:  { type: 'string', description: 'ATCUD validation code for the debit-note series. Required iff debitNoteSeries is set.' },
+        subUser:                  { type: 'string', description: 'AT webservice sub-user in the form NIF/n (e.g. 500000000/1). Optional — stored for series-communication and SAF-T submission.' },
+        password:                 { type: 'string', description: 'Sub-user password. Required iff subUser is set. Never returned.' },
+        entityId:                 { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['nif', 'invoiceSeries', 'invoiceValidationCode'],
+    },
+  },
+  {
     name: 'set_hu_credentials',
     description:
       'Register Hungary NAV Online Számla credentials for an entity: tax number and technical user details. ' +
@@ -1495,6 +1520,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'set_hu_credentials': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/hu/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_pt_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/pt/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'set_eg_credentials': {
