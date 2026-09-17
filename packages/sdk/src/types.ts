@@ -10,6 +10,10 @@ export interface Entity {
   vatNumber: string | null;
   isDefault: boolean;
   createdAt: string;
+  /** Mexico only. Defaults to 'sat_pull' for every entity — meaningless (but always present) for a non-MX entity. */
+  mxIngestionMode?: 'sat_pull' | 'client_push';
+  /** Mexico only. ISO date (YYYY-MM-DD), or null if unset. */
+  mxIngestionStartDate?: string | null;
 }
 
 export interface CreateEntityInput {
@@ -32,6 +36,14 @@ export interface UpdateEntityInput {
   vatNumber?: string;
   /** Default for InvoiceRequest.notifyBuyer — applies whenever a send omits its own override. */
   notifyBuyerByDefault?: boolean;
+  /**
+   * Mexico only. 'sat_pull' (default) requires an e.firma/CSD on file first (POST /mx/credentials —
+   * not yet wrapped by this SDK) or the update is rejected with MX_CREDENTIALS_REQUIRED.
+   * 'client_push' needs no credential — the entity's own AP/ERP system pushes CFDI XML directly.
+   */
+  mxIngestionMode?: 'sat_pull' | 'client_push';
+  /** Mexico only. ISO date (YYYY-MM-DD) or null — earliest CFDI issue date the SAT-pull poller's rolling lookback window considers. */
+  mxIngestionStartDate?: string | null;
 }
 
 export interface InvoiceSubmitResponse {
@@ -329,6 +341,8 @@ export interface ListInvoicesParams {
   beforeId?: string;
   country?: string;
   status?: string;
+  /** ISO 8601 timestamp — only invoices whose Clearvo-side created_at is strictly after this. A monotonic ingestion cursor, distinct from issueDate; most relevant for Mexico CFDIs given SAT's own multi-day publishing lag. */
+  receivedAfter?: string;
 }
 
 export interface ListInvoicesResponse {
