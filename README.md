@@ -14,19 +14,19 @@ Three ways to connect, from least to most manual setup:
 
 ### Claude Desktop Extension (one click, no config editing)
 
-[**Download clearvo.mcpb**](https://github.com/fergalg/clearvo-js/releases/latest/download/clearvo.mcpb) and double-click it (or drag it onto Claude Desktop) — Desktop shows an install dialog with a form for your API key instead of asking you to hand-edit JSON. Desktop-only; not read by Claude Code, Cursor, or Windsurf.
+[**Download clearvo.mcpb**](https://github.com/Taxually/clearvo-js/releases/latest/download/clearvo.mcpb) and double-click it (or drag it onto Claude Desktop) — Desktop shows an install dialog with a form for your API key instead of asking you to hand-edit JSON. Desktop-only; not read by Claude Code, Cursor, or Windsurf.
 
 Or build it yourself from a clone (the build script and manifest aren't published to npm — installing `@clearvo/mcp` alone won't include them):
 
 ```bash
-git clone https://github.com/fergalg/clearvo-js && cd clearvo-js
+git clone https://github.com/Taxually/clearvo-js && cd clearvo-js
 npm install && cd packages/mcp && npm run build:mcpb
 ```
 
 ### Claude Code plugin
 
 ```
-/plugin marketplace add fergalg/clearvo-js
+/plugin marketplace add Taxually/clearvo-js
 /plugin install clearvo@clearvo
 ```
 
