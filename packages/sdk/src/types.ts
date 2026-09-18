@@ -435,6 +435,23 @@ export interface TaxCalculateRequest {
      */
     commodityCode?: string;
     amountIncludesTax?: boolean;
+    /**
+     * When true, the customer claims exemption for this line item with no
+     * ECM certificate on file yet. A real certificate — matched via a
+     * direct certificate reference, or auto-looked-up by `customer.ref` —
+     * always takes precedence when one covers the line; this only fires
+     * when none does.
+     */
+    exempt?: boolean;
+    /**
+     * Self-asserted reason for THIS line's exempt claim — only meaningful
+     * alongside `exempt: true` on this SAME line; supplying it without
+     * `exempt: true` on that line returns a 422. Different lines in one
+     * request may carry different reasons. Omit while `exempt: true` to
+     * default to `'BLANKET_OTHER'`. Echoed back on the response line item's
+     * own `exemptionReason` field.
+     */
+    exemptionReason?: 'RESALE' | 'MANUFACTURING' | 'AGRICULTURAL' | 'ENERGY' | 'EXEMPT_ORG' | 'GOVERNMENT' | 'DIRECT_PAY' | 'BLANKET_OTHER';
   }>;
   vatValidation?: 'full' | 'format' | 'none';
   vatUnverifiableFallback?: 'conservative' | 'permissive';
@@ -520,6 +537,30 @@ export interface TaxCalculateResponse {
       /** This authority's share of the line's tax. */
       taxAmount: number;
     }>;
+    /**
+     * Present only when this line's exemption came from an inline
+     * `exempt: true` claim with NO certificate on file — the request's own
+     * `exemptionReason`, or `'BLANKET_OTHER'` if omitted. A plain echo; it
+     * never implies a certificate record exists (unlike a real certificate
+     * match, which this SDK does not yet type separately — see
+     * `pendingCertificates` below for the audit-trail record a real
+     * certificate match would instead attach to).
+     */
+    exemptionReason?: 'RESALE' | 'MANUFACTURING' | 'AGRICULTURAL' | 'ENERGY' | 'EXEMPT_ORG' | 'GOVERNMENT' | 'DIRECT_PAY' | 'BLANKET_OTHER';
+  }>;
+  /**
+   * Present when one or more inline `exempt: true` claims (with no matching
+   * active ECM certificate) created new PENDING_CERTIFICATE
+   * exemption-certificate records on this call — only when `customer.ref`
+   * was also supplied.
+   */
+  pendingCertificates?: Array<{
+    certId: string;
+    certRef: string;
+    /** Link to review/upload the actual certificate in the Clearvo dashboard. */
+    ecmUrl: string;
+    /** The reason recorded on this row — that line's own `exemptionReason`, or `'BLANKET_OTHER'` if it omitted one. */
+    certificateType: 'RESALE' | 'MANUFACTURING' | 'AGRICULTURAL' | 'ENERGY' | 'EXEMPT_ORG' | 'GOVERNMENT' | 'DIRECT_PAY' | 'BLANKET_OTHER';
   }>;
 }
 
