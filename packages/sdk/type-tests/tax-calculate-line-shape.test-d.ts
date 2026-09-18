@@ -44,5 +44,30 @@ if (_breakdown) {
   void _taxAmount;
 }
 
+// exempt: true with a self-asserted exemptionReason — no certificate on
+// file yet. exemptionReason requires exempt: true on the SAME line (a
+// server-side 422, not something the type system enforces).
+const _withInlineExemptClaim: TaxCalculateRequest['lineItems'][number] = {
+  id: '3',
+  amount: 5000,
+  productName: 'Widget',
+  exempt: true,
+  exemptionReason: 'GOVERNMENT',
+};
+void _withInlineExemptClaim;
+
+// The response echoes the resolved reason on the line, separately from
+// pendingCertificates at the top level (only present when customer.ref was
+// also supplied).
+const _exemptionReasonEcho: TaxCalculateResponse['lineItems'][number]['exemptionReason'] = _resp.lineItems[0]?.exemptionReason;
+const _pendingCert = _resp.pendingCertificates?.[0];
+if (_pendingCert) {
+  const _certId: string = _pendingCert.certId;
+  const _certificateType: string = _pendingCert.certificateType;
+  void _certId;
+  void _certificateType;
+}
+void _exemptionReasonEcho;
+
 void _withAmount;
 void _withUnitPrice;
