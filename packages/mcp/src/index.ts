@@ -123,11 +123,52 @@ const TOOLS = [
     name: 'submit_invoice',
     description:
       'Submit a B2B invoice to a national tax authority for clearance or registration. ' +
-      'Required in Italy (SDI), Poland (KSeF), Romania (ANAF), Spain (SII via VeriFACTU), ' +
+      'Required in Italy (SDI), Poland (KSeF), Romania (ANAF), Spain (SII or VeriFactu — ' +
+      'whichever this entity\'s reporting obligations enrolled it in; the two are mutually ' +
+      'exclusive per entity, resolved automatically, never chosen by the caller), ' +
       'Hungary (NAV), Greece (myDATA), and 20+ other countries. Also routes via Peppol for ' +
       'countries using the 4-corner network (Belgium, Netherlands, Germany B2G, etc.). ' +
-      'Returns a referenceId — call poll_status to track the clearance outcome. ' +
-      'Call get_requirements first if unsure what fields are needed for a country.',
+      'Returns a referenceId — call poll_status to track the clearance outcome. Every ' +
+      'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED), ' +
+      '`mandate`, and `reviewRequired`. A transaction the tax-mandate engine cannot map to any ' +
+      'country\'s compliance rule (a configuration gap, never a data problem with this specific ' +
+      'invoice) is held as `HELD_UNMAPPED_DECISION` for ANY country — not Spain-specific — with ' +
+      '`holdReason`/`actionOwner` (\'platform\') attached; a Spain SII submission additionally ' +
+      'carries `siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate), `reportBy` ' +
+      '(the AEAT deadline) and its own held/actionOwner when applicable — never the AEAT CSV, which ' +
+      'only exists once AEAT answers (see get_invoice\'s siiDetail). When the entity\'s es_sii ' +
+      'submissionMode is batch_auto or batch_review the response is 202 ACCUMULATED with `batchId`, ' +
+      '`reportBy` and `submissionMode` — the registro joined a reporting batch instead of going to AEAT ' +
+      'right away (see list_reporting_batches). ' +
+      'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
+      'resolved country is applied automatically (an entity can hold registrations in more than ' +
+      'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
+      'country). If supplied, it must match that registered tax ID exactly (a country prefix ' +
+      'is stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH ' +
+      '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). A Spain SII/VeriFactu invoice for ' +
+      'an entity with no current Spanish registration is held NEEDS_INFO (errorCode ' +
+      'MISSING_SUPPLIER_REGISTRATION, fixUrl) — add the registration, then resubmit. ' +
+      'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
+      'and — for any buyer that is not a private individual — a buyer street address plus (only ' +
+      'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
+      'these being missing or malformed fails with 422 (MISSING_HU_SUPPLIER_TAX_NUMBER, ' +
+      'MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_BUYER_TAX_NUMBER, MISSING_HU_BUYER_ADDRESS) rather ' +
+      'than a silent 200 NEEDS_INFO hold — the same behavior change applies to Germany\'s three ' +
+      'XRechnung mandatory-field gates (MISSING_LEITWEG_ID, MISSING_DE_XRECHNUNG_SELLER_CONTACT, ' +
+      'DE_XRECHNUNG_BIC_FORBIDDEN). An explicit buyerType: \'B2C\' always maps this HU buyer to NAV\'s ' +
+      'PRIVATE_PERSON classification regardless of the buyer\'s own country, exempting it from the ' +
+      'buyer-address requirement above. ' +
+      'Call get_requirements first if unsure what fields are needed for a country. ' +
+      'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
+      'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
+      'create_client_tax_code / list_tax_codes), or an AUTHORITATIVE taxTreatment (exempt/out_of_scope/zero_rated/' +
+      'reverse_charge) for a line with no configured code — a stated taxTreatment is mapped as-is, never overridden ' +
+      'by country inference. A positive vatRate with neither is reported as a domestic taxable supply at that rate ' +
+      '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held ' +
+      'NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export). An unrecognised ' +
+      'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
+      'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
+      'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -140,7 +181,7 @@ const TOOLS = [
           description: 'The issuing company (your entity). Pull name and taxId from your entity settings.',
           properties: {
             name: { type: 'string' },
-            taxId: { type: 'string', description: 'Supplier VAT registration number (include country prefix, e.g. IT12345678901)' },
+            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH.' },
             address: {
               type: 'object',
               properties: {
@@ -152,7 +193,7 @@ const TOOLS = [
               required: ['city', 'country'],
             },
           },
-          required: ['name', 'taxId', 'address'],
+          required: ['name', 'address'],
         },
         buyer: {
           type: 'object',
@@ -193,31 +234,160 @@ const TOOLS = [
               description: { type: 'string' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number', description: 'Unit price excluding tax' },
-              vatRate: { type: 'number', description: 'VAT/tax rate as a percentage (e.g. 22 for 22%). Required for standard (S) and reduced (AA) rate lines. Use 0 for zero-rated, exempt, or reverse charge lines.' },
-              taxCode: {
+              vatRate: { type: 'number', description: 'VAT/tax rate as a percentage (e.g. 22 for 22%). Required unless clientTaxCode is supplied. A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is held NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export); it is never guessed.' },
+              clientTaxCode: {
                 type: 'string',
-                description: 'EN16931 tax code: S=standard rate, AA=reduced rate, Z=zero-rated, AE=reverse charge (non-EU→EU), K=intra-EU reverse charge, G=export (zero-rated outside scope), E=exempt',
+                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
               },
+              taxTreatment: {
+                type: 'string',
+                enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'],
+                description: 'Explicit, AUTHORITATIVE tax treatment for this line, used when clientTaxCode is omitted — it is mapped as-is, never overridden by country inference. REQUIRED whenever the line is 0% (a bare 0% is held NEEDS_INFO asking why it is zero); a positive rate with no treatment maps to a domestic taxable supply at that rate. Cross-border/exempt/reverse-charge must be stated here, never inferred. Mutually exclusive with clientTaxCode.',
+              },
+              buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level buyerType, consulted only when this line has no clientTaxCode.' },
+              supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
             },
-            required: ['description', 'quantity', 'unitPrice', 'vatRate', 'taxCode'],
+            required: ['description', 'quantity', 'unitPrice'],
           },
         },
         totalAmount: { type: 'number', description: 'Net total excluding tax' },
         taxAmount: { type: 'number', description: 'Total tax amount' },
         documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note"' },
+        clientTaxCode: {
+          type: 'string',
+          description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/vatRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
+        },
+        buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional buyer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the buyer\'s own country, which also exempts the buyer from HU\'s mandatory street-address requirement.' },
+        correctsInvoiceId: {
+          type: 'string',
+          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; submit under a fresh idempotencyKey alongside this field.',
+        },
+        dryRun: {
+          type: 'boolean',
+          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting.',
+        },
         notifyBuyer: {
           type: 'boolean',
           description: 'Only meaningful for countries where no authority network delivers the invoice to the buyer (Spain, Portugal, France, Germany always; Italy only when the buyer has no SDI routing code — i.e. B2C; Poland only when the buyer has no Polish NIP — KSeF is pull-only and pull access requires the buyer\'s own registered NIP). When true and buyer.contact.email is set, Clearvo emails the buyer a link to view/download the invoice. Omit to use the entity default (see update_entity\'s notifyBuyerByDefault); true/false here overrides that default for this invoice only. Silently ignored for countries Clearvo already delivers electronically (Peppol, Italy B2B/B2G, Poland when the buyer has a NIP, Romania, Hungary, Greece, Argentina) — check the response\'s buyerNotification field to see what happened.',
+        },
+        transactionDirection: {
+          type: 'string',
+          enum: ['sale', 'purchase'],
+          description: 'ES SII block 3. Defaults to "sale" (this entity\'s own outbound/issued document — LFE). "purchase" records a vendor\'s document on this entity\'s received side (LFR) — Spain SII only; every other live country\'s purchase-direction submission currently resolves to no reporting mandate at all. supplier is still required and is the VENDOR/counterparty for a purchase (the entity\'s own Spanish registration is applied automatically, same derivation as the sale-side supplier.taxId rule).',
+        },
+        accountingDate: {
+          type: 'string',
+          description: 'PURCHASE documents only (transactionDirection: "purchase"), Spain SII, YYYY-MM-DD. The accounting-entry date (FechaRegContable) — anchors both the compliance-mandate effective-date gate and the received-book (LFR) submission deadline. Optional even for a purchase (falls back to issueDate when omitted), but the vendor\'s own issueDate is legally the wrong date for this gate, so supply it whenever the entity books on receipt.',
+        },
+        deductibleVatAmount: {
+          type: 'number',
+          description: 'PURCHASE documents only, Spain SII. CuotaDeducible — the deductible portion of input VAT on this purchase, always taken as given, never derived from the lines\' own charged amounts. An explicit 0 is a valid, distinct declaration (an exempt/non-deductible purchase) — NOT the same as omitting the field, which produces NEEDS_INFO naming this field.',
+        },
+        deductionPeriod: {
+          type: 'object',
+          description: 'Received book only, Spain SII. The VAT declaration period this deduction is actually taken in, when it differs from accountingDate\'s own month. Optional — omitted, the liquidation period defaults to accountingDate\'s own month.',
+          properties: {
+            ejercicio: { type: 'string', description: '4-digit year, e.g. "2026".' },
+            periodo: { type: 'string', description: '2-digit month, e.g. "06".' },
+          },
+        },
+        countrySpecific: {
+          type: 'object',
+          description: 'Country-specific invoice fields.',
+          properties: {
+            es: {
+              type: 'object',
+              description: 'Spain SII / VeriFactu fields.',
+              properties: {
+                duaNumber: {
+                  type: 'string',
+                  description: 'NumeroDUA (Documento Único Administrativo) — required, and only meaningful, when this purchase\'s tipoFactura resolves to F5 (import). Missing on an import produces NEEDS_INFO naming countrySpecific.es.duaNumber.',
+                },
+              },
+            },
+          },
         },
       },
       required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'buyer', 'lines', 'totalAmount', 'taxAmount'],
     },
   },
   {
+    name: 'amend_sii_report',
+    description:
+      'File an AEAT Spain SII "A1" amendment against an already-registered SII invoice — a COMPLETE ' +
+      'corrected re-registration of the document\'s content, submitted with the identical CustomerInvoiceInput ' +
+      'shape as submit_invoice. This only builds and enqueues the amendment; it never calls AEAT directly ' +
+      '(same P1/P2 split submit_invoice itself uses for Spain). Never falls back to a fresh A0 — every refusal ' +
+      'below is terminal for this request. Refuses 409 SII_NOT_ACCEPTED_AT_AEAT (the record isn\'t currently ' +
+      'Correcto/AceptadoConErrores), 409 SII_OPERATION_IN_FLIGHT (an earlier amend/cancel is still awaiting ' +
+      'AEAT\'s answer), 409 SII_BATCH_IN_FLIGHT (a batch containing it is mid-dispatch), 409 ' +
+      'AMEND_IS_RECTIFICATIVA (this is really a content correction to a rectificativa — submit a new one via ' +
+      'submit_invoice instead; amending an invoice that is ALREADY a credit/debit note is fine), 409 ' +
+      'AMEND_IDENTITY_CHANGE_NOT_ALLOWED (the corrected payload would change the IDFactura identity — supplier ' +
+      'taxId, invoiceNumber, or issueDate must exactly match the original registro), and 422 for an obligation ' +
+      'that is disabled or out of its effective date range. On success the record\'s own clearance status stays ' +
+      'ACCEPTED (this never creates a new record or changes the invoice number) — only the AEAT communication ' +
+      'ledger gains a new entry.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID (or referenceId) whose SII registration to amend — from submit_invoice or list_invoices.' },
+        idempotencyKey: { type: 'string', description: 'Optional — a stable key so a retry with the same corrected content reuses the same amendment rather than filing a second A1. Omit to derive one automatically from id + the corrected invoiceNumber/issueDate.' },
+        // The remaining properties are submit_invoice's own inputSchema (invoiceNumber,
+        // issueDate, supplier, buyer, lines, ...) — the FULL corrected document, not a
+        // field-level patch. Not re-declared here field-by-field; see submit_invoice.
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'cancel_sii_report',
+    description:
+      'File an AEAT Spain SII Baja (withdrawal) against an already-registered SII invoice — identity-only, ' +
+      'no invoice content is sent. This withdraws the SII REGISTRATION, not the invoice itself: if the invoice ' +
+      'is wrong or was refunded, issue a credit note via submit_invoice instead. Idempotent: cancelling an ' +
+      'already-cancelled invoice returns the stored cancelledAt rather than erroring, regardless of the ' +
+      'idempotencyKey presented. Refuses 409 SII_NOT_REGISTERED_AT_AEAT when the record is not currently ' +
+      'registered. On success clearance status moves to the terminal CANCELLED state.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID (or referenceId) whose SII registration to cancel — from submit_invoice or list_invoices.' },
+        reason: { type: 'string', description: 'Optional free text (<=100 chars) — recorded for audit, never sent to AEAT (the Baja envelope itself is identity-only).' },
+        idempotencyKey: { type: 'string', description: 'Optional — omit to derive one automatically from id. A same-key retry returns the stored ledger row instead of re-filing.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'get_sii_reconciliation',
+    description:
+      'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
+      'platform\'s own SII records against what AEAT itself reports for a (book, ejercicio, periodo). ' +
+      'Read-only and scheduled — there is no way to trigger a run on demand from here. Surfaces adopted counts ' +
+      '(AEAT\'s own state adopted locally for a sent-but-unanswered record), missingAtAeat (a platform-fault ' +
+      'alert — registered locally as accepted but absent from AEAT\'s own view, never silently ignored), and ' +
+      'mismatchedEstado — useful for a caller building an audit narrative. This reconciliation runs on a ' +
+      'schedule (a Container Apps job); it never accepts a request to run now. GET /v1/sii/reconciliation ' +
+      '(no id — not yet its own MCP tool) returns the latest run\'s id plus a condensed status.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The reconciliation run ID (a UUID).' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'poll_status',
     description:
       'Check the clearance or submission status of an invoice previously submitted via submit_invoice. ' +
-      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, or UNDELIVERED. ' +
+      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, UNDELIVERED, ' +
+      'NEEDS_INFO, SETUP_NEEDED, or HELD_UNMAPPED_TAX_CODE (a line\'s clientTaxCode/taxTreatment isn\'t configured ' +
+      'yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then ' +
+      'resubmit under a new idempotency key). ' +
+      'NEEDS_INFO and SETUP_NEEDED are not dead ends: call submit_invoice again with correctsInvoiceId set to ' +
+      'this invoice\'s id (a fresh idempotencyKey too) once the underlying data or setup gap is fixed. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
     inputSchema: {
@@ -236,16 +406,18 @@ const TOOLS = [
       'Determines the applicable rate, treatment (standard, reverse charge, export, exempt, IOSS), ' +
       'and EN16931 tax code for each line item. Handles EU B2B reverse charge, OSS/IOSS schemes, ' +
       'US state-level sales tax, Canadian GST/HST/PST, and more. ' +
-      'The taxCode returned maps directly to the taxCode field in submit_invoice — no conversion needed. ' +
-      'Set commit=true to record the calculation in the audit trail (required for threshold monitoring). ' +
+      'The clientTaxCode returned (when a matching one exists for this entity) maps directly to lines[].clientTaxCode in submit_invoice — no conversion needed; there is no taxCode field on submit_invoice. ' +
+      'Calculations are recorded in the audit trail and count toward compliance thresholds by default (commit defaults to true) — set commit=false explicitly for a preview/quote that should not be recorded or billed. ' +
       'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
-      'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing.',
+      'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing. ' +
+      'Each line item can also carry taxTreatmentOverride (force a rate band) or commodityCode (tariff-driven ' +
+      'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         currency: { type: 'string', description: 'ISO 4217 currency code' },
-        commit: { type: 'boolean', description: 'If true, records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Default: false (ephemeral — not stored). Set to true for real transactions.' },
+        commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
         seller: {
           type: 'object',
           properties: {
@@ -277,12 +449,18 @@ const TOOLS = [
             type: 'object',
             properties: {
               id: { type: 'string', description: 'Your line item ID' },
-              amount: { type: 'number', description: 'Line total in the transaction currency' },
+              amount: { type: 'number', description: 'Line total in the transaction currency. Supply either amount, or unitPrice with quantity — not both.' },
+              unitPrice: { type: 'number', description: 'Per-unit price in the transaction currency. Alternative to amount: the line total is computed as unitPrice × quantity (rounded once), so you do not pre-multiply and absorb per-unit rounding. Requires quantity. Supply either amount, or unitPrice with quantity — not both.' },
+              quantity: { type: 'number', description: 'Number of units. Required when unitPrice is supplied (the two define the line total); informational when amount is supplied directly.' },
               productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
               productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
               taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
+              taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'REDUCED', 'SECOND_REDUCED', 'SUPER_REDUCED', 'ZERO', 'EXEMPT'], description: 'Caller-forced rate band for this line — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
+              commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff — no separate scheme field needed, matching is jurisdiction-scoped by the line\'s own resolved country). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
+              exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
+              exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
             },
-            required: ['id', 'amount', 'productName'],
+            required: ['id', 'productName'],
           },
         },
       },
@@ -350,7 +528,8 @@ const TOOLS = [
       'anywhere yet (e.g. a new or pre-nexus business that only wants Compliance Radar to monitor for a ' +
       'future threshold breach) — this satisfies the "add-registration" onboarding step without a ' +
       'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
-      'Also handles notifyBuyerByDefault — see submit_invoice\'s notifyBuyer for what this controls.',
+      'Also handles notifyBuyerByDefault — see submit_invoice\'s notifyBuyer for what this controls. ' +
+      'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -362,6 +541,8 @@ const TOOLS = [
         postalCode: { type: 'string', description: 'Postal / ZIP code.' },
         confirmNoRegistrations: { type: 'boolean', description: 'Set true to confirm this entity has no tax registrations anywhere yet (satisfies the add-registration onboarding step without a fake registration). Set false to clear a previous confirmation.' },
         notifyBuyerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyBuyer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyBuyer override.' },
+        mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
+        mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
       },
       required: ['entityId'],
     },
@@ -404,6 +585,36 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_pt_credentials',
+    description:
+      'Register Portugal AT (Autoridade Tributária) e-invoicing credentials for an entity: the NIF, plus EITHER the ' +
+      'document series registered with AT and its ATCUD validation code (invoices; optionally credit notes and debit ' +
+      'notes) OR an AT webservice sub-user + password with no series — in which case FT/NC/ND series are registered ' +
+      'with AT automatically (RegistarSerie/ConsultarSeries). subUser must be this entity\'s own NIF ("NIF/n") or the ' +
+      'call fails with 400 PT_SUBUSER_NIF_MISMATCH. Required before issuing live Portuguese invoices — every invoice ' +
+      'carries ATCUD = validationCode-sequence. Sandbox needs none of this. Re-saving without the series keeps the ' +
+      'stored series (never wipes or re-registers); re-saving without the password keeps the stored password. The ' +
+      'response echoes series { FT, NC, ND } (each { series, validationCode, source: manual|auto|sandbox } or null), ' +
+      'seriesRegistration { status: manual|registered|pending_platform_certification|drift|none, message } and ' +
+      'credentialStatus (ok|setup_needed|pending_platform_certification).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        nif:                      { type: 'string', description: '9-digit Portuguese NIF, no "PT" prefix.' },
+        invoiceSeries:            { type: 'string', description: 'Series registered with AT for invoices (FT), e.g. "A2026". Letters and digits only. Omit (with subUser + password set) to have Clearvo register FT/NC/ND with AT automatically.' },
+        invoiceValidationCode:    { type: 'string', description: 'ATCUD validation code AT issued for the invoice series. Required iff invoiceSeries is set.' },
+        creditNoteSeries:         { type: 'string', description: 'Series registered for credit notes (NC). Without one, a live credit note holds SETUP_NEEDED (PT_SERIES_NOT_CONFIGURED) — there is no fallback onto the invoice series.' },
+        creditNoteValidationCode: { type: 'string', description: 'ATCUD validation code for the credit-note series. Required iff creditNoteSeries is set.' },
+        debitNoteSeries:          { type: 'string', description: 'Series registered for debit notes (ND). Without one, a live debit note holds SETUP_NEEDED (PT_SERIES_NOT_CONFIGURED) — there is no fallback onto the invoice series.' },
+        debitNoteValidationCode:  { type: 'string', description: 'ATCUD validation code for the debit-note series. Required iff debitNoteSeries is set.' },
+        subUser:                  { type: 'string', description: 'AT webservice sub-user in the form NIF/n (e.g. 500000000/1) — must share this entity\'s own NIF. With password and no manual series, triggers automatic AT series registration.' },
+        password:                 { type: 'string', description: 'Sub-user password. Required iff subUser is set. Never returned.' },
+        entityId:                 { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['nif'],
+    },
+  },
+  {
     name: 'set_hu_credentials',
     description:
       'Register Hungary NAV Online Számla credentials for an entity: tax number and technical user details. ' +
@@ -422,6 +633,104 @@ const TOOLS = [
         entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['taxNumber', 'login', 'password', 'signKey', 'exchangeKey'],
+    },
+  },
+  {
+    name: 'set_eg_credentials',
+    description:
+      'Register Egypt ETA (Egyptian Tax Authority) electronic invoicing credentials for an entity: registration number, ' +
+      'OAuth2 client ID/secret, and the entity\'s own eSeal certificate. ' +
+      'Required before submitting invoices to Egypt. clientId/clientSecret are issued when this entity registers Clearvo ' +
+      'as its representative ("onbehalfof") on the ETA taxpayer portal — each taxpayer grants this independently, ' +
+      'there is no Clearvo-wide credential. certPem/keyPem are the entity\'s own eSeal X.509 certificate and matching ' +
+      'private key, PEM-encoded — also per-entity, unlike some other countries where Clearvo signs on the customer\'s behalf.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        registrationNumber: { type: 'string', description: '9-digit ETA Registration Number.' },
+        clientId: { type: 'string', description: 'ETA OAuth2 Client ID.' },
+        clientSecret: { type: 'string', description: 'ETA OAuth2 Client Secret.' },
+        certPem: { type: 'string', description: 'PEM-encoded eSeal X.509 certificate, starting with -----BEGIN CERTIFICATE-----.' },
+        keyPem: { type: 'string', description: 'PEM-encoded RSA private key matching certPem.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['registrationNumber', 'clientId', 'clientSecret', 'certPem', 'keyPem'],
+    },
+  },
+  {
+    name: 'set_jo_credentials',
+    description:
+      'Register Jordan JoFotara (ISTD) electronic invoicing credentials for an entity: taxpayer number, income source ' +
+      'sequence, and Client ID/Secret Key from the JoFotara portal\'s "Integrate Device" screen. ' +
+      'Required before submitting invoices to Jordan. Note: there is no Jordan sandbox — JoFotara exposes exactly one ' +
+      'operation (real invoice submission) with no side-effect-free way to verify a credential, so unlike most other ' +
+      'countries these credentials are saved without a live test call. The first real submission is the first real test.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        taxpayerNumber: { type: 'string', description: 'The entity\'s Jordanian ISTD taxpayer number.' },
+        incomeSourceSequence: { type: 'string', description: 'Income source sequence number (تسلسل مصدر الدخل) from the JoFotara portal\'s "Integrate Device" screen — numeric.' },
+        clientId: { type: 'string', description: 'Client ID ("Current ID") from the JoFotara portal.' },
+        secretKey: { type: 'string', description: 'Secret Key from the JoFotara portal.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['taxpayerNumber', 'incomeSourceSequence', 'clientId', 'secretKey'],
+    },
+  },
+  {
+    name: 'set_mx_credentials',
+    description:
+      'Register Mexico e.firma (FIEL) credentials for an entity — the certificate/key pair SAT issued, NOT a CSD ' +
+      '(Certificado de Sello Digital, which SAT never accepts for this purpose is refused outright). Required only ' +
+      'for the sat_pull ingestion mode, where Clearvo polls SAT\'s Descarga Masiva service on the entity\'s behalf; ' +
+      'the client_push mode (push_mx_cfdi) needs no credential at all. The certificate\'s own RFC must equal this ' +
+      'entity\'s registered Mexico tax registration — a mismatch is refused. The password unlocks the key for this ' +
+      'one save request only and is never stored. There is no sandbox test mode — there is no SAT sandbox to verify against.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        certificateBase64: { type: 'string', description: 'base64(DER-encoded X.509 .cer file), exactly as issued by SAT.' },
+        keyBase64: { type: 'string', description: 'base64(DER-encoded, password-encrypted PKCS#8 .key file), exactly as issued by SAT.' },
+        password: { type: 'string', description: 'The e.firma\'s password. Never stored — used once to unlock the key for this save.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['certificateBase64', 'keyBase64', 'password'],
+    },
+  },
+  {
+    name: 'push_mx_cfdi',
+    description:
+      'Push a received Mexico CFDI 4.0 document (client_push ingestion) — for an AP/ERP system that already holds ' +
+      'a CFDI\'s XML, as an alternative to Clearvo polling SAT itself. Always accepted regardless of the entity\'s ' +
+      'ingestion mode; no e.firma credential needed. Idempotent on the CFDI\'s own UUID: pushing an already-stored ' +
+      'document returns duplicate:true, never an error. clearanceStatus PENDING means SAT has not yet published the ' +
+      'document on its own backend (or was briefly unreachable) — this is never a rejection; retry later, or rely ' +
+      'on the automatic recheck if sat_pull is also configured. Refused (with a coded, plain-English error) for a ' +
+      'CFDI whose Receptor RFC does not match this entity\'s own registered Mexico RFC, for the generic "público en ' +
+      'general"/"extranjero sin RFC" placeholder RFCs, or for anything other than CFDI 4.0.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        documentXml: { type: 'string', description: 'The raw, byte-identical CFDI 4.0 XML as received from the issuer.' },
+        entityId: { type: 'string', description: 'Entity to receive this document into. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['documentXml'],
+    },
+  },
+  {
+    name: 'get_mx_sync_status',
+    description:
+      'Check the health of the Mexico SAT-pull poll job for an entity: when it last ran, when it last succeeded, ' +
+      'and any error. status is "not_started" (never polled — normal and permanent for a client_push-only entity, ' +
+      'which has no poll job at all), "ok" (a clean pass within the last 24h), "stale" (no clean pass in over 24h — ' +
+      'SAT\'s own backend is often slow, this is not necessarily a problem), or "error" (the last cycle hit a hard ' +
+      'failure — check the e.firma credential via set_mx_credentials). Meaningless for client_push mode.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: [],
     },
   },
   {
@@ -478,6 +787,7 @@ const TOOLS = [
         limit:     { type: 'number', description: 'Results per page (default 25, max 100)' },
         after_id:  { type: 'string', description: 'Return invoices submitted before this invoice ID (use nextCursor from a previous response)' },
         before_id: { type: 'string', description: 'Return invoices submitted after this invoice ID (use prevCursor from a previous response)' },
+        receivedAfter: { type: 'string', description: 'ISO 8601 timestamp — only invoices whose Clearvo-side received/created timestamp is strictly after this. A monotonic "what\'s new since I last checked" cursor, distinct from issueDate — most relevant for Mexico CFDIs, where SAT can publish a document days after its own issue date.' },
       },
     },
   },
@@ -488,7 +798,9 @@ const TOOLS = [
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
       'Returns everything in list_invoices plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
-      'and the submitted XML. ' +
+      'and the submitted XML. For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
+      'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
+      'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
       'or check whether a suggested action has been applied.',
     inputSchema: {
@@ -496,87 +808,6 @@ const TOOLS = [
       required: ['id'],
       properties: {
         id: { type: 'string', description: 'Clearvo invoice ID or authority reference ID (SDI ID, KSeF number, etc.)' },
-      },
-    },
-  },
-  {
-    name: 'submit_sii_record',
-    description:
-      'Submit a single Spain SII (Suministro Inmediato de Información) registro to AEAT. ' +
-      'Use this instead of submit_invoice for an entity enrolled in the SII census (obligation es_sii) — ' +
-      'SII and VeriFactu are mutually exclusive per entity, so a SII-obliged entity is never submitted via ' +
-      'submit_invoice/POST /send. Requires the entity to have completed the Annex I written authorization ' +
-      'and to hold a Spanish VAT registration — call get_setup_status first if unsure. ' +
-      'Returns a record id — call get_sii_record to check aeatStatusCode/aeatErrorCode after submission.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        invoiceType: { type: 'string', enum: ['LFE', 'LFR'], description: 'LFE = Facturas Expedidas (issued), LFR = Facturas Recibidas (received).' },
-        invoiceNumber: { type: 'string' },
-        invoiceDate: { type: 'string', description: 'ISO YYYY-MM-DD.' },
-        counterpartyNif: { type: 'string' },
-        counterpartyName: { type: 'string' },
-        baseAmount: { type: 'number' },
-        taxAmount: { type: 'number' },
-        totalAmount: { type: 'number' },
-        claveRegimen: { type: 'string', description: "Régimen especial / clave key, '01'..'16'." },
-      },
-      required: ['invoiceType', 'invoiceNumber', 'invoiceDate', 'baseAmount', 'taxAmount', 'totalAmount', 'claveRegimen'],
-    },
-  },
-  {
-    name: 'correct_sii_record',
-    description:
-      'Submit a correction (tipoComunicacion A1) for a previously-submitted SII record. ' +
-      'The original record\'s invoice fields are never updated — this always creates a new SII record ' +
-      'referencing the original via originalRecordId, with correctionSeq incremented by 1. ' +
-      'Pass the full corrected values for all fields, not just the ones that changed.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        originalRecordId: { type: 'string', description: 'id of the SII record being corrected.' },
-        invoiceType: { type: 'string', enum: ['LFE', 'LFR'] },
-        invoiceNumber: { type: 'string' },
-        invoiceDate: { type: 'string', description: 'ISO YYYY-MM-DD.' },
-        counterpartyNif: { type: 'string' },
-        counterpartyName: { type: 'string' },
-        baseAmount: { type: 'number' },
-        taxAmount: { type: 'number' },
-        totalAmount: { type: 'number' },
-        claveRegimen: { type: 'string', description: "Régimen especial / clave key, '01'..'16'." },
-      },
-      required: ['originalRecordId', 'invoiceType', 'invoiceNumber', 'invoiceDate', 'baseAmount', 'taxAmount', 'totalAmount', 'claveRegimen'],
-    },
-  },
-  {
-    name: 'list_sii_records',
-    description:
-      'List Spain SII records for the caller\'s entity. Filter by status, invoice type, or invoice date range. ' +
-      'Use this to audit submitted SII registros, find records still PENDING, or identify REJECTED/ERROR ' +
-      'records that need a correction via correct_sii_record.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        status: { type: 'string', enum: ['PENDING', 'VALIDATED', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'ERROR'] },
-        invoiceType: { type: 'string', enum: ['LFE', 'LFR'] },
-        dateFrom: { type: 'string', description: 'invoiceDate >= this value, YYYY-MM-DD.' },
-        dateTo: { type: 'string', description: 'invoiceDate <= this value, YYYY-MM-DD.' },
-        page: { type: 'number', description: 'Default 1.' },
-        limit: { type: 'number', description: 'Results per page, default 50, max 200.' },
-      },
-    },
-  },
-  {
-    name: 'get_sii_record',
-    description:
-      'Fetch full detail for a single Spain SII record by id, scoped to the caller\'s entity. ' +
-      'Returns everything in list_sii_records plus aeatErrorDetail — the full AEAT error message, ' +
-      'present when aeatErrorCode is set. Use this to investigate a specific rejection before correcting it.',
-    inputSchema: {
-      type: 'object' as const,
-      required: ['id'],
-      properties: {
-        id: { type: 'string', description: 'The SII record id, e.g. from submit_sii_record or list_sii_records.' },
       },
     },
   },
@@ -652,8 +883,13 @@ const TOOLS = [
       'Register a new webhook endpoint to receive real-time invoice status events. ' +
       'The response includes a signing secret (shown once — store it securely) used to verify ' +
       'payload authenticity via HMAC-SHA256. ' +
-      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, ' +
-      'invoice.undelivered, invoice.pending, * (all events).',
+      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
+      'invoice.pending, product.classification_changed, ' +
+      'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
+      'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
+      'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
+      '(the Spain SII reporting-batch reminder ladder for es_sii batch_auto/batch_review — payload carries batchId, book, recordCount, reportBy, daysOverdue; submissionId is the batch UUID), ' +
+      '* (all events).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -661,7 +897,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending',
+          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder',
         },
       },
       required: ['url'],
@@ -928,29 +1164,128 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_reporting_obligations',
+    description:
+      'Read the domestic e-reporting/e-invoicing regime toggles under the "Tax Reporting" solution for this ' +
+      'entity — currently France e-reporting (fr_ereporting), Spain SII (es_sii), and Portugal invoice-data ' +
+      'communication to AT (pt_efatura). Each entry returns enabled, ' +
+      'whether the entity is registered in that country (registered: false means toggling is not yet meaningful — ' +
+      'point the user at add_registration first), effectiveFrom (the date the regime actually started applying, ' +
+      'null if never enabled), submissionMode, and setupStatus/setupStatusNote (an internal ops-set progress ' +
+      'note — read-only here; update_reporting_obligations cannot set it). No regime defaults to enabled — a ' +
+      'missing/false row genuinely means the customer has not turned it on, never an inferred default. Each ' +
+      'entry also carries registrationGate: null when registered is true, otherwise ' +
+      '{ message, fixUrl } — an absolute URL to send the user to before attempting to enable this regime. Note: ' +
+      'the underlying tax registration is not itself SII/e-reporting enrollment — enabling the regime with its ' +
+      'own effectiveFrom is the separate, explicit declaration. Rows also carry allowedSubmissionModes/' +
+      'defaultSubmissionMode (batch_review for es_sii and fr_ereporting), registrationWarning (enabled but the ' +
+      'registration has since lapsed), and openBatch/modeChangeNotice when a Spain SII batch is accumulating.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'update_reporting_obligations',
+    description:
+      'Enable or disable domestic e-reporting/e-invoicing regimes for this entity (currently fr_ereporting, ' +
+      'es_sii, es_verifactu, and pt_efatura). Call get_reporting_obligations first to see current state. Pass obligations as ' +
+      'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
+      '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
+      '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
+      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii and fr_ereporting allow ' +
+      '"immediate", "batch_auto" and "batch_review" — default "batch_review": nothing is sent until a human confirms the ' +
+      'batch; pt_efatura and e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). Enabling fr_ereporting/es_sii/pt_efatura also requires ' +
+      'the entity already hold a current STANDARD registration for that regime\'s own country — otherwise the call ' +
+      'fails REGISTRATION_REQUIRED with a { ok:false, code, message, country, entityId, fixUrl } body (fixUrl is ' +
+      'an absolute URL at "/registrations?country=<cc>&returnTo=/jurisdictions" on this API\'s own host); point ' +
+      'the user at add_registration for that country first, then retry. Disabling is never subject to this ' +
+      'check — but disabling es_sii specifically fails with a 409 OBLIGATION_HAS_PENDING_BATCH ' +
+      '{ ok:false, code, batchIds, reportByDates, message, fixUrl } body when the entity has an open, ' +
+      'ready_for_review, or overdue reporting batch — pass force:true to disable anyway (the batch itself is left ' +
+      'completely untouched; it still carries a real AEAT deadline and remains confirmable). Enabling es_sii alongside es_verifactu is ' +
+      'allowed but returns a warnings[] entry (SII_EXEMPTS_VERIFACTU) explaining VeriFactu becomes redundant once ' +
+      'SII is active — surface that to the user rather than silently proceeding. setupStatus/setupStatusNote ' +
+      'cannot be set through this tool (ops-only) — pass confirm:true only once the user has reviewed the ' +
+      'obligations they are setting.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        obligations: {
+          type: 'object',
+          description: 'Map of regime code -> boolean or { enabled, effectiveFrom, submissionMode }. See tool description for the enabling rules.',
+        },
+        confirm: { type: 'boolean', description: 'Set true once the user has reviewed these obligations — marks the "Tax Reporting" Getting Started step complete, independent of whether any value changed.' },
+        force: { type: 'boolean', description: 'Set true to disable es_sii anyway despite an OBLIGATION_HAS_PENDING_BATCH 409 — confirm with the user first, since a pending batch still needs their attention.' },
+      },
+    },
+  },
+  {
+    name: 'list_reporting_batches',
+    description:
+      'List or fetch AEAT Spain SII reporting batches — the accumulated groups of invoices this entity\'s ' +
+      'batch_auto/batch_review submissionMode builds up before sending them to AEAT together. Omit id to list ' +
+      'batches (optionally filtered by status and entityId); pass id to fetch one batch\'s full detail, including ' +
+      'every record it holds (invoice number, counterparty NIF, tipo, book, base/cuota, classification, ' +
+      'warnings, reportBy, isLate, the AEAT outcome once submitted, and whether it was excluded from the batch). ' +
+      'Every response includes a vocabulary block with labels for every batch status and record state, plus a ' +
+      'server-computed overdueLabel ("N Spanish business days overdue") wherever a deadline has passed — never ' +
+      'reconstruct these from the raw status codes. A batch_review batch in status ready_for_review is waiting ' +
+      'for a human confirm (POST /v1/reporting-batches/{id}/confirm with its snapshotVersion) — nothing is sent ' +
+      'to AEAT until then.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'A specific batch ID (UUID) to fetch full detail for. Omit to list batches instead.' },
+        status: { type: 'string', enum: ['open', 'closed', 'ready_for_review', 'submitted', 'filed'], description: 'List only: filter by batch status.' },
+        entityId: { type: 'string', description: 'List only: filter by entity (organisation-scoped keys only).' },
+        page: { type: 'number', description: 'List only: 1-based page number (default 1).' },
+        limit: { type: 'number', description: 'List only: results per page (default 50, max 200).' },
+      },
+    },
+  },
+  {
+    name: 'run_reporting_batch_sweep',
+    description:
+      'SANDBOX-ONLY: manually run the reporting-batch lifecycle\'s daily close/dispatch/notify sweeps for this ' +
+      'entity right now, instead of waiting for the real overnight cron and the real Spanish-business-day clock. ' +
+      'Use this to drive an ES Spain SII batch through its full lifecycle for testing: open -> this tool closes ' +
+      'the batch and either freezes it ready_for_review (submissionMode batch_review — call ' +
+      'reporting-batches confirm next) or hands it off to AEAT (batch_auto). Fails with SANDBOX_ONLY (403) ' +
+      'against a production API key — provision a sandbox entity/key first if you don\'t have one. Both dates ' +
+      'default to this entity\'s own earliest open batch report_by date when omitted, which is what makes the ' +
+      'batch close immediately rather than waiting for its real deadline.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        today: { type: 'string', description: 'Override for the close-sweep clock (YYYY-MM-DD). Omit to default to this entity\'s own earliest open batch report_by date.' },
+        madridToday: { type: 'string', description: 'Override for the Europe/Madrid civil-date clock (YYYY-MM-DD) the ES_SII batch trigger and notify sweep gate on. Omit to default the same way as today.' },
+      },
+    },
+  },
+  {
     name: 'create_exemption_certificate',
     description:
       'Record a tax exemption certificate belonging to one of this entity\'s BUYERS — not a certificate for the ' +
       'entity itself. An exemption certificate is a document a customer provides (e.g. a US resale certificate, ' +
-      'manufacturing exemption, or nonprofit exemption letter) proving they do not owe sales tax on a purchase. ' +
-      'Only call this when you know a specific customer holds one; there is no default or fallback certificate. ' +
-      'Once created, reference it via customer.ref matching customerRef during calculate_tax so the exemption ' +
-      'is automatically applied to eligible line items. Call upload_exemption_document afterwards if you have ' +
-      'the signed PDF to attach.',
+      'manufacturing exemption, nonprofit exemption letter, or Ireland\'s Section 56 export authorisation) ' +
+      'proving they do not owe tax on a purchase. Only call this when you know a specific customer holds one; ' +
+      'there is no default or fallback certificate. Valid certificateType/formType combinations depend on ' +
+      'country and are validated server-side — an unsupported combination (including any country other than ' +
+      'US or IE) is rejected with an error, not silently accepted. Once created, reference it via customer.ref ' +
+      'matching customerRef during calculate_tax so the exemption is automatically applied to eligible line ' +
+      'items. Call upload_exemption_document afterwards if you have the signed PDF to attach.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         certificateRef: { type: 'string', description: 'Your internal reference for this certificate (e.g. "EXEMPT-2024-001").' },
         customerRef: { type: 'string', description: 'Your internal customer reference. Matched against customer.ref on calculate_tax requests to auto-apply this exemption.' },
-        certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Type of exemption claimed.' },
-        formType: { type: 'string', enum: ['SST', 'MTC', 'CUSTOM'], description: 'Standard form type, if applicable.' },
+        certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER', 'EXPORT_AUTHORIZATION'], description: 'Type of exemption claimed. RESALE/MANUFACTURING/AGRICULTURAL/ENERGY/EXEMPT_ORG/GOVERNMENT/DIRECT_PAY/BLANKET_OTHER are for country="US". EXPORT_AUTHORIZATION is for country="IE" only — Ireland\'s Revenue-issued Section 56 ("56B") authorisation letting a habitual exporter buy most goods/services at 0% VAT (excludes food/drink, accommodation, entertainment, personal services).' },
+        formType: { type: 'string', enum: ['SST', 'MTC', 'CUSTOM', '56B'], description: 'Standard form type. Optional for US (SST/MTC/CUSTOM, or a state-specific form code not in this enum). Required and must be "56B" when certificateType is EXPORT_AUTHORIZATION.' },
         customerName: { type: 'string', description: 'Exempt customer\'s name.' },
         buyerTaxId: { type: 'string', description: 'Exempt customer\'s tax ID.' },
-        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Defaults to "US".' },
-        region: { type: 'string', description: 'State or region code the exemption applies to (e.g. "CA"). US exemptions are typically state-scoped.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Defaults to "US". Only "US" and "IE" are currently supported.' },
+        region: { type: 'string', description: 'State or region code the exemption applies to (e.g. "CA"). US exemptions are typically state-scoped. Omit for IE — Section 56 authorisations are national, not sub-regional.' },
         taxCategorySlug: { type: 'string', description: 'Optional — restrict the exemption to a specific product tax category instead of all products.' },
         effectiveFrom: { type: 'string', description: 'Date the certificate becomes valid, YYYY-MM-DD.' },
-        effectiveTo: { type: 'string', description: 'Expiry date, YYYY-MM-DD. Omit for open-ended certificates.' },
+        effectiveTo: { type: 'string', description: 'Expiry date, YYYY-MM-DD. Omit for open-ended certificates. For IE, use the expiry date printed on the Revenue authorisation.' },
         entityId: { type: 'string', description: 'Entity to create the certificate under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['certificateRef', 'customerRef', 'certificateType', 'effectiveFrom'],
@@ -993,19 +1328,31 @@ const TOOLS = [
     description:
       'Create a customer master-data record. Reference it later via buyer.customerRef on submit_invoice ' +
       'instead of resending full buyer details every time. country and taxId are optional together — a B2C ' +
-      'customer with no VAT registration can have neither, but must not have one without the other.',
+      'customer with no VAT registration can have neither, but must not have one without the other. Use taxIds ' +
+      'instead of country/taxId for a customer registered in more than one country.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         name: { type: 'string', description: 'Customer name' },
-        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Required together with taxId.' },
-        taxId: { type: 'string', description: 'Tax ID. Required together with country; format-validated and normalized.' },
-        customerRef: { type: 'string', description: 'Your own reference (e.g. CRM/ERP customer id). Must be unique per entity.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of the primary registration. Required together with taxId. Mutually exclusive with taxIds.' },
+        taxId: { type: 'string', description: 'Tax ID. Required together with country; format-validated and normalized. Mutually exclusive with taxIds.' },
+        taxIds: {
+          type: 'array',
+          description: 'Full ordered list of this customer\'s tax registrations for a customer registered in more than one country — first entry is the primary. Mutually exclusive with country/taxId.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
+        customerRef: { type: 'string', description: 'Your own reference (e.g. CRM/ERP customer id). Must be unique per entity — see upsert_customer_by_ref to create-or-update by this reference directly instead of erroring on a repeat call.' },
+        addressCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of this customer\'s own mailing address — independent of country/taxIds (the tax registration country). A customer can be VAT-registered in one country and addressed in another. Defaults to the primary tax registration\'s country when omitted.' },
         addressLine1: { type: 'string' },
         addressLine2: { type: 'string' },
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
+        peppolParticipantId: { type: 'string', description: '"schemeId:value" form, e.g. "0106:12345678". Supplying it is treated as confirmed immediately.' },
         entityId: { type: 'string', description: 'Entity to create the customer under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['name'],
@@ -1015,7 +1362,7 @@ const TOOLS = [
     name: 'update_customer',
     description:
       'Update a customer\'s master data. country and taxId are treated as a pair — clearing one without the ' +
-      'other clears taxId (the pair is no longer complete).',
+      'other clears taxId (the pair is no longer complete). Mutually exclusive with taxIds.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1023,15 +1370,64 @@ const TOOLS = [
         name: { type: 'string' },
         country: { type: 'string' },
         taxId: { type: 'string' },
+        taxIds: {
+          type: 'array',
+          description: 'Full replacement list of this customer\'s tax registrations (pass [] to clear every one) — first entry becomes the primary. Mutually exclusive with country/taxId. Omit entirely to leave existing registrations untouched.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
         customerRef: { type: 'string' },
+        addressCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of this customer\'s own mailing address — independent of country/taxIds. Omit to leave unchanged; pass null to clear it.' },
         addressLine1: { type: 'string' },
         addressLine2: { type: 'string' },
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
+        peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Setting it is treated as confirmed immediately; pass null to clear it.' },
         entityId: { type: 'string', description: 'Entity the customer belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['customerId'],
+    },
+  },
+  {
+    name: 'upsert_customer_by_ref',
+    description:
+      'Create or update a customer keyed on your own customerRef instead of Clearvo\'s internal id — the natural ' +
+      'tool for syncing customer master data from your own CRM/ERP, where "push the current state of this ' +
+      'customer" runs repeatedly, not a one-time create. Unlike create_customer (which errors on a repeat ' +
+      'customerRef), this always succeeds: creates on first call, REPLACES on every later call with the same ' +
+      'customerRef — an omitted optional field clears whatever was previously stored. The one exception is ' +
+      'peppolParticipantId: omitted, it is left untouched, so a plain field sync doesn\'t wipe an identity ' +
+      'confirmed separately.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        customerRef: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP customer id).' },
+        name: { type: 'string', description: 'Customer name' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of the primary registration. Required together with taxId. Mutually exclusive with taxIds.' },
+        taxId: { type: 'string', description: 'Required together with country. Mutually exclusive with taxIds.' },
+        taxIds: {
+          type: 'array',
+          description: 'Full list of this customer\'s tax registrations, first entry is the primary. Mutually exclusive with country/taxId.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
+        addressCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of this customer\'s own mailing address — independent of country/taxIds. Defaults to the primary tax registration\'s country when omitted; full-replace semantics like every other field here (an omission on a later call clears back to that default).' },
+        addressLine1: { type: 'string' },
+        addressLine2: { type: 'string' },
+        city: { type: 'string' },
+        region: { type: 'string' },
+        postalCode: { type: 'string' },
+        peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Supplying it is treated as confirmed immediately. Omit to leave an existing confirmed value untouched.' },
+        entityId: { type: 'string', description: 'Entity to upsert the customer under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['customerRef', 'name'],
     },
   },
   {
@@ -1116,6 +1512,139 @@ const TOOLS = [
       properties: { entityId: { type: 'string', description: 'Entity to disable. Required for account-scoped keys; omit for entity-scoped keys.' } },
     },
   },
+  {
+    name: 'list_client_tax_codes',
+    description:
+      'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
+      '(e.g. a SAP two-digit code) to a Clearvo Tax Decision. Reference one via clientTaxCode on submit_invoice ' +
+      '(RECOMMENDED, instead of an explicit taxTreatment); calculate_tax returns your matching code back in its ' +
+      'response for ERP posting. The EN16931 category and rate are always computed live, never stored. See ' +
+      'also list_tax_codes for the full canonical catalogue (this platform\'s own content plus your codes).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity ID to list client tax codes for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'list_tax_codes',
+    description:
+      'List/search every tax-code row this platform knows about — Clearvo\'s own content (system_enum: a ' +
+      'connector\'s raw enum value e.g. Xero TaxType; fact: a country\'s sale-side default treatment, the same ' +
+      'vocabulary submit_invoice\'s lines[].taxTreatment accepts) plus this entity\'s own client tax codes ' +
+      '(vocabulary=client, same rows as list_client_tax_codes, in the same shape). Use this to validate a ' +
+      'clientTaxCode/taxTreatment value before calling submit_invoice, or to build a tax-code picker.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Substring match against `code`, case-insensitive.' },
+        vocabulary: { type: 'string', enum: ['system_enum', 'fact', 'client', 'tax_calc'], description: 'Omit to list every vocabulary.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 — narrows to this country\'s rows.' },
+        sourceSystem: { type: 'string', description: 'e.g. "xero" — narrows to one connector\'s system_enum rows; never matches a client row.' },
+        date: { type: 'string', description: 'YYYY-MM-DD — resolves each row\'s live rate as of this date. Defaults to now.' },
+        entityId: { type: 'string', description: 'Entity ID to scope `client` vocabulary rows to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'create_client_tax_code',
+    description:
+      'Map one of your own ERP tax codes to a Clearvo Tax Decision — movement, taxability, customerType, ' +
+      'supplyType, reverseCharge, useTaxSelfAssessed, and (where meaningful) rateBand. The EN16931 taxCode and ' +
+      'rate are computed live from these fields, never caller-supplied. `code` must be unique per entity — a ' +
+      'repeat call with an existing code fails with DUPLICATE_CODE; use update_client_tax_code instead. Two ' +
+      'different codes mapping to the identical treatment are allowed but return a non-blocking warning.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Your own ERP tax code (e.g. a SAP two-digit code), unique per entity.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 or alpha-3 country code (e.g. "DE").' },
+        region: { type: 'string', description: 'Sub-national scope (e.g. a US state). Omit for a country-wide code.' },
+        movement: { type: 'string', enum: ['local', 'intra_community', 'export', 'distance_sale', 'import', 'own_goods_movement'], description: '`export` covers every non-EU-EU B2B cross-border combination — the EU/G vs. non-EU/AE split in the derived taxCode comes from whether `country` itself is in the EU. Valid values depend on `country` and `direction`: for country="US" only `local` is valid; `intra_community`/`distance_sale` require an EU country (or Norway for `distance_sale`); `export`/`distance_sale` are sale-only, `import` is purchase-only. An invalid combination is rejected server-side, not silently accepted.' },
+        taxability: { type: 'string', enum: ['taxable', 'exempt', 'out_of_scope'] },
+        customerType: { type: 'string', enum: ['b2b', 'b2c'], description: 'Omit for a code that applies to either b2b or b2c.' },
+        supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'] },
+        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'], description: 'Required when taxability=taxable and this movement/reverseCharge combination doesn\'t already fix the EN16931 code (e.g. required for movement=local without reverseCharge). Not applicable — and ignored if sent — for intra_community, export, or a domestic reverse charge. Which bands have a real researched rate also depends on `country`/`region` (e.g. only `standard` is valid for the US) — rejected server-side if unresearched for the given jurisdiction.' },
+        reverseCharge: { type: 'boolean', description: 'Defaults to false. Independent of movement — some countries require domestic reverse charge for specific goods categories even on a wholly local sale.' },
+        useTaxSelfAssessed: { type: 'boolean', description: 'Defaults to false.' },
+        filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'], description: 'Pure metadata for a future Taxsure integration — never consumed by any computation.' },
+        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Omit for a code that applies to both.' },
+        description: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity to create the client tax code under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['code', 'country', 'movement', 'taxability', 'supplyType'],
+    },
+  },
+  {
+    name: 'update_client_tax_code',
+    description: 'Update any subset of a client tax code\'s fields. Same DUPLICATE_CODE (blocking) and duplicate-treatment (non-blocking warning) behaviour as create_client_tax_code.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        clientTaxCodeId: { type: 'string', description: 'The client tax code ID to update (from list_client_tax_codes or create_client_tax_code).' },
+        code: { type: 'string' },
+        country: { type: 'string' },
+        region: { type: 'string' },
+        movement: { type: 'string', enum: ['local', 'intra_community', 'export', 'distance_sale', 'import', 'own_goods_movement'], description: 'Valid values depend on `country`/`direction` — see create_client_tax_code.' },
+        taxability: { type: 'string', enum: ['taxable', 'exempt', 'out_of_scope'] },
+        customerType: { type: 'string', enum: ['b2b', 'b2c'] },
+        supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'] },
+        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'], description: 'Which bands are valid depends on `country`/`region` — see create_client_tax_code.' },
+        reverseCharge: { type: 'boolean' },
+        useTaxSelfAssessed: { type: 'boolean' },
+        filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'] },
+        direction: { type: 'string', enum: ['sale', 'purchase'] },
+        description: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity the client tax code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['clientTaxCodeId'],
+    },
+  },
+  {
+    name: 'delete_client_tax_code',
+    description: 'Delete a client tax code.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        clientTaxCodeId: { type: 'string', description: 'The client tax code ID to delete (from list_client_tax_codes)' },
+        entityId: { type: 'string', description: 'Entity the code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['clientTaxCodeId'],
+    },
+  },
+  // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Only ever requests a
+  // JSON shape (format=summary by default, or format=status): callApi() parses every response as
+  // JSON, so the raw XML file body itself is never a fit shape for this transport — a caller who
+  // wants the actual XML uses GET /v1/pt/saft directly.
+  {
+    name: 'get_pt_monthly_saft',
+    description:
+      'Get the coverage picture for this entity\'s Portugal AT monthly tax-authority file (SAF-T (PT) 1.04_01) — ' +
+      'every FT/NC/ND Clearvo issued for the entity in the given calendar month, per Portaria 302/2016. ' +
+      'format "summary" (default) returns the JSON manifest (equivalent to GET /v1/pt/saft?format=summary): ' +
+      '{ ok, period, nif, numberOfEntries, sha256, manifest, xsdValidated, xsdValid, filename } — manifest lists ' +
+      'every document (invoiceNo, seriesType, seqNum, issueDate, grossTotal); this builds the whole file. ' +
+      'format "status" is the CHEAP counts-only view (no file build): { ok, applicable, period, defaultPeriod, ' +
+      'documentCount, reportedToAt, notReportedToAt, dueDate, attention, attentionMessage, summaryLabel } — use it ' +
+      'to answer "is August done / what is still not reported to AT / when is it due"; applicable:false (200) ' +
+      'when the entity has no PT registration. This tool never returns the XML file itself; download it via ' +
+      'GET /v1/pt/saft?period=... directly. A month with no PT documents at all is a valid, empty result ' +
+      '(numberOfEntries 0), never an error. 400 means period is missing/not YYYY-MM, or (summary only) the ' +
+      'entity has no registered PT NIF. 409 (summary only) means generation was refused: code ' +
+      'PT_SAFT_SERIES_GAP (an unexplained numbering gap — see gaps for exactly which numbers) or ' +
+      'PT_SAFT_NEEDS_INFO (one or more documents need more information before the file can be built — see ' +
+      'issues for which ones and why).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        period: { type: 'string', description: 'Calendar month to summarise, as "YYYY-MM" (e.g. "2026-06").' },
+        format: { type: 'string', enum: ['summary', 'status'], description: '"summary" (default) builds the file and returns its manifest; "status" returns the cheap counts/attention view without building anything.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['period'],
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -1131,6 +1660,23 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
     }
 
+    case 'amend_sii_report': {
+      const { id, idempotencyKey, ...body } = args as { id: string; idempotencyKey?: string } & Record<string, unknown>;
+      const key = idempotencyKey ?? createHash('sha256').update(`amend|${id}|${JSON.stringify(body)}`).digest('hex').slice(0, 64);
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/amend-report`, body, { 'x-idempotency-key': key });
+    }
+
+    case 'cancel_sii_report': {
+      const { id, idempotencyKey, ...body } = args as { id: string; idempotencyKey?: string } & Record<string, unknown>;
+      const key = idempotencyKey ?? createHash('sha256').update(`cancel|${id}`).digest('hex').slice(0, 64);
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': key });
+    }
+
+    case 'get_sii_reconciliation': {
+      const { id } = args as { id: string };
+      return callApi('GET', `/sii/reconciliation/${encodeURIComponent(id)}`);
+    }
+
     case 'poll_status': {
       const id = args.referenceId as string;
       const country = args.country as string;
@@ -1138,6 +1684,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'calculate_tax':
+      // Forward as-is — the API defaults an omitted `commit` to true
+      // (persisted/billed/counted toward Compliance Radar), and this tool
+      // intentionally matches that default rather than overriding it. Set
+      // commit: false explicitly to get a preview instead.
       return callApi('POST', '/tax/calculate', args);
 
     case 'validate_tax_number': {
@@ -1169,6 +1719,36 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'set_hu_credentials': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/hu/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_pt_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/pt/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_eg_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/eg/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_jo_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/jo/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_mx_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/mx/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'push_mx_cfdi': {
+      const { entityId, documentXml } = args as { entityId?: string; documentXml: string };
+      return callApi('POST', '/mx/inbound/cfdi', { documentXml }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_mx_sync_status': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/mx/sync-status', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'invite_team_member':
@@ -1211,6 +1791,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.limit)     qs.set('limit',     String(args.limit));
       if (args.after_id)  qs.set('after_id',  args.after_id  as string);
       if (args.before_id) qs.set('before_id', args.before_id as string);
+      if (args.receivedAfter) qs.set('receivedAfter', args.receivedAfter as string);
       const q = qs.toString();
       return callApi('GET', `/invoices${q ? `?${q}` : ''}`);
     }
@@ -1218,29 +1799,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_invoice': {
       const id = args.id as string;
       return callApi('GET', `/invoices/${encodeURIComponent(id)}`);
-    }
-
-    case 'submit_sii_record':
-      return callApi('POST', '/sii/submit', args);
-
-    case 'correct_sii_record':
-      return callApi('POST', '/sii/correct', args);
-
-    case 'list_sii_records': {
-      const qs = new URLSearchParams();
-      if (args.status)      qs.set('status',      args.status      as string);
-      if (args.invoiceType) qs.set('invoiceType', args.invoiceType as string);
-      if (args.dateFrom)    qs.set('dateFrom',    args.dateFrom    as string);
-      if (args.dateTo)      qs.set('dateTo',      args.dateTo      as string);
-      if (args.page)        qs.set('page',        String(args.page));
-      if (args.limit)       qs.set('limit',       String(args.limit));
-      const q = qs.toString();
-      return callApi('GET', `/sii/records${q ? `?${q}` : ''}`);
-    }
-
-    case 'get_sii_record': {
-      const id = args.id as string;
-      return callApi('GET', `/sii/records/${encodeURIComponent(id)}`);
     }
 
     case 'list_products': {
@@ -1331,6 +1889,28 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, confirmed });
     }
 
+    case 'get_reporting_obligations':
+      return callApi('GET', '/tax/reporting-obligations');
+
+    case 'update_reporting_obligations': {
+      const { obligations, confirm, force } = args as { obligations?: Record<string, unknown>; confirm?: boolean; force?: boolean };
+      return callApi('PATCH', '/tax/reporting-obligations', { obligations, confirm, force });
+    }
+
+    case 'list_reporting_batches': {
+      const { id } = args as { id?: string };
+      if (id) return callApi('GET', `/reporting-batches/${encodeURIComponent(id)}`);
+      const qs = new URLSearchParams();
+      for (const k of ['status', 'entityId', 'page', 'limit'] as const) if (args[k] !== undefined) qs.set(k, String(args[k]));
+      const q = qs.toString();
+      return callApi('GET', `/reporting-batches${q ? `?${q}` : ''}`);
+    }
+
+    case 'run_reporting_batch_sweep': {
+      const { today, madridToday } = args as { today?: string; madridToday?: string };
+      return callApi('POST', '/test-helpers/reporting-batches/run-sweep', { today, madridToday });
+    }
+
     case 'list_customers': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       const qs = new URLSearchParams();
@@ -1349,6 +1929,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'update_customer': {
       const { customerId, entityId, ...updates } = args as { customerId: string; entityId?: string } & Record<string, unknown>;
       return callApi('PATCH', `/customers/${encodeURIComponent(customerId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'upsert_customer_by_ref': {
+      const { customerRef, entityId, ...rest } = args as { customerRef: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PUT', `/customers/by-ref/${encodeURIComponent(customerRef)}`, rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'delete_customer': {
@@ -1379,6 +1964,44 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'disable_skip_transactions': {
       const { entityId } = args as { entityId?: string };
       return callApi('DELETE', '/skip-transactions', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_client_tax_codes': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/tax/client-codes', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_tax_codes': {
+      const { entityId, ...params } = args as { entityId?: string } & Record<string, unknown>;
+      const qs = new URLSearchParams();
+      for (const key of ['code', 'vocabulary', 'country', 'sourceSystem', 'date'] as const) {
+        if (params[key] !== undefined) qs.set(key, String(params[key]));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'create_client_tax_code': {
+      const { entityId, ...body } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/tax/client-codes', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_client_tax_code': {
+      const { clientTaxCodeId, entityId, ...updates } = args as { clientTaxCodeId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'delete_client_tax_code': {
+      const { clientTaxCodeId, entityId } = args as { clientTaxCodeId: string; entityId?: string };
+      return callApi('DELETE', `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_pt_monthly_saft': {
+      const { period, entityId, format } = args as { period: string; entityId?: string; format?: string };
+      // Only the two JSON shapes are ever requested here — never the XML file (see the tool's
+      // own comment above). Anything other than 'status' falls back to the summary manifest.
+      const qs = new URLSearchParams({ period, format: format === 'status' ? 'status' : 'summary' });
+      return callApi('GET', `/pt/saft?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     default:

@@ -31,7 +31,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/fergalg/clearvo-js.git",
+    "url": "https://github.com/Taxually/clearvo-js.git",
     "directory": "packages/mcp"
   },
   "homepage": "https://clearvo.io/docs/claude-code",

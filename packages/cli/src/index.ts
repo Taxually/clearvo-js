@@ -60,16 +60,85 @@ const program = new Command()
   .version('0.1.0');
 
 // ── clearvo send <file> ───────────────────────────────────────────────────────
+// Hard cut: there is no `taxCode` field anywhere in the request — not on a
+// line, `shipping`, or an allowance/charge. Set `clientTaxCode` (RECOMMENDED
+// — see `clearvo tax-codes create`) or an AUTHORITATIVE `taxTreatment`
+// (exempt/out_of_scope/zero_rated/reverse_charge) per line in the JSON file
+// instead — a stated taxTreatment is mapped as-is, never overridden by
+// country inference; --client-tax-code below is the header-level convenience
+// flag for the common single-code-per-invoice case. A positive taxRate with
+// no clientTaxCode/taxTreatment is reported as a domestic taxable supply at
+// that rate (the client's rate is authoritative, never rejected as
+// unrecognised); a bare 0% with neither is held NEEDS_INFO asking why it is
+// zero. An unrecognised clientTaxCode never rejects the invoice — it's held
+// (status HELD_UNMAPPED_TAX_CODE) with a machine-readable reason in the
+// response instead.
 program
   .command('send <file>')
   .description('Submit an invoice from a JSON file')
+  .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
+  .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
   .option('--pretty', 'Pretty-print JSON output')
-  .action(async (file: string, opts: { pretty?: boolean }) => {
+  .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string }) => {
     const raw = readFileSync(file, 'utf8');
     const body = JSON.parse(raw) as Record<string, unknown>;
+    if (opts.dryRun) body.dryRun = true;
+    if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
     // Derive a stable idempotency key from the invoice file content
     const idempotencyKey = createHash('sha256').update(raw).digest('hex').slice(0, 64);
     const result = await api('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo amend-report <id> <file> ─────────────────────────────────────────
+// ES SII block 3. Files an AEAT "A1" amendment against an already-registered SII
+// invoice — <file> is the FULL corrected invoice, same JSON shape `send` takes
+// (same invoiceNumber/issueDate as the original; never a rectificativa, never
+// changes the invoice number). Refuses 409 when the record isn't currently
+// ACCEPTED at AEAT, an earlier amend/cancel is still in flight, or the corrected
+// payload would change the IDFactura identity.
+program
+  .command('amend-report <id> <file>')
+  .description('File an AEAT Spain SII A1 amendment (full corrected invoice from a JSON file)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, file: string, opts: { pretty?: boolean }) => {
+    const raw = readFileSync(file, 'utf8');
+    const body = JSON.parse(raw) as Record<string, unknown>;
+    const idempotencyKey = createHash('sha256').update(`amend|${id}|${raw}`).digest('hex').slice(0, 64);
+    const result = await api('POST', `/invoices/${encodeURIComponent(id)}/amend-report`, body, { 'x-idempotency-key': idempotencyKey });
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo cancel-report <id> ────────────────────────────────────────────────
+// ES SII block 3. Files an AEAT Baja (withdrawal) against an already-registered SII
+// invoice — identity-only, does not cancel or refund the invoice itself (issue a
+// credit note via `send` for that). Idempotent: cancelling an already-cancelled
+// invoice returns the stored cancelledAt rather than erroring.
+program
+  .command('cancel-report <id>')
+  .description('File an AEAT Spain SII Baja (withdrawal) against an already-registered invoice')
+  .option('--reason <text>', 'Optional free text (<=100 chars), recorded for audit, never sent to AEAT')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: { reason?: string; pretty?: boolean }) => {
+    const body: Record<string, unknown> = {};
+    if (opts.reason) body.reason = opts.reason;
+    const idempotencyKey = createHash('sha256').update(`cancel|${id}`).digest('hex').slice(0, 64);
+    const result = await api('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': idempotencyKey });
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo reconciliation [id] ───────────────────────────────────────────────
+// ES SII block 3. Read-only: the AEAT Consulta reconciliation sweep runs on its
+// own schedule, never triggerable on demand. With no id, returns the latest run's
+// id plus a condensed reassurance-line status; pass an id (from that summary, or
+// the dashboard) to fetch the full stored comparison for one run.
+program
+  .command('reconciliation [id]')
+  .description('Fetch the latest Spain SII Consulta reconciliation summary, or one run by id')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string | undefined, opts: { pretty?: boolean }) => {
+    const path = id ? `/sii/reconciliation/${encodeURIComponent(id)}` : '/sii/reconciliation';
+    const result = await api('GET', path);
     print(result, !!opts.pretty);
   });
 
@@ -91,11 +160,20 @@ program
 program
   .command('calculate <file>')
   .description('Calculate tax for a transaction from a JSON file')
-  .option('--commit', 'Record in audit trail (default: dry run)')
+  .option('--commit', 'Record in audit trail (redundant — this is the default; kept for backward compatibility)')
+  .option('--dry-run', 'Preview only — do not record or bill this calculation')
   .option('--pretty', 'Pretty-print JSON output')
-  .action(async (file: string, opts: { commit?: boolean; pretty?: boolean }) => {
+  .action(async (file: string, opts: { commit?: boolean; dryRun?: boolean; pretty?: boolean }) => {
     const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
-    if (opts.commit) body.commit = true;
+    // The API defaults an omitted `commit` to true (persisted/billed) — this
+    // command matches that default rather than overriding it. --dry-run is
+    // the explicit opt-out; --commit is a harmless no-op kept so existing
+    // scripts that already pass it don't break.
+    if (opts.dryRun) {
+      body.commit = false;
+    } else if (opts.commit) {
+      body.commit = true;
+    }
     const result = await api('POST', '/tax/calculate', body);
     print(result, !!opts.pretty);
   });
@@ -339,6 +417,141 @@ registrations
     if (opts.country) body.country = opts.country.toUpperCase();
     if (opts.entity) body.entityId = opts.entity;
     const result = await api('POST', '/tax/registrations', body);
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo tax-codes ────────────────────────────────────────────────────────
+// A client tax code maps your own ERP tax code (e.g. a SAP two-digit code) to
+// a Clearvo Tax Decision — movement, taxability, customerType, supplyType,
+// reverseCharge, useTaxSelfAssessed, and (where meaningful) rateBand. The
+// EN16931 taxCode and rate are always computed live, never request fields.
+const taxCodes = program.command('tax-codes').description('Manage client tax codes');
+
+function taxCodeMutationBody(opts: {
+  code?: string; country?: string; region?: string;
+  movement?: string; taxability?: string; customerType?: string; supplyType?: string;
+  rateBand?: string; reverseCharge?: boolean; useTaxSelfAssessed?: boolean;
+  filingTag?: string; direction?: string; description?: string;
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (opts.code)        body.code = opts.code;
+  if (opts.country)     body.country = opts.country.toUpperCase();
+  if (opts.region)      body.region = opts.region.toUpperCase();
+  if (opts.movement)    body.movement = opts.movement;
+  if (opts.taxability)  body.taxability = opts.taxability;
+  if (opts.customerType) body.customerType = opts.customerType;
+  if (opts.supplyType)  body.supplyType = opts.supplyType;
+  if (opts.rateBand)    body.rateBand = opts.rateBand;
+  if (opts.reverseCharge !== undefined) body.reverseCharge = opts.reverseCharge;
+  if (opts.useTaxSelfAssessed !== undefined) body.useTaxSelfAssessed = opts.useTaxSelfAssessed;
+  if (opts.filingTag)   body.filingTag = opts.filingTag;
+  if (opts.direction)   body.direction = opts.direction;
+  if (opts.description) body.description = opts.description;
+  return body;
+}
+
+taxCodes
+  .command('list')
+  .description('List client tax codes for an entity')
+  .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: { entity?: string; pretty?: boolean }) => {
+    const result = await api('GET', '/tax/client-codes', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+taxCodes
+  .command('create')
+  .description('Create a client tax code')
+  .requiredOption('--code <code>', 'Your own ERP tax code, unique per entity')
+  .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 or alpha-3 country code (e.g. DE)')
+  .option('--region <region>', 'Sub-national scope (e.g. a US state)')
+  .requiredOption('--movement <movement>', 'local, intra_community, export, distance_sale, import, or own_goods_movement')
+  .requiredOption('--taxability <taxability>', 'taxable, exempt, or out_of_scope')
+  .option('--customer-type <type>', 'b2b or b2c — omit for a code that applies to either')
+  .requiredOption('--supply-type <type>', 'goods, digital_service, or general_service')
+  .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero — required when taxability=taxable and the movement/reverseCharge combination doesn\'t already fix the EN16931 code')
+  .option('--reverse-charge', 'Independent of movement — some countries require domestic reverse charge even on a wholly local sale')
+  .option('--use-tax-self-assessed', 'Mark use tax as self-assessed')
+  .option('--filing-tag <tag>', 'Pure metadata for a future Taxsure integration — never consumed by any computation')
+  .option('--direction <direction>', 'sale or purchase — omit for a code that applies to both')
+  .option('--description <text>', 'Optional longer description')
+  .option('--entity <entityId>', 'Entity to create the client tax code under (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: {
+    code: string; country: string; region?: string; movement: string; taxability: string;
+    customerType?: string; supplyType: string; rateBand?: string; reverseCharge?: boolean;
+    useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
+    entity?: string; pretty?: boolean;
+  }) => {
+    const body = taxCodeMutationBody(opts);
+    const result = await api('POST', '/tax/client-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+taxCodes
+  .command('update <id>')
+  .description('Update a client tax code (any subset of its fields)')
+  .option('--code <code>', 'Updated code')
+  .option('--country <code>', 'Updated country')
+  .option('--region <region>', 'Updated region')
+  .option('--movement <movement>', 'local, intra_community, export, distance_sale, import, or own_goods_movement')
+  .option('--taxability <taxability>', 'taxable, exempt, or out_of_scope')
+  .option('--customer-type <type>', 'b2b or b2c')
+  .option('--supply-type <type>', 'goods, digital_service, or general_service')
+  .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero')
+  .option('--reverse-charge', 'Set reverseCharge to true')
+  .option('--use-tax-self-assessed', 'Set useTaxSelfAssessed to true')
+  .option('--filing-tag <tag>', 'Updated filing tag')
+  .option('--direction <direction>', 'sale or purchase')
+  .option('--description <text>', 'Updated description')
+  .option('--entity <entityId>', 'Entity the client tax code belongs to (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: {
+    code?: string; country?: string; region?: string; movement?: string; taxability?: string;
+    customerType?: string; supplyType?: string; rateBand?: string; reverseCharge?: boolean;
+    useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
+    entity?: string; pretty?: boolean;
+  }) => {
+    const body = taxCodeMutationBody(opts);
+    const result = await api('PATCH', `/tax/client-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+taxCodes
+  .command('delete <id>')
+  .description('Delete a client tax code')
+  .option('--entity <entityId>', 'Entity the code belongs to (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+    const result = await api('DELETE', `/tax/client-codes/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+// GET /v1/tax/codes — the full canonical catalogue (Clearvo's own
+// system_enum/fact content plus this entity's own client tax codes, same
+// rows as `tax-codes list` in the same shape). Use to validate a
+// clientTaxCode/taxTreatment value before `clearvo send`, or to build a
+// picker.
+taxCodes
+  .command('search')
+  .description('List/search the full canonical tax-code catalogue (Clearvo content + your client tax codes)')
+  .option('--code <code>', 'Substring match against `code`, case-insensitive')
+  .option('--vocabulary <vocabulary>', 'system_enum, fact, client, or tax_calc — omit to list every vocabulary')
+  .option('--country <code>', 'ISO 3166-1 alpha-2 — narrows to this country\'s rows')
+  .option('--source-system <system>', 'e.g. xero — narrows to one connector\'s system_enum rows; never matches a client row')
+  .option('--date <date>', 'YYYY-MM-DD — resolves each row\'s live rate as of this date. Defaults to now')
+  .option('--entity <entityId>', 'Entity ID to scope `client` vocabulary rows to (required for account-scoped keys)')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: { code?: string; vocabulary?: string; country?: string; sourceSystem?: string; date?: string; entity?: string; pretty?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (opts.code)         qs.set('code', opts.code);
+    if (opts.vocabulary)   qs.set('vocabulary', opts.vocabulary);
+    if (opts.country)      qs.set('country', opts.country.toUpperCase());
+    if (opts.sourceSystem) qs.set('sourceSystem', opts.sourceSystem);
+    if (opts.date)         qs.set('date', opts.date);
+    const q = qs.toString();
+    const result = await api('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
     print(result, !!opts.pretty);
   });
 

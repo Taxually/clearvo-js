@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout clearvo-js
+        uses: actions/checkout@v4
+
+      - name: Checkout clearvo-marketing (sibling — source of truth for openapi.json)
+        uses: actions/checkout@v4
+        with:
+          repository: Taxually/clearvo-marketing
+          path: clearvo-marketing
+          # The default GITHUB_TOKEN is scoped to this repo only and cannot read
+          # a second private repo — that is why this step previously failed with
+          # "Not Found" on every run. A read-only deploy key registered on
+          # clearvo-marketing, stored here as the CLEARVO_MARKETING_DEPLOY_KEY
+          # secret, grants exactly the cross-repo read this checkout needs and
+          # nothing more.
+          ssh-key: ${{ secrets.CLEARVO_MARKETING_DEPLOY_KEY }}
+          # Public-contract PRs land the openapi.json change in clearvo-marketing
+          # first; point this at that branch when the two are shipped together,
+          # otherwise this tracks its default branch.
+          ref: ${{ github.event.pull_request.head.ref == 'claude/tax-code-mapping' && 'claude/tax-code-mapping' || '' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+
+      - name: Typecheck all packages
+        run: npm run typecheck
+
+      - name: Type-level regression tests (no taxCode on a send line)
+        run: npm run test:types
+
+      - name: Assert SDK types are regenerated from openapi.json (zero diff)
+        env:
+          CLEARVO_MARKETING_OPENAPI_PATH: ${{ github.workspace }}/clearvo-marketing/public/openapi.json
+        run: npm run test:codegen-diff
+
+      - name: Build all packages
+        run: npm run build

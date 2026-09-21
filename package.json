@@ -4,6 +4,9 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:types": "npm run test:types --workspaces --if-present",
+    "generate:from-openapi": "node scripts/generate-from-openapi.mjs",
+    "test:codegen-diff": "node scripts/generate-from-openapi.mjs --check"
   }
 }

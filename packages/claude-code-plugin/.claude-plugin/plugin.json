@@ -7,7 +7,7 @@
     "url": "https://clearvo.io"
   },
   "homepage": "https://clearvo.io/docs/claude-code",
-  "repository": "https://github.com/fergalg/clearvo-js",
+  "repository": "https://github.com/Taxually/clearvo-js",
   "keywords": ["tax", "vat", "gst", "sales-tax", "einvoicing", "compliance", "clearvo"],
   "userConfig": {
     "api_key": {

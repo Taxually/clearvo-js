@@ -31,15 +31,34 @@ import type {
   TaxCalculationSummary,
   ListTaxCalculationsParams,
   ListTaxCalculationsResponse,
-  SubmitSiiRecordInput,
-  CorrectSiiRecordInput,
-  SubmitSiiRecordResponse,
-  ListSiiRecordsParams,
-  ListSiiRecordsResponse,
-  GetSiiRecordResponse,
+  ListReportingObligationsResponse,
+  UpdateReportingObligationsInput,
+  UpdateReportingObligationsResponse,
+  ListReportingBatchesParams,
+  ListReportingBatchesResponse,
+  GetReportingBatchResponse,
+  ConfirmReportingBatchInput,
+  ConfirmReportingBatchResponse,
+  ExcludeFromReportingBatchInput,
+  ExcludeFromReportingBatchResponse,
+  RunReportingBatchSweepInput,
+  RunReportingBatchSweepResponse,
+  AmendReportInput,
+  AmendReportResponse,
+  CancelReportInput,
+  CancelReportResponse,
+  GetSiiReconciliationSummaryResponse,
+  GetSiiReconciliationResponse,
   QueryRequestParams,
   QueryResponse,
   QueryFieldsResponse,
+  ListClientTaxCodesResponse,
+  CreateClientTaxCodeInput,
+  UpdateClientTaxCodeInput,
+  ClientTaxCodeResponse,
+  SubmitInvoiceInput,
+  ListTaxCodesParams,
+  ListTaxCodesResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -88,7 +107,7 @@ export class ClearvoClient {
 
   // ── E-Invoicing ──────────────────────────────────────────────────────────────
 
-  submitInvoice(input: Record<string, unknown>, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
+  submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;
     return this.request('POST', '/send', input, headers);
@@ -108,6 +127,7 @@ export class ClearvoClient {
     if (params.beforeId)         qs.set('before_id', params.beforeId);
     if (params.country)          qs.set('country',   params.country);
     if (params.status)           qs.set('status',    params.status);
+    if (params.receivedAfter)    qs.set('receivedAfter', params.receivedAfter);
     const q = qs.toString();
     return this.request('GET', `/invoices${q ? `?${q}` : ''}`);
   }
@@ -227,30 +247,131 @@ export class ClearvoClient {
     return this.request('GET', `/tax/calculate${q ? `?${q}` : ''}`);
   }
 
-  // ── Spain SII ──────────────────────────────────────────────────────────────
+  // ── Tax Reporting obligations ────────────────────────────────────────────────
 
-  submitSiiRecord(input: SubmitSiiRecordInput): Promise<SubmitSiiRecordResponse> {
-    return this.request('POST', '/sii/submit', input);
+  /**
+   * Per-regime reporting toggles (France e-reporting, Spain SII) for the entity.
+   * Spain SII invoices go through submitInvoice() like every other country —
+   * the entity's es_sii row is what routes them to AEAT, and its submissionMode
+   * decides whether each one is sent immediately or joins a reporting batch
+   * (see listReportingBatches). Rows carry `registrationGate` when the entity
+   * holds no registration for the regime's country — enabling is refused
+   * REGISTRATION_REQUIRED until one is added.
+   */
+  getReportingObligations(): Promise<ListReportingObligationsResponse> {
+    return this.request('GET', '/tax/reporting-obligations');
   }
 
-  correctSiiRecord(input: CorrectSiiRecordInput): Promise<SubmitSiiRecordResponse> {
-    return this.request('POST', '/sii/correct', input);
+  /**
+   * Enable/disable regimes. Enabling requires `effectiveFrom` (EFFECTIVE_FROM_REQUIRED
+   * otherwise) and, for es_sii/fr_ereporting, a current registration in that country
+   * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii and
+   * fr_ereporting accept submissionMode 'immediate' | 'batch_auto' | 'batch_review'
+   * (default 'batch_review'). Disabling es_sii while a batch is open / ready_for_review /
+   * overdue is refused 409 OBLIGATION_HAS_PENDING_BATCH unless `force: true`.
+   */
+  updateReportingObligations(input: UpdateReportingObligationsInput): Promise<UpdateReportingObligationsResponse> {
+    return this.request('PATCH', '/tax/reporting-obligations', input);
   }
 
-  listSiiRecords(params: ListSiiRecordsParams = {}): Promise<ListSiiRecordsResponse> {
+  // ── Spain SII reporting batches ─────────────────────────────────────────────
+
+  /**
+   * List the Spain SII reporting batches this key can see (es_sii submissionMode
+   * batch_auto/batch_review), newest first. `status: 'ready_for_review'` finds the
+   * batches waiting for confirmReportingBatch().
+   */
+  listReportingBatches(params: ListReportingBatchesParams = {}): Promise<ListReportingBatchesResponse> {
     const qs = new URLSearchParams();
-    if (params.status)         qs.set('status',      params.status);
-    if (params.invoiceType)    qs.set('invoiceType',  params.invoiceType);
-    if (params.dateFrom)       qs.set('dateFrom',     params.dateFrom);
-    if (params.dateTo)         qs.set('dateTo',       params.dateTo);
-    if (params.page  != null)  qs.set('page',  String(params.page));
-    if (params.limit != null)  qs.set('limit', String(params.limit));
+    if (params.status)   qs.set('status',   params.status);
+    if (params.entityId) qs.set('entityId', params.entityId);
+    if (params.page  != null) qs.set('page',  String(params.page));
+    if (params.limit != null) qs.set('limit', String(params.limit));
     const q = qs.toString();
-    return this.request('GET', `/sii/records${q ? `?${q}` : ''}`);
+    return this.request('GET', `/reporting-batches${q ? `?${q}` : ''}`);
   }
 
-  getSiiRecord(id: string): Promise<GetSiiRecordResponse> {
-    return this.request('GET', `/sii/records/${encodeURIComponent(id)}`);
+  /** One batch with its records, AEAT outcomes, and the `snapshotVersion` confirm needs. */
+  getReportingBatch(id: string): Promise<GetReportingBatchResponse> {
+    return this.request('GET', `/reporting-batches/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Confirm a batch so it is submitted to AEAT now. Pass the batch's CURRENT
+   * snapshotVersion — 409 BATCH_STALE if it changed since you read it (re-read and retry),
+   * 409 ALREADY_SUBMITTED if already in flight, 503 ENQUEUE_FAILED if confirmed but the
+   * hand-off failed (retried automatically on the next scheduler run).
+   */
+  confirmReportingBatch(id: string, input: ConfirmReportingBatchInput): Promise<ConfirmReportingBatchResponse> {
+    return this.request('POST', `/reporting-batches/${encodeURIComponent(id)}/confirm`, input);
+  }
+
+  /**
+   * Move one record out of a closed/ready_for_review batch into the next open batch.
+   * 409 BATCH_OPEN (not closed yet), BATCH_LOCKED (confirmed, mid-dispatch),
+   * ALREADY_SUBMITTED, or EXCLUDE_WOULD_EMPTY_BATCH (last record — leave the batch
+   * unconfirmed instead).
+   */
+  excludeFromReportingBatch(id: string, input: ExcludeFromReportingBatchInput): Promise<ExcludeFromReportingBatchResponse> {
+    return this.request('POST', `/reporting-batches/${encodeURIComponent(id)}/exclude`, input);
+  }
+
+  /**
+   * SANDBOX ONLY (csk_test_* key; 403 SANDBOX_ONLY otherwise). Runs the daily
+   * close/dispatch/notify sweeps for this entity right now so a batch can be driven
+   * through its lifecycle in a test without waiting for the Spanish-business-day clock.
+   */
+  runReportingBatchSweep(input: RunReportingBatchSweepInput = {}): Promise<RunReportingBatchSweepResponse> {
+    return this.request('POST', '/test-helpers/reporting-batches/run-sweep', input);
+  }
+
+  // ── Spain SII block 3: amend (A1) / cancel (Baja) / Consulta reconciliation ─
+
+  /**
+   * File an AEAT Spain SII "A1" amendment against an already-registered SII invoice — a
+   * COMPLETE corrected re-registration of the document's content (same invoiceNumber/
+   * issueDate as the original; never a rectificativa, never changes the invoice number).
+   * `idempotencyKey` is required by the API (400 otherwise) — a same-key retry returns the
+   * stored ledger row instead of rebuilding/re-enqueueing. Refuses 409 when the record isn't
+   * currently ACCEPTED at AEAT (Correcto/AceptadoConErrores), an earlier amend/cancel is still
+   * in flight, a batch containing it is in flight, or the corrected payload would change the
+   * IDFactura identity — never silently falls back to a fresh A0.
+   */
+  amendSiiReport(id: string, input: AmendReportInput, idempotencyKey: string): Promise<AmendReportResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/amend-report`, input, { 'x-idempotency-key': idempotencyKey });
+  }
+
+  /**
+   * File an AEAT Spain SII Baja (withdrawal) against an already-registered SII invoice.
+   * Identity-only — does not cancel or refund the invoice itself (issue a credit note via
+   * submitInvoice for that). Idempotent: cancelling an already-cancelled invoice returns the
+   * `{ cancelled: true, cancelledAt }` shape rather than erroring, regardless of the
+   * `idempotencyKey` presented. `idempotencyKey` is required by the API (400 otherwise).
+   * Refuses 409 when the record is not currently registered at AEAT.
+   */
+  cancelSiiReport(id: string, input: CancelReportInput, idempotencyKey: string): Promise<CancelReportResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, input, { 'x-idempotency-key': idempotencyKey });
+  }
+
+  /**
+   * The current entity's latest AEAT Spain SII Consulta reconciliation run — id plus the
+   * same condensed reassurance-line status the dashboard's Spain SII page shows. Call this
+   * first to get an `id` for getSiiReconciliation() below; `id` is null only when the
+   * Consulta sweep has never run for this entity. Read-only, scheduled — there is no way to
+   * trigger a run on demand.
+   */
+  getSiiReconciliationSummary(): Promise<GetSiiReconciliationSummaryResponse> {
+    return this.request('GET', '/sii/reconciliation');
+  }
+
+  /**
+   * Fetch one AEAT Spain SII Consulta reconciliation run's stored comparison result — what
+   * AEAT's own view of a (book, ejercicio, periodo) showed against this platform's own
+   * records, including any platform-fault alert (`authorityView.missingAtAeat`). `id` comes
+   * from getSiiReconciliationSummary() or the dashboard.
+   */
+  getSiiReconciliation(id: string): Promise<GetSiiReconciliationResponse> {
+    return this.request('GET', `/sii/reconciliation/${encodeURIComponent(id)}`);
   }
 
   // ── Data Query Tool ────────────────────────────────────────────────────────
@@ -269,5 +390,50 @@ export class ClearvoClient {
   /** Discoverable schema for queryData(): allowlisted fields, operators, enums, and limits per dataset. */
   getQueryFields(): Promise<QueryFieldsResponse> {
     return this.request('GET', '/query/fields');
+  }
+
+  // ── Client Tax Codes ──────────────────────────────────────────────────────
+  // Maps a customer's own ERP tax code (e.g. a SAP two-digit code) to the
+  // tax treatment it represents. Used as an INPUT on submitInvoice() (pass
+  // clientTaxCode on a line item instead of taxCode+vatRate) and returned as
+  // an OUTPUT on calculateTax() (the response echoes back your matching code
+  // for ERP posting). `rate` is always response-only — never send it.
+
+  listClientTaxCodes(entityId?: string): Promise<ListClientTaxCodesResponse> {
+    return this.request('GET', '/tax/client-codes', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  createClientTaxCode(input: CreateClientTaxCodeInput): Promise<ClientTaxCodeResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/tax/client-codes', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  updateClientTaxCode(clientTaxCodeId: string, updates: UpdateClientTaxCodeInput, entityId?: string): Promise<ClientTaxCodeResponse> {
+    return this.request(
+      'PATCH',
+      `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`,
+      updates,
+      entityId ? { 'x-entity-id': entityId } : undefined
+    );
+  }
+
+  deleteClientTaxCode(clientTaxCodeId: string, entityId?: string): Promise<{ ok: boolean }> {
+    return this.request(
+      'DELETE',
+      `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`,
+      undefined,
+      entityId ? { 'x-entity-id': entityId } : undefined
+    );
+  }
+
+  /** GET /v1/tax/codes — every tax-code row this platform knows about, plus this entity's own client tax codes, in one shape. */
+  listTaxCodes(params: ListTaxCodesParams = {}): Promise<ListTaxCodesResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 }

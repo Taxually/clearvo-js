@@ -8,13 +8,14 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test:types": "tsc --noEmit -p type-tests/tsconfig.json",
     "dev": "tsc --watch"
   },
   "devDependencies": {
     "typescript": "^5.0.0"
   },
   "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "https://github.com/fergalg/clearvo-js.git", "directory": "packages/sdk" },
+  "repository": { "type": "git", "url": "https://github.com/Taxually/clearvo-js.git", "directory": "packages/sdk" },
   "homepage": "https://clearvo.io/docs",
   "keywords": ["clearvo", "tax", "vat", "einvoicing", "compliance"]
 }
