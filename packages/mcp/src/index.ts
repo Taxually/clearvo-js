@@ -412,25 +412,63 @@ const TOOLS = [
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
       'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing. ' +
       'Each line item can also carry taxTreatmentOverride (force a rate band) or commodityCode (tariff-driven ' +
-      'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain.',
+      'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain. ' +
+      'Direction rule (transactionDirection, default "sale"): on a sale, the entity is the supplier and the ' +
+      'counterparty goes in customer, which is REQUIRED (422 CUSTOMER_REQUIRED if omitted) — supplier is optional ' +
+      'and auto-filled from your entity\'s own master data, validated against it if you do supply it (422 ' +
+      'SUPPLIER_TAX_ID_MISMATCH on a mismatch). On a purchase, party roles invert: the entity is the customer and ' +
+      'the counterparty (the vendor) goes in supplier, which is REQUIRED (422 SUPPLIER_REQUIRED if omitted) — ' +
+      'customer is now optional and entity-side, validated the same way (422 CUSTOMER_TAX_ID_MISMATCH on a ' +
+      'mismatch). seller is a deprecated alias for supplier, accepted on a sale only — rejected with 422 ' +
+      'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
+      'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
+      'which block is your own entity.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         currency: { type: 'string', description: 'ISO 4217 currency code' },
         commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
+        transactionDirection: {
+          type: 'string',
+          enum: ['sale', 'purchase'],
+          description: '"sale" (default) — an outgoing transaction: the entity is the supplier, customer (the counterparty) is required. "purchase" — an incoming transaction: the entity is the customer, supplier (the counterparty, the vendor) is required. See this tool\'s own description for the full rule, including the 422 error codes for each direction.',
+        },
         seller: {
           type: 'object',
+          deprecated: true,
+          description: 'Deprecated alias for `supplier`, accepted on a transactionDirection: "sale" calculation only (normalised to supplier before validation runs). Use `supplier` directly instead. Rejected with 422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE when sent alongside transactionDirection: "purchase".',
           properties: {
             address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
             taxId: { type: 'string', description: 'Seller VAT number' },
           },
           required: ['address'],
         },
+        supplier: {
+          type: 'object',
+          description: 'The supplier party. Required when transactionDirection is "purchase" — the actual vendor on the purchase invoice (422 SUPPLIER_REQUIRED if missing); only taxId and billingAddress.country are meaningful there. Optional when transactionDirection is "sale" or omitted — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 SUPPLIER_TAX_ID_MISMATCH on a mismatch). `ref` on a purchase resolves saved supplier master data (see list_suppliers/create_supplier) exactly like customer.ref resolves saved customer data on a sale.',
+          properties: {
+            name: { type: 'string', description: 'Free-text display name. Accepted but unused for supplier resolution.' },
+            taxId: { type: 'string', description: 'Supplier VAT or tax ID — used to determine cross-border reverse-charge/import treatment on a purchase, or validated against the entity\'s own registration when supplier is the entity side on a sale.' },
+            ref: { type: 'string', description: 'Your own reference for this supplier (e.g. ERP vendor id). On a purchase, resolves saved supplier master data — see list_suppliers/create_supplier — filling in any of name/taxId/address you omit here. Ignored when supplier is the entity side (a sale).' },
+            billingAddress: {
+              type: 'object',
+              description: 'The supplier\'s own country/address — the real dispatch/origin signal for cross-border purchase treatment.',
+              properties: {
+                country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+                region: { type: 'string', description: 'State/province code, when relevant.' },
+                postalCode: { type: 'string' },
+              },
+              required: ['country'],
+            },
+          },
+        },
         customer: {
           type: 'object',
+          description: 'The customer party. Required when transactionDirection is "sale" or omitted — the counterparty on a sale (422 CUSTOMER_REQUIRED if missing). Optional when transactionDirection is "purchase" — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch).',
           properties: {
             b2bOverride: { type: 'boolean', description: 'Set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the buyer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied.' },
             taxId: { type: 'string', description: 'Customer VAT number — triggers B2B reverse charge or zero-rating for cross-border sales' },
+            ref: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP id). Resolves saved customer master data — see list_customers/create_customer.' },
             billingAddress: {
               type: 'object',
               properties: {
@@ -441,7 +479,6 @@ const TOOLS = [
               required: ['country'],
             },
           },
-          required: ['billingAddress'],
         },
         lineItems: {
           type: 'array',
@@ -464,7 +501,7 @@ const TOOLS = [
           },
         },
       },
-      required: ['currency', 'seller', 'customer', 'lineItems'],
+      required: ['currency', 'lineItems'],
     },
   },
   {
@@ -1419,6 +1456,106 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_suppliers',
+    description:
+      'List an entity\'s supplier master data (name, tax ID, address) — mirrors list_customers for the other ' +
+      'side of a transaction. Suppliers are the vendors on purchase-side tax calculations ' +
+      '(calculate_tax with transactionDirection: "purchase") and on received e-invoices. ' +
+      'Every received inbound e-invoice also auto-captures/refreshes a supplier record from its own supplier ' +
+      'details, so this list fills in over time even without calling create_supplier directly. ' +
+      'Reference a supplier via supplier.ref on calculate_tax (matched against the saved supplierRef) instead ' +
+      'of resending full supplier details every time.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        search: { type: 'string', description: 'Case-insensitive substring match against the stored name' },
+        page: { type: 'number', description: 'Page number, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
+        entityId: { type: 'string', description: 'Entity to list suppliers for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'create_supplier',
+    description:
+      'Create a supplier master-data record — the vendor on purchase-side tax calculations and received ' +
+      'e-invoices. Reference it later via supplier.ref on calculate_tax (transactionDirection: "purchase") ' +
+      'instead of resending full supplier details every time. country and taxId are optional together — a ' +
+      'supplier with no known VAT registration can have neither, but must not have one without the other. Use ' +
+      'taxIds instead of country/taxId for a supplier registered in more than one country.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Supplier name' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of the primary registration. Required together with taxId. Mutually exclusive with taxIds.' },
+        taxId: { type: 'string', description: 'Tax ID. Required together with country; format-validated and normalized. Mutually exclusive with taxIds.' },
+        taxIds: {
+          type: 'array',
+          description: 'Full ordered list of this supplier\'s tax registrations for a supplier registered in more than one country — first entry is the primary. Mutually exclusive with country/taxId.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
+        supplierRef: { type: 'string', description: 'Your own reference (e.g. ERP vendor id). Must be unique per entity.' },
+        establishmentCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of this supplier\'s own place of establishment — independent of country/taxIds (the tax registration country). Defaults to the primary tax registration\'s country when omitted.' },
+        addressLine1: { type: 'string' },
+        addressLine2: { type: 'string' },
+        city: { type: 'string' },
+        region: { type: 'string' },
+        postalCode: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity to create the supplier under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_supplier',
+    description:
+      'Update a supplier\'s master data. country and taxId are treated as a pair — clearing one without the ' +
+      'other clears taxId (the pair is no longer complete). Mutually exclusive with taxIds.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        supplierId: { type: 'string', description: 'The supplier ID to update (from list_suppliers or create_supplier)' },
+        name: { type: 'string' },
+        country: { type: 'string' },
+        taxId: { type: 'string' },
+        taxIds: {
+          type: 'array',
+          description: 'Full replacement list of this supplier\'s tax registrations (pass [] to clear every one) — first entry becomes the primary. Mutually exclusive with country/taxId. Omit entirely to leave existing registrations untouched.',
+          items: {
+            type: 'object',
+            properties: { country: { type: 'string' }, taxId: { type: 'string' } },
+            required: ['country', 'taxId'],
+          },
+        },
+        supplierRef: { type: 'string' },
+        establishmentCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of this supplier\'s own place of establishment — independent of country/taxIds. Omit to leave unchanged; pass null to clear it.' },
+        addressLine1: { type: 'string' },
+        addressLine2: { type: 'string' },
+        city: { type: 'string' },
+        region: { type: 'string' },
+        postalCode: { type: 'string' },
+        entityId: { type: 'string', description: 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['supplierId'],
+    },
+  },
+  {
+    name: 'delete_supplier',
+    description: 'Soft-delete a supplier. If this supplier is received on another inbound e-invoice, they will be re-added automatically.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        supplierId: { type: 'string', description: 'The supplier ID to delete (from list_suppliers)' },
+        entityId: { type: 'string', description: 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['supplierId'],
+    },
+  },
+  {
     name: 'list_client_tax_codes',
     description:
       'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
@@ -1840,6 +1977,31 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'delete_customer': {
       const { customerId, entityId } = args as { customerId: string; entityId?: string };
       return callApi('DELETE', `/customers/${encodeURIComponent(customerId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_suppliers': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      const qs = new URLSearchParams();
+      if (rest.search) qs.set('search', rest.search as string);
+      if (rest.page)   qs.set('page',   String(rest.page));
+      if (rest.limit)  qs.set('limit',  String(rest.limit));
+      const q = qs.toString();
+      return callApi('GET', `/suppliers${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'create_supplier': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/suppliers', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_supplier': {
+      const { supplierId, entityId, ...updates } = args as { supplierId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/suppliers/${encodeURIComponent(supplierId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'delete_supplier': {
+      const { supplierId, entityId } = args as { supplierId: string; entityId?: string };
+      return callApi('DELETE', `/suppliers/${encodeURIComponent(supplierId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'list_client_tax_codes': {
