@@ -473,17 +473,13 @@ export interface TaxCalculateRequest {
    * master data when omitted; if supplied, it is validated against that
    * registration for the transaction country (422
    * `CUSTOMER_TAX_ID_MISMATCH` on a mismatch).
+   *
+   * B2B/B2C is inferred from `taxId` (present + verified = B2B) rather
+   * than declared with an explicit `type` field — use `b2bOverride` to
+   * force B2B treatment when you know the buyer is a business but don't
+   * have their VAT ID at checkout time.
    */
-  customer?: {
-    type: 'B2B' | 'B2C' | 'B2G';
-    taxId?: string;
-    billingAddress: {
-      country: string;
-      region?: string;
-      postalCode?: string;
-    };
-    shippingAddress?: { country: string; region?: string; postalCode?: string };
-  };
+  customer?: TaxCalcPartyInput;
   evidence?: {
     ipAddress?: string;
     binCountry?: string;

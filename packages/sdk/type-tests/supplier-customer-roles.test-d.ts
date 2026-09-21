@@ -39,11 +39,13 @@ void _purchaseByRef;
 
 // The ordinary 'sale' shape (transactionDirection omitted, defaults to
 // 'sale') still type-checks with only `customer` supplied — `supplier` and
-// the deprecated `seller` alias are both optional.
+// the deprecated `seller` alias are both optional. `customer` is the same
+// TaxCalcPartyInput shape as `supplier` — B2B/B2C is inferred from `taxId`,
+// there is no separate `type` field (that was SDK-only drift from the real
+// contract, fixed here).
 const _saleRequest: TaxCalculateRequest = {
   currency: 'USD',
   customer: {
-    type: 'B2B',
     taxId: 'FR12345678901',
     billingAddress: { country: 'FR' },
   },
@@ -51,13 +53,36 @@ const _saleRequest: TaxCalculateRequest = {
 };
 void _saleRequest;
 
+// `customer.billingAddress` is optional too (mirrors the real
+// TaxCalculateRequest.customer schema, which has no required sub-fields) —
+// a bare `b2bOverride` with nothing else still type-checks.
+const _customerWithNoAddress: TaxCalculateRequest = {
+  currency: 'USD',
+  customer: { b2bOverride: true },
+  lineItems: [{ id: '1', amount: 1000, productName: 'Widget' }],
+};
+void _customerWithNoAddress;
+
+// `type` is no longer a valid property on `customer` — the old SDK-only
+// `'B2B' | 'B2C' | 'B2G'` field never existed in the real contract. If this
+// ever compiles again, `customer` has drifted from the openapi schema.
+const _customerWithTypeField: TaxCalculateRequest = {
+  currency: 'USD',
+  customer: {
+    // @ts-expect-error — `type` is not a property of TaxCalcPartyInput; B2B/B2C is inferred from `taxId`, not declared.
+    type: 'B2B',
+    billingAddress: { country: 'FR' },
+  },
+  lineItems: [{ id: '1', amount: 1000, productName: 'Widget' }],
+};
+void _customerWithTypeField;
+
 // `seller` remains accepted (deprecated alias for `supplier`, sale-only) —
 // no `@ts-expect-error` here, it must still compile.
 const _saleWithDeprecatedSeller: TaxCalculateRequest = {
   currency: 'EUR',
   seller: { address: { country: 'DE' } },
   customer: {
-    type: 'B2C',
     billingAddress: { country: 'DE' },
   },
   lineItems: [{ id: '1', amount: 2500, productName: 'Widget' }],

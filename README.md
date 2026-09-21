@@ -72,7 +72,7 @@ const result = await client.calculateTax({
   currency: 'EUR',
   seller: { address: { country: 'DE' } },
   customer: {
-    type: 'B2B',
+    // B2B is inferred from a verified taxId — no separate `type` field.
     taxId: 'FR12345678901',
     billingAddress: { country: 'FR' },
   },
