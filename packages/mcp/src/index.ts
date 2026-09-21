@@ -158,8 +158,11 @@ const TOOLS = [
       'DE_XRECHNUNG_BIC_FORBIDDEN). An explicit customerType: \'B2C\' always maps this HU customer to NAV\'s ' +
       'PRIVATE_PERSON classification regardless of the customer\'s own country, exempting it from the ' +
       'customer-address requirement above. ' +
-      'A request that still carries the old `buyer` field name is rejected with 422, naming `customer` ' +
-      'as the field to use instead — there is no silent alias. ' +
+      'A request that still carries any of the retired `buyer`, `buyerType`, `lines[].buyerType`, ' +
+      '`notifyBuyer`, or `countrySpecific.*.buyer*` keys (e.g. `countrySpecific.pl.buyerNip`) is rejected ' +
+      'with 422 `{ error, details: [{ field, message }] }` — each `message` names the exact ' +
+      '`customer`-named replacement (error code UNKNOWN_FIELD_BUYER_RENAMED in the public error-code ' +
+      'catalogue, not embedded in this response) — there is no silent alias. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +

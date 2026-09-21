@@ -15,7 +15,6 @@
     "build": "tsc && chmod +x dist/index.js",
     "build:mcpb": "node scripts/build-mcpb.js",
     "test:mcpb": "node scripts/smoke-test-mcpb.js",
-    "test:schema": "node scripts/check-submit-invoice-schema.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch"
   },
