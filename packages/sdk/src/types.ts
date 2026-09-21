@@ -676,6 +676,12 @@ export interface TaxNumberBatchResult {
   sandbox: boolean;
 }
 
+export interface RegistrationSecondaryIdentifier {
+  key: string;
+  label: string;
+  value: string;
+}
+
 export interface TaxRegistration {
   country: string;
   scheme: string;
@@ -690,6 +696,8 @@ export interface TaxRegistration {
   collectFromDate: string | null;
   collectionStatus: 'COLLECTING' | 'DEFERRED' | 'SETUP_NEEDED' | null;
   canCollectTax: boolean;
+  /** Jurisdiction-specific secondary identifiers on file (e.g. France's SIRET, Germany's Steuernummer). */
+  secondaryIdentifiers: RegistrationSecondaryIdentifier[];
 }
 
 export interface ListRegistrationsResponse {
@@ -719,6 +727,19 @@ export interface AddRegistrationInput {
   taxNumber?: string;
   iossNumber?: string;
   entityId?: string;
+}
+
+export interface UpdateRegistrationInput {
+  /** New registration/VAT number. Pass null or '' to clear it. Omit entirely to leave it unchanged. */
+  taxNumber?: string | null;
+  /** Secondary identifiers to merge in, e.g. { fr_siret: '12345678901234' } — only the keys you pass are changed. */
+  extraFields?: Record<string, string>;
+}
+
+export interface UpdateRegistrationResponse {
+  ok: boolean;
+  taxNumber?: string | null;
+  secondaryIdentifiers?: RegistrationSecondaryIdentifier[];
 }
 
 export interface TaxCalculationSummary {
