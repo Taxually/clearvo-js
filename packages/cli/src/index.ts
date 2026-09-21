@@ -629,7 +629,7 @@ query
 
 query
   .command('run')
-  .description('Run a filtered, paginated query. Use "query fields <dataset>" to see valid --filter field:operator:value combinations.')
+  .description('Run a filtered, paginated query. Use "query fields <dataset>" to see valid --filter field:operator:value combinations. Requires a write-scoped API key (a read-only key gets 403).')
   .requiredOption('--dataset <dataset>', 'einvoicing_records | tax_calculations')
   .option('--filter <field:operator:value>', 'Repeatable. operator is one of eq|neq|gt|gte|lt|lte|in|contains ("in" takes comma-separated values)', (val: string, prev: string[]) => [...prev, val], [] as string[])
   .option('--columns <fields>', 'Comma-separated allowlisted field names to return (default: dataset defaults)')
