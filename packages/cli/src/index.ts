@@ -405,6 +405,31 @@ registrations
   });
 
 registrations
+  .command('update <id>')
+  .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET) in place')
+  .option('--number <taxNumber>', 'New registration/VAT number (pass an empty string to clear it)')
+  .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\'')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: { number?: string; extra?: string; pretty?: boolean }) => {
+    if (opts.number === undefined && opts.extra === undefined) {
+      console.error('Error: provide --number and/or --extra');
+      process.exit(1);
+    }
+    const body: Record<string, unknown> = {};
+    if (opts.number !== undefined) body.taxNumber = opts.number;
+    if (opts.extra !== undefined) {
+      try {
+        body.extraFields = JSON.parse(opts.extra);
+      } catch {
+        console.error('Error: --extra must be valid JSON');
+        process.exit(1);
+      }
+    }
+    const result = await api('PATCH', `/tax/registrations/${encodeURIComponent(id)}`, body);
+    print(result, !!opts.pretty);
+  });
+
+registrations
   .command('add')
   .description('Record a new tax registration (VAT, IOSS, OSS, VOEC)')
   .requiredOption('--type <type>', 'Registration type: VAT, IOSS, UNION_OSS, NON_UNION_OSS, VOEC')

@@ -1028,6 +1028,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'update_registration',
+    description:
+      'Edit an existing tax registration\'s number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s ' +
+      'Steuernummer) in place. Use this instead of deleting and re-adding a registration when only the number ' +
+      'was wrong, missing, or a jurisdiction-specific secondary identifier needs to be added. ' +
+      'Country/type cannot be changed this way. extraFields is a MERGE, not a replace: only the keys you pass ' +
+      'are written; every other existing key is left untouched.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        registrationId: {
+          type: 'string',
+          description: 'The tax number ID or obligation ID of the registration (from list_registrations — use taxNumberId or obligationId field)',
+        },
+        taxNumber: { type: ['string', 'null'], description: 'New registration/VAT number. Pass null or an empty string to clear it. Omit entirely to leave it unchanged.' },
+        extraFields: { type: 'object', description: 'Secondary identifiers to merge in, e.g. { "fr_siret": "12345678901234" }. Only the keys you pass are changed.' },
+      },
+      required: ['registrationId'],
+    },
+  },
+  {
     name: 'list_tax_calculations',
     description:
       'List committed tax calculations (those created with commit=true). ' +
@@ -1856,6 +1877,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'deregister_registration': {
       const { registrationId, effectiveDate } = args as { registrationId: string; effectiveDate: string | null };
       return callApi('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, { effectiveDate });
+    }
+
+    case 'update_registration': {
+      const { registrationId, extraFields } = args as { registrationId: string; taxNumber?: string | null; extraFields?: Record<string, string> };
+      const body: Record<string, unknown> = {};
+      if ('taxNumber' in args) body.taxNumber = args.taxNumber;
+      if (extraFields !== undefined) body.extraFields = extraFields;
+      return callApi('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, body);
     }
 
     case 'list_tax_calculations': {

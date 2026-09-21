@@ -28,6 +28,8 @@ import type {
   AddRegistrationInput,
   SetCollectionInput,
   SetCollectionResponse,
+  UpdateRegistrationInput,
+  UpdateRegistrationResponse,
   TaxCalculationSummary,
   ListTaxCalculationsParams,
   ListTaxCalculationsResponse,
@@ -232,6 +234,16 @@ export class ClearvoClient {
   }
 
   setCollectionDate(registrationId: string, input: SetCollectionInput): Promise<SetCollectionResponse> {
+    return this.request('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, input);
+  }
+
+  /**
+   * Edit an existing registration's tax number and/or secondary identifiers
+   * (e.g. France's SIRET) in place, instead of deleting and re-adding it.
+   * `extraFields` merges into the row's existing secondary identifiers —
+   * only the keys passed are changed.
+   */
+  updateRegistration(registrationId: string, input: UpdateRegistrationInput): Promise<UpdateRegistrationResponse> {
     return this.request('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, input);
   }
 
