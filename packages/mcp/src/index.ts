@@ -1091,8 +1091,8 @@ const TOOLS = [
       'a page of rows (hasMore/nextCursor only — no aggregate counts or sums) and never raw XML or JSONB ' +
       'internals. Rate-limited per API key, stricter than list_invoices/list_tax_calculations. Paginate by ' +
       'passing the previous response\'s nextCursor back in as `cursor` (the cursor is bound to the exact ' +
-      'same filters — changing filters mid-pagination invalidates it). Requires a write-scoped API key — ' +
-      'ad-hoc querying matches the dashboard\'s admin/finance-only Explore tool, so a read-only key gets 403.',
+      'same filters — changing filters mid-pagination invalidates it). Read access is enough — this is the ' +
+      'dashboard\'s Explore tool, available to every member role.',
     inputSchema: {
       type: 'object' as const,
       required: ['dataset'],
