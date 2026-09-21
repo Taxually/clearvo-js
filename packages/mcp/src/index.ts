@@ -160,9 +160,9 @@ const TOOLS = [
       'customer-address requirement above. ' +
       'A request that still carries any of the retired `buyer`, `buyerType`, `lines[].buyerType`, ' +
       '`notifyBuyer`, or `countrySpecific.*.buyer*` keys (e.g. `countrySpecific.pl.buyerNip`) is rejected ' +
-      'with 422 `{ error, details: [{ field, message }] }` — each `message` names the exact ' +
-      '`customer`-named replacement (error code UNKNOWN_FIELD_BUYER_RENAMED in the public error-code ' +
-      'catalogue, not embedded in this response) — there is no silent alias. ' +
+      'with 422 `{ error, details: [{ field, code, message }] }` — each detail carries ' +
+      '`code: "UNKNOWN_FIELD_BUYER_RENAMED"` and a `message` naming the exact `customer`-named ' +
+      'replacement — there is no silent alias. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
