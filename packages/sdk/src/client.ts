@@ -392,7 +392,9 @@ export class ClearvoClient {
    * Filtered, paginated query over einvoicing_records or tax_calculations.
    * Fields, operators, and enum values are allowlisted per dataset — call
    * getQueryFields() to discover what's currently supported before building
-   * `filters`/`columns`.
+   * `filters`/`columns`. Requires a write-scoped API key — ad-hoc querying
+   * matches the dashboard's admin/finance-only Explore tool, so a read-only
+   * key is refused with 403.
    */
   queryData(params: QueryRequestParams): Promise<QueryResponse> {
     const { dataset, filters, columns, limit, from, to, cursor } = params;
