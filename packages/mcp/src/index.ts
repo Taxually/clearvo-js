@@ -149,15 +149,17 @@ const TOOLS = [
       'an entity with no current Spanish registration is held NEEDS_INFO (errorCode ' +
       'MISSING_SUPPLIER_REGISTRATION, fixUrl) — add the registration, then resubmit. ' +
       'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
-      'and — for any buyer that is not a private individual — a buyer street address plus (only ' +
+      'and — for any customer that is not a private individual — a customer street address plus (only ' +
       'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
       'these being missing or malformed fails with 422 (MISSING_HU_SUPPLIER_TAX_NUMBER, ' +
-      'MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_BUYER_TAX_NUMBER, MISSING_HU_BUYER_ADDRESS) rather ' +
+      'MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_CUSTOMER_TAX_NUMBER, MISSING_HU_CUSTOMER_ADDRESS) rather ' +
       'than a silent 200 NEEDS_INFO hold — the same behavior change applies to Germany\'s three ' +
       'XRechnung mandatory-field gates (MISSING_LEITWEG_ID, MISSING_DE_XRECHNUNG_SELLER_CONTACT, ' +
-      'DE_XRECHNUNG_BIC_FORBIDDEN). An explicit buyerType: \'B2C\' always maps this HU buyer to NAV\'s ' +
-      'PRIVATE_PERSON classification regardless of the buyer\'s own country, exempting it from the ' +
-      'buyer-address requirement above. ' +
+      'DE_XRECHNUNG_BIC_FORBIDDEN). An explicit customerType: \'B2C\' always maps this HU customer to NAV\'s ' +
+      'PRIVATE_PERSON classification regardless of the customer\'s own country, exempting it from the ' +
+      'customer-address requirement above. ' +
+      'A request that still carries the old `buyer` field name is rejected with 422, naming `customer` ' +
+      'as the field to use instead — there is no silent alias. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -195,12 +197,12 @@ const TOOLS = [
           },
           required: ['name', 'address'],
         },
-        buyer: {
+        customer: {
           type: 'object',
           description: 'The customer receiving the invoice.',
           properties: {
             name: { type: 'string' },
-            taxId: { type: 'string', description: 'Buyer VAT number — strongly recommended for B2B to enable reverse charge treatment' },
+            taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment' },
             address: {
               type: 'object',
               properties: {
@@ -213,9 +215,9 @@ const TOOLS = [
             },
             contact: {
               type: 'object',
-              description: 'Buyer contact details. contact.email is required for notifyBuyer to have any effect.',
+              description: 'Customer contact details. contact.email is required for notifyCustomer to have any effect.',
               properties: {
-                email: { type: 'string', description: 'Buyer email — required if notifyBuyer is set (or your entity default is on) for a country where Clearvo does not deliver the invoice electronically.' },
+                email: { type: 'string', description: 'Customer email — required if notifyCustomer is set (or your entity default is on) for a country where Clearvo does not deliver the invoice electronically.' },
               },
             },
             customerRef: {
@@ -244,7 +246,7 @@ const TOOLS = [
                 enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'],
                 description: 'Explicit, AUTHORITATIVE tax treatment for this line, used when clientTaxCode is omitted — it is mapped as-is, never overridden by country inference. REQUIRED whenever the line is 0% (a bare 0% is held NEEDS_INFO asking why it is zero); a positive rate with no treatment maps to a domestic taxable supply at that rate. Cross-border/exempt/reverse-charge must be stated here, never inferred. Mutually exclusive with clientTaxCode.',
               },
-              buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level buyerType, consulted only when this line has no clientTaxCode.' },
+              customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level customerType, consulted only when this line has no clientTaxCode.' },
               supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
             },
             required: ['description', 'quantity', 'unitPrice'],
@@ -257,7 +259,7 @@ const TOOLS = [
           type: 'string',
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/vatRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
         },
-        buyerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional buyer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the buyer\'s own country, which also exempts the buyer from HU\'s mandatory street-address requirement.' },
+        customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional customer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the customer\'s own country, which also exempts the customer from HU\'s mandatory street-address requirement.' },
         correctsInvoiceId: {
           type: 'string',
           description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; submit under a fresh idempotencyKey alongside this field.',
@@ -266,9 +268,9 @@ const TOOLS = [
           type: 'boolean',
           description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting.',
         },
-        notifyBuyer: {
+        notifyCustomer: {
           type: 'boolean',
-          description: 'Only meaningful for countries where no authority network delivers the invoice to the buyer (Spain, Portugal, France, Germany always; Italy only when the buyer has no SDI routing code — i.e. B2C; Poland only when the buyer has no Polish NIP — KSeF is pull-only and pull access requires the buyer\'s own registered NIP). When true and buyer.contact.email is set, Clearvo emails the buyer a link to view/download the invoice. Omit to use the entity default (see update_entity\'s notifyBuyerByDefault); true/false here overrides that default for this invoice only. Silently ignored for countries Clearvo already delivers electronically (Peppol, Italy B2B/B2G, Poland when the buyer has a NIP, Romania, Hungary, Greece, Argentina) — check the response\'s buyerNotification field to see what happened.',
+          description: 'Only meaningful for countries where no authority network delivers the invoice to the customer (Spain, Portugal, France, Germany always; Italy only when the customer has no SDI routing code — i.e. B2C; Poland only when the customer has no Polish NIP — KSeF is pull-only and pull access requires the customer\'s own registered NIP). When true and customer.contact.email is set, Clearvo emails the customer a link to view/download the invoice. Omit to use the entity default (see update_entity\'s notifyCustomerByDefault); true/false here overrides that default for this invoice only. Silently ignored for countries Clearvo already delivers electronically (Peppol, Italy B2B/B2G, Poland when the customer has a NIP, Romania, Hungary, Greece, Argentina) — check the response\'s customerNotification field to see what happened.',
         },
         transactionDirection: {
           type: 'string',
@@ -308,7 +310,7 @@ const TOOLS = [
           },
         },
       },
-      required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'buyer', 'lines', 'totalAmount', 'taxAmount'],
+      required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'customer', 'lines', 'totalAmount', 'taxAmount'],
     },
   },
   {
@@ -334,7 +336,7 @@ const TOOLS = [
         id: { type: 'string', description: 'The invoice ID (or referenceId) whose SII registration to amend — from submit_invoice or list_invoices.' },
         idempotencyKey: { type: 'string', description: 'Optional — a stable key so a retry with the same corrected content reuses the same amendment rather than filing a second A1. Omit to derive one automatically from id + the corrected invoiceNumber/issueDate.' },
         // The remaining properties are submit_invoice's own inputSchema (invoiceNumber,
-        // issueDate, supplier, buyer, lines, ...) — the FULL corrected document, not a
+        // issueDate, supplier, customer, lines, ...) — the FULL corrected document, not a
         // field-level patch. Not re-declared here field-by-field; see submit_invoice.
       },
       required: ['id'],
@@ -474,7 +476,7 @@ const TOOLS = [
       'Returns whether the number is valid and, when available, the registered business name and address. ' +
       'Supports EU VIES (all 27 EU member states), HMRC (UK), Brreg (Norway), ABN Lookup (Australia), ' +
       'and 100+ other countries. ' +
-      'Use this before issuing B2B invoices to confirm the buyer\'s tax registration status ' +
+      'Use this before issuing B2B invoices to confirm the customer\'s tax registration status ' +
       'and determine whether reverse charge applies.',
     inputSchema: {
       type: 'object' as const,
@@ -528,7 +530,7 @@ const TOOLS = [
       'anywhere yet (e.g. a new or pre-nexus business that only wants Compliance Radar to monitor for a ' +
       'future threshold breach) — this satisfies the "add-registration" onboarding step without a ' +
       'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
-      'Also handles notifyBuyerByDefault — see submit_invoice\'s notifyBuyer for what this controls. ' +
+      'Also handles notifyCustomerByDefault — see submit_invoice\'s notifyCustomer for what this controls. ' +
       'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties.',
     inputSchema: {
       type: 'object' as const,
@@ -540,7 +542,7 @@ const TOOLS = [
         city: { type: 'string', description: 'City.' },
         postalCode: { type: 'string', description: 'Postal / ZIP code.' },
         confirmNoRegistrations: { type: 'boolean', description: 'Set true to confirm this entity has no tax registrations anywhere yet (satisfies the add-registration onboarding step without a fake registration). Set false to clear a previous confirmation.' },
-        notifyBuyerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyBuyer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyBuyer override.' },
+        notifyCustomerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyCustomer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyCustomer override.' },
         mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
         mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
       },
@@ -1239,7 +1241,7 @@ const TOOLS = [
   {
     name: 'create_exemption_certificate',
     description:
-      'Record a tax exemption certificate belonging to one of this entity\'s BUYERS — not a certificate for the ' +
+      'Record a tax exemption certificate belonging to one of this entity\'s CUSTOMERS — not a certificate for the ' +
       'entity itself. An exemption certificate is a document a customer provides (e.g. a US resale certificate, ' +
       'manufacturing exemption, nonprofit exemption letter, or Ireland\'s Section 56 export authorisation) ' +
       'proving they do not owe tax on a purchase. Only call this when you know a specific customer holds one; ' +
@@ -1256,7 +1258,7 @@ const TOOLS = [
         certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER', 'EXPORT_AUTHORIZATION'], description: 'Type of exemption claimed. RESALE/MANUFACTURING/AGRICULTURAL/ENERGY/EXEMPT_ORG/GOVERNMENT/DIRECT_PAY/BLANKET_OTHER are for country="US". EXPORT_AUTHORIZATION is for country="IE" only — Ireland\'s Revenue-issued Section 56 ("56B") authorisation letting a habitual exporter buy most goods/services at 0% VAT (excludes food/drink, accommodation, entertainment, personal services).' },
         formType: { type: 'string', enum: ['SST', 'MTC', 'CUSTOM', '56B'], description: 'Standard form type. Optional for US (SST/MTC/CUSTOM, or a state-specific form code not in this enum). Required and must be "56B" when certificateType is EXPORT_AUTHORIZATION.' },
         customerName: { type: 'string', description: 'Exempt customer\'s name.' },
-        buyerTaxId: { type: 'string', description: 'Exempt customer\'s tax ID.' },
+        customerTaxId: { type: 'string', description: 'Exempt customer\'s tax ID.' },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Defaults to "US". Only "US" and "IE" are currently supported.' },
         region: { type: 'string', description: 'State or region code the exemption applies to (e.g. "CA"). US exemptions are typically state-scoped. Omit for IE — Section 56 authorisations are national, not sub-regional.' },
         taxCategorySlug: { type: 'string', description: 'Optional — restrict the exemption to a specific product tax category instead of all products.' },
@@ -1286,9 +1288,9 @@ const TOOLS = [
     name: 'list_customers',
     description:
       'List an entity\'s customer master data (name, tax ID, address). ' +
-      'Every successfully-issued invoice also auto-captures/refreshes a customer record from its buyer details, ' +
+      'Every successfully-issued invoice also auto-captures/refreshes a customer record from its customer details, ' +
       'so this list fills in over time even without calling create_customer directly. ' +
-      'Reference a customer via buyer.customerRef on submit_invoice instead of resending full buyer details every time.',
+      'Reference a customer via customer.customerRef on submit_invoice instead of resending full customer details every time.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1302,8 +1304,8 @@ const TOOLS = [
   {
     name: 'create_customer',
     description:
-      'Create a customer master-data record. Reference it later via buyer.customerRef on submit_invoice ' +
-      'instead of resending full buyer details every time. country and taxId are optional together — a B2C ' +
+      'Create a customer master-data record. Reference it later via customer.customerRef on submit_invoice ' +
+      'instead of resending full customer details every time. country and taxId are optional together — a B2C ' +
       'customer with no VAT registration can have neither, but must not have one without the other. Use taxIds ' +
       'instead of country/taxId for a customer registered in more than one country.',
     inputSchema: {
