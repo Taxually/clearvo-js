@@ -445,7 +445,7 @@ const TOOLS = [
         },
         supplier: {
           type: 'object',
-          description: 'The supplier party. Required when transactionDirection is "purchase" — the actual vendor on the purchase invoice (422 SUPPLIER_REQUIRED if missing); only taxId and billingAddress.country are meaningful there. Optional when transactionDirection is "sale" or omitted — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 SUPPLIER_TAX_ID_MISMATCH on a mismatch). `ref` on a purchase resolves saved supplier master data (see list_suppliers/create_supplier) exactly like customer.ref resolves saved customer data on a sale.',
+          description: 'The supplier party. Required when transactionDirection is "purchase" — the actual vendor on the purchase invoice (422 SUPPLIER_REQUIRED if missing); only taxId and billingAddress.country are meaningful there. Optional when transactionDirection is "sale" or omitted — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 SUPPLIER_TAX_ID_MISMATCH on a mismatch). `ref` on a purchase resolves saved supplier master data (see list_suppliers/create_supplier), filling in name/taxId/address — unlike customer.ref on a sale, which does not resolve customer master data (see customer.ref\'s own description).',
           properties: {
             name: { type: 'string', description: 'Free-text display name. Accepted but unused for supplier resolution.' },
             taxId: { type: 'string', description: 'Supplier VAT or tax ID — used to determine cross-border reverse-charge/import treatment on a purchase, or validated against the entity\'s own registration when supplier is the entity side on a sale.' },
@@ -468,7 +468,7 @@ const TOOLS = [
           properties: {
             b2bOverride: { type: 'boolean', description: 'Set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the buyer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied.' },
             taxId: { type: 'string', description: 'Customer VAT number — triggers B2B reverse charge or zero-rating for cross-border sales' },
-            ref: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP id). Resolves saved customer master data — see list_customers/create_customer.' },
+            ref: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP id). Unlike supplier.ref on a purchase, this does NOT resolve saved customer master data (name/taxId/address are not filled in). Its only effect: when the transaction\'s jurisdiction is the US and this entity uses Exemption Certificate Management (ECM), Clearvo looks up an active exemption certificate on file for this ref and auto-applies it. No effect outside the US or with no matching certificate.' },
             billingAddress: {
               type: 'object',
               properties: {

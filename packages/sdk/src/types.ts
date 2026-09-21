@@ -375,11 +375,20 @@ export interface TaxCalcPartyInput {
    */
   exemptionRef?: string;
   /**
-   * Your own reference for this party. On `customer.ref` (a `sale`),
-   * resolves saved customer master data. On `supplier.ref` (a
-   * `purchase`), resolves saved supplier master data (see
-   * `listSuppliers`/`createSupplier` etc.) — any fields you also supply
-   * directly take precedence over the stored ones.
+   * Your own reference for this party. `supplier.ref` (on a `purchase`)
+   * resolves saved supplier master data (see `listSuppliers`/
+   * `createSupplier` etc.) — the vendor's name/taxId/address are filled
+   * in from the stored record, and any fields you also supply directly
+   * take precedence over it. An unknown `supplier.ref` is rejected with
+   * 422 `SUPPLIER_REF_NOT_FOUND` rather than silently falling through.
+   *
+   * `customer.ref` (on a `sale`) does NOT resolve customer master data —
+   * it does not fill in name/taxId/address the way `supplier.ref` does.
+   * Its only effect is auto-applying a US exemption certificate: when the
+   * transaction's jurisdiction is the US and this entity uses Exemption
+   * Certificate Management (ECM), Clearvo looks up an active certificate
+   * on file for this `ref` and applies it. Elsewhere, or with no matching
+   * certificate, `customer.ref` has no effect on the calculation.
    */
   ref?: string;
   billingAddress?: { country: string; region?: string; postalCode?: string };
@@ -398,8 +407,8 @@ export interface TaxCalcPartyInput {
  *   the counterparty goes in `customer`, which is REQUIRED (422
  *   `CUSTOMER_REQUIRED` if omitted). `supplier` is OPTIONAL — omit it and
  *   Clearvo auto-fills it from your entity's own master data; supply it
- *   and it is validated against the entity's registration for the
- *   resolved transaction country, rejecting a mismatch with 422
+ *   and it must be one of the entity's registered tax IDs (any country),
+ *   rejecting a mismatch with 422
  *   `SUPPLIER_TAX_ID_MISMATCH` (the registered value is never silently
  *   substituted). `seller` is accepted as a deprecated alias for
  *   `supplier` on a sale only.
@@ -446,8 +455,8 @@ export interface TaxCalculateRequest {
    * `'purchase'` — the actual vendor on the purchase invoice (422
    * `SUPPLIER_REQUIRED` if missing). Optional when `transactionDirection`
    * is `'sale'` or omitted — there it is the entity side, auto-enriched
-   * from your entity's own master data when omitted; if supplied, it is
-   * validated against that registration for the transaction country (422
+   * from your entity's own master data when omitted; if supplied, it
+   * must be one of the entity's registered tax IDs (any country) (422
    * `SUPPLIER_TAX_ID_MISMATCH` on a mismatch).
    */
   supplier?: TaxCalcPartyInput;
@@ -470,8 +479,8 @@ export interface TaxCalculateRequest {
    * or omitted — the counterparty on a sale (422 `CUSTOMER_REQUIRED` if
    * missing). Optional when `transactionDirection` is `'purchase'` —
    * there it is the entity side, auto-enriched from your entity's own
-   * master data when omitted; if supplied, it is validated against that
-   * registration for the transaction country (422
+   * master data when omitted; if supplied, it must be one of the
+   * entity's registered tax IDs (any country) (422
    * `CUSTOMER_TAX_ID_MISMATCH` on a mismatch).
    *
    * B2B/B2C is inferred from `taxId` (present + verified = B2B) rather
@@ -563,11 +572,12 @@ export interface TaxCalculateRequest {
 export interface TaxCalcParty {
   /** This party's resolved country. */
   country: string | null;
-  /** State/region code, when resolved (e.g. a US party). */
-  region: string | null;
-  postalCode: string | null;
-  /** This party's tax/VAT ID, when known. */
-  taxId: string | null;
+  /** State/region code, when resolved (e.g. a US party). Omitted, not null, when absent. */
+  region?: string;
+  /** Omitted, not null, when absent. */
+  postalCode?: string;
+  /** This party's tax/VAT ID, when known. Omitted, not null, when absent. */
+  taxId?: string;
   /**
    * True when this block is your own entity (auto-enriched from master
    * data, or matched against it if you supplied it); false when it is the

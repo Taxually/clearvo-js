@@ -12,6 +12,7 @@
 // invoked via `npm run test:types` in this package, and by CI).
 
 import type { TaxCalculateRequest, TaxCalculateResponse, TaxCalcParty, Supplier, CreateSupplierInput } from '../src/types.js';
+import type { ClearvoClient } from '../src/client.js';
 
 // A 'purchase' request: only `supplier` (the counterparty/vendor) is
 // supplied — `customer` (the entity side) is omitted entirely and still
@@ -106,3 +107,41 @@ void _createSupplier;
 declare const _supplier: Supplier;
 const _supplierRef: string | null | undefined = _supplier.supplierRef;
 void _supplierRef;
+
+// createSupplier() must resolve to the bare Supplier — POST /v1/suppliers
+// responds 201 with `{ supplier }`, and the client unwraps it. If this ever
+// regresses to returning the raw envelope, `{ supplier: Supplier }` is not
+// assignable to `Supplier` (no `id`/`name`/`createdAt`/`updatedAt` at the
+// top level) and this assignment stops compiling.
+declare const _client: ClearvoClient;
+const _createdSupplier: Promise<Supplier> = _client.createSupplier(_createSupplier);
+void _createdSupplier;
+
+// getSupplier/updateSupplier/getSupplierByRef respond with the Supplier
+// bare (no envelope) — unlike createSupplier's `{ supplier }`.
+const _fetchedSupplier: Promise<Supplier> = _client.getSupplier('sup_123');
+const _updatedSupplier: Promise<Supplier> = _client.updateSupplier('sup_123', { name: 'Renamed' });
+const _supplierByRef: Promise<Supplier> = _client.getSupplierByRef('VEND-001');
+void _fetchedSupplier;
+void _updatedSupplier;
+void _supplierByRef;
+
+// deleteSupplier responds 204 (no body).
+const _deletedSupplier: Promise<void> = _client.deleteSupplier('sup_123');
+void _deletedSupplier;
+
+// TaxCalcParty.region/postalCode/taxId are omitted (optional), never null,
+// when absent — matching the backend PartyResult shape. A bare isEntity is
+// enough to satisfy the type.
+const _partyWithNoOptionalFields: TaxCalcParty = { country: 'DE', isEntity: true };
+void _partyWithNoOptionalFields;
+
+// Explicit `null` is no longer valid for these fields — if this ever
+// compiles again, TaxCalcParty has drifted back to `string | null`.
+const _partyWithNullRegion: TaxCalcParty = {
+  country: 'US',
+  isEntity: false,
+  // @ts-expect-error — region is `string | undefined`, not `string | null`.
+  region: null,
+};
+void _partyWithNullRegion;

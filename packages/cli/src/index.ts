@@ -157,53 +157,20 @@ program
   });
 
 // ── clearvo calculate <file> ─────────────────────────────────────────────────
-// Merges a party field's flag onto whatever the JSON file already has under
-// body[key] — the flag wins, everything else in the file is preserved.
-function mergeCalcParty(
-  body: Record<string, unknown>,
-  key: 'supplier' | 'customer',
-  fields: { country?: string; region?: string; postalCode?: string; taxId?: string; ref?: string }
-) {
-  if (!fields.country && !fields.region && !fields.postalCode && !fields.taxId && !fields.ref) return;
-  const existing = { ...(body[key] as Record<string, unknown> | undefined) };
-  const billingAddress = { ...(existing.billingAddress as Record<string, unknown> | undefined) };
-  if (fields.country) billingAddress.country = fields.country;
-  if (fields.region) billingAddress.region = fields.region;
-  if (fields.postalCode) billingAddress.postalCode = fields.postalCode;
-  if (Object.keys(billingAddress).length) existing.billingAddress = billingAddress;
-  if (fields.taxId) existing.taxId = fields.taxId;
-  if (fields.ref) existing.ref = fields.ref;
-  body[key] = existing;
-}
-
+// The JSON file carries the parties (supplier/customer) directly — there is
+// no per-field CLI override for them; edit the file instead.
 program
   .command('calculate <file>')
   .description('Calculate tax for a transaction from a JSON file')
   .option('--commit', 'Record in audit trail (redundant — this is the default; kept for backward compatibility)')
   .option('--dry-run', 'Preview only — do not record or bill this calculation')
-  .option('--direction <sale|purchase>', '"sale" (default) — the entity is the supplier and the customer (--customer-* or the file\'s customer) is required. "purchase" — the entity is the customer and the supplier (--supplier-* or the file\'s supplier) is required. Overrides transactionDirection in the file when both are given.')
-  .option('--supplier-country <code>', 'Supplier country override (ISO 3166-1 alpha-2). Required, directly or via the file, when --direction purchase.')
-  .option('--supplier-region <region>', 'Supplier state/province override')
-  .option('--supplier-tax-id <taxId>', 'Supplier VAT/tax ID override')
-  .option('--supplier-ref <ref>', 'Your own supplier reference — resolves saved supplier master data on a purchase (see `clearvo suppliers get-by-ref`)')
-  .option('--customer-country <code>', 'Customer country override (ISO 3166-1 alpha-2). Required, directly or via the file, when --direction sale (the default).')
-  .option('--customer-region <region>', 'Customer state/province override — REQUIRED for a US customer')
-  .option('--customer-tax-id <taxId>', 'Customer VAT/tax ID override')
-  .option('--customer-ref <ref>', 'Your own customer reference — resolves saved customer master data on a sale')
+  .option('--direction <sale|purchase>', '"sale" (default) — the entity is the supplier and the customer (from the file) is required. "purchase" — the entity is the customer and the supplier (from the file) is required. Overrides transactionDirection in the file when both are given.')
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (file: string, opts: {
     commit?: boolean;
     dryRun?: boolean;
     pretty?: boolean;
     direction?: 'sale' | 'purchase';
-    supplierCountry?: string;
-    supplierRegion?: string;
-    supplierTaxId?: string;
-    supplierRef?: string;
-    customerCountry?: string;
-    customerRegion?: string;
-    customerTaxId?: string;
-    customerRef?: string;
   }) => {
     const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     // The API defaults an omitted `commit` to true (persisted/billed) — this
@@ -216,18 +183,6 @@ program
       body.commit = true;
     }
     if (opts.direction) body.transactionDirection = opts.direction;
-    mergeCalcParty(body, 'supplier', {
-      country: opts.supplierCountry,
-      region: opts.supplierRegion,
-      taxId: opts.supplierTaxId,
-      ref: opts.supplierRef,
-    });
-    mergeCalcParty(body, 'customer', {
-      country: opts.customerCountry,
-      region: opts.customerRegion,
-      taxId: opts.customerTaxId,
-      ref: opts.customerRef,
-    });
     const result = await api('POST', '/tax/calculate', body);
     print(result, !!opts.pretty);
   });

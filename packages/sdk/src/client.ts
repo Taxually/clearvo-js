@@ -201,6 +201,7 @@ export class ClearvoClient {
   // 'purchase') resolves a saved record here, same as `customer.ref` resolves
   // saved customer data on a sale.
 
+  /** GET /suppliers responds 200 with `{ suppliers, total, page, limit }` — matches ListSuppliersResponse bare. */
   listSuppliers(params: ListSuppliersParams = {}): Promise<ListSuppliersResponse> {
     const { entityId, ...query } = params;
     const qs = new URLSearchParams();
@@ -211,19 +212,26 @@ export class ClearvoClient {
     return this.request('GET', `/suppliers${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
-  createSupplier(input: CreateSupplierInput): Promise<Supplier> {
+  /** POST /suppliers responds 201 with `{ supplier }`, unlike get/update/by-ref below which return the Supplier bare. */
+  async createSupplier(input: CreateSupplierInput): Promise<Supplier> {
     const { entityId, ...body } = input;
-    return this.request('POST', '/suppliers', body, entityId ? { 'x-entity-id': entityId } : undefined);
+    const { supplier } = await this.request<{ supplier: Supplier }>(
+      'POST', '/suppliers', body, entityId ? { 'x-entity-id': entityId } : undefined
+    );
+    return supplier;
   }
 
+  /** GET /suppliers/{id} responds 200 with the Supplier bare — no envelope. */
   getSupplier(supplierId: string, entityId?: string): Promise<Supplier> {
     return this.request('GET', `/suppliers/${encodeURIComponent(supplierId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
+  /** PATCH /suppliers/{id} responds 200 with the Supplier bare — no envelope. */
   updateSupplier(supplierId: string, updates: UpdateSupplierInput, entityId?: string): Promise<Supplier> {
     return this.request('PATCH', `/suppliers/${encodeURIComponent(supplierId)}`, updates, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
+  /** DELETE /suppliers/{id} responds 204 with no body. */
   deleteSupplier(supplierId: string, entityId?: string): Promise<void> {
     return this.request('DELETE', `/suppliers/${encodeURIComponent(supplierId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
