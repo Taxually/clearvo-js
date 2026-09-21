@@ -33,6 +33,8 @@ import type {
   AddRegistrationInput,
   SetCollectionInput,
   SetCollectionResponse,
+  UpdateRegistrationInput,
+  UpdateRegistrationResponse,
   TaxCalculationSummary,
   ListTaxCalculationsParams,
   ListTaxCalculationsResponse,
@@ -286,6 +288,16 @@ export class ClearvoClient {
     return this.request('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, input);
   }
 
+  /**
+   * Edit an existing registration's tax number and/or secondary identifiers
+   * (e.g. France's SIRET) in place, instead of deleting and re-adding it.
+   * `extraFields` merges into the row's existing secondary identifiers —
+   * only the keys passed are changed.
+   */
+  updateRegistration(registrationId: string, input: UpdateRegistrationInput): Promise<UpdateRegistrationResponse> {
+    return this.request('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, input);
+  }
+
   // ── Tax Calculation History ───────────────────────────────────────────────────
 
   listTaxCalculations(params: ListTaxCalculationsParams = {}): Promise<ListTaxCalculationsResponse> {
@@ -431,7 +443,8 @@ export class ClearvoClient {
    * Filtered, paginated query over einvoicing_records or tax_calculations.
    * Fields, operators, and enum values are allowlisted per dataset — call
    * getQueryFields() to discover what's currently supported before building
-   * `filters`/`columns`.
+   * `filters`/`columns`. Read access is enough — this is the dashboard's
+   * Explore tool, available to every member role.
    */
   queryData(params: QueryRequestParams): Promise<QueryResponse> {
     const { dataset, filters, columns, limit, from, to, cursor } = params;

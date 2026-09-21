@@ -34,8 +34,8 @@ export interface CreateEntityResponse {
 export interface UpdateEntityInput {
   name?: string;
   vatNumber?: string;
-  /** Default for InvoiceRequest.notifyBuyer — applies whenever a send omits its own override. */
-  notifyBuyerByDefault?: boolean;
+  /** Default for SubmitInvoiceInput.notifyCustomer — applies whenever a send omits its own override. */
+  notifyCustomerByDefault?: boolean;
   /**
    * Mexico only. 'sat_pull' (default) requires an e.firma/CSD on file first (POST /mx/credentials —
    * not yet wrapped by this SDK) or the update is rejected with MX_CREDENTIALS_REQUIRED.
@@ -72,13 +72,13 @@ export interface InvoiceSubmitResponse {
    */
   lines?: Array<{ lineNumber: number; taxResolution: LineTaxResolution }>;
   /**
-   * Outcome of the buyer invoice notification feature — only present for
-   * countries where no authority network delivers the invoice to the buyer
+   * Outcome of the customer invoice notification feature — only present for
+   * countries where no authority network delivers the invoice to the customer
    * (Spain, Portugal, France, Germany always; Italy B2C).
    */
-  buyerNotification?: {
+  customerNotification?: {
     status: 'SENT' | 'SKIPPED' | 'FAILED';
-    reason?: 'NOT_APPLICABLE' | 'NOT_OPTED_IN' | 'MISSING_BUYER_EMAIL' | 'NOTIFICATIONS_NOT_CONFIGURED';
+    reason?: 'NOT_APPLICABLE' | 'NOT_OPTED_IN' | 'MISSING_CUSTOMER_EMAIL' | 'NOTIFICATIONS_NOT_CONFIGURED';
     error?: string;
   };
 }
@@ -134,7 +134,7 @@ export interface PartyInput {
   contact?: { name?: string; phone?: string; email?: string };
   endpointId?: string;
   endpointSchemeId?: string;
-  /** Buyer only — resolve a previously-saved customer record instead of repeating its fields. */
+  /** Customer only — resolve a previously-saved customer record instead of repeating its fields. */
   customerRef?: string;
 }
 
@@ -154,8 +154,8 @@ export interface LineItemInput {
   clientTaxCode?: string;
   /** Mutually exclusive with `clientTaxCode`. See TaxTreatment. */
   taxTreatment?: TaxTreatment;
-  /** Per-line override of the invoice-level buyerType, consulted only when this line has no clientTaxCode. */
-  buyerType?: 'B2B' | 'B2C';
+  /** Per-line override of the invoice-level customerType, consulted only when this line has no clientTaxCode. */
+  customerType?: 'B2B' | 'B2C';
   /** Consulted only when this line has no clientTaxCode. Defaults to 'goods'. */
   supplyType?: 'goods' | 'digital_service' | 'general_service';
   discount?: number;
@@ -197,9 +197,9 @@ export interface SubmitInvoiceInput {
   country: string;
   taxIncluded?: boolean;
   supplier?: PartyInput;
-  buyer: PartyInput;
-  /** Optional buyer classification for the whole invoice. Can be overridden per line via lines[].buyerType. */
-  buyerType?: 'B2B' | 'B2C';
+  customer: PartyInput;
+  /** Optional customer classification for the whole invoice. Can be overridden per line via lines[].customerType. */
+  customerType?: 'B2B' | 'B2C';
   lines: LineItemInput[];
   allowances?: AllowanceChargeInput[];
   charges?: AllowanceChargeInput[];
@@ -239,14 +239,14 @@ export interface SubmitInvoiceInput {
    * - `hu.exchangeRate` — exchange rate to HUF for this invoice date.
    *   Required whenever `currency` is not HUF.
    * - `hu.invoiceAppearance` — one of PAPER/ELECTRONIC/EDI/UNKNOWN, overriding
-   *   the default appearance (PAPER for a resolved PRIVATE_PERSON buyer,
+   *   the default appearance (PAPER for a resolved PRIVATE_PERSON customer,
    *   ELECTRONIC otherwise).
    * - `de.invoiceFormat` — per-request override of ZUGFERD vs. XRECHNUNG.
    * - `de.leitwegId` — BT-10 German public-sector routing ID (XRechnung
    *   only); falls back to the top-level `buyerReference` when omitted.
    */
   countrySpecific?: Record<string, unknown>;
-  notifyBuyer?: boolean;
+  notifyCustomer?: boolean;
   rejectInsteadOfAutoCorrect?: boolean;
   metadata?: Record<string, string>;
   /**
@@ -284,7 +284,7 @@ export interface SubmitInvoiceInput {
   deductionPeriod?: { ejercicio: string; periodo: string };
 }
 
-/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive vatRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is held NEEDS_INFO — movement is never inferred from the buyer/seller countries. */
+/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive vatRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is held NEEDS_INFO — movement is never inferred from the customer/seller countries. */
 export type ResolvedBy = 'client_tax_code' | 'source_system_code' | 'facts';
 
 /**
@@ -297,9 +297,9 @@ export interface LineTaxResolution {
     clientTaxCode?: string;
     sourceSystemCode?: { system: string; code: string };
     facts?: {
-      buyerCountry: string;
-      buyerTaxId?: string;
-      buyerType?: 'b2b' | 'b2c';
+      customerCountry: string;
+      customerTaxId?: string;
+      customerType?: 'b2b' | 'b2c';
       supplyType?: 'goods' | 'digital_service' | 'general_service';
       taxTreatment?: string;
     };
@@ -961,6 +961,12 @@ export interface TaxNumberBatchResult {
   sandbox: boolean;
 }
 
+export interface RegistrationSecondaryIdentifier {
+  key: string;
+  label: string;
+  value: string;
+}
+
 export interface TaxRegistration {
   country: string;
   scheme: string;
@@ -975,6 +981,8 @@ export interface TaxRegistration {
   collectFromDate: string | null;
   collectionStatus: 'COLLECTING' | 'DEFERRED' | 'SETUP_NEEDED' | null;
   canCollectTax: boolean;
+  /** Jurisdiction-specific secondary identifiers on file (e.g. France's SIRET, Germany's Steuernummer). */
+  secondaryIdentifiers: RegistrationSecondaryIdentifier[];
 }
 
 export interface ListRegistrationsResponse {
@@ -1004,6 +1012,19 @@ export interface AddRegistrationInput {
   taxNumber?: string;
   iossNumber?: string;
   entityId?: string;
+}
+
+export interface UpdateRegistrationInput {
+  /** New registration/VAT number. Pass null or '' to clear it. Omit entirely to leave it unchanged. */
+  taxNumber?: string | null;
+  /** Secondary identifiers to merge in, e.g. { fr_siret: '12345678901234' } — only the keys you pass are changed. */
+  extraFields?: Record<string, string>;
+}
+
+export interface UpdateRegistrationResponse {
+  ok: boolean;
+  taxNumber?: string | null;
+  secondaryIdentifiers?: RegistrationSecondaryIdentifier[];
 }
 
 export interface TaxCalculationSummary {

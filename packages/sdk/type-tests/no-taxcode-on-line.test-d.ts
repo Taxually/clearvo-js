@@ -49,7 +49,7 @@ const _validLineWithHint: LineItemInput = {
   quantity: 1,
   unitPrice: 100,
   taxTreatment: 'exempt',
-  buyerType: 'B2B',
+  customerType: 'B2B',
   supplyType: 'goods',
 };
 
