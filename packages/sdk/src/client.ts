@@ -19,6 +19,11 @@ import type {
   UpdateProductInput,
   ListProductsParams,
   ListProductsResponse,
+  Supplier,
+  CreateSupplierInput,
+  UpdateSupplierInput,
+  ListSuppliersParams,
+  ListSuppliersResponse,
   Webhook,
   CreateWebhookInput,
   CreateWebhookResponse,
@@ -188,6 +193,44 @@ export class ClearvoClient {
 
   deleteProduct(productId: string): Promise<void> {
     return this.request('DELETE', `/products/${encodeURIComponent(productId)}`);
+  }
+
+  // ── Supplier Master Data ─────────────────────────────────────────────────────
+  // Mirrors the product/customer master-data pattern for the other side of a
+  // transaction. `supplier.ref` on calculateTax() (transactionDirection:
+  // 'purchase') resolves a saved record here, same as `customer.ref` resolves
+  // saved customer data on a sale.
+
+  listSuppliers(params: ListSuppliersParams = {}): Promise<ListSuppliersResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    if (query.search) qs.set('search', query.search);
+    if (query.page != null) qs.set('page', String(query.page));
+    if (query.limit != null) qs.set('limit', String(query.limit));
+    const q = qs.toString();
+    return this.request('GET', `/suppliers${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  createSupplier(input: CreateSupplierInput): Promise<Supplier> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/suppliers', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  getSupplier(supplierId: string, entityId?: string): Promise<Supplier> {
+    return this.request('GET', `/suppliers/${encodeURIComponent(supplierId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  updateSupplier(supplierId: string, updates: UpdateSupplierInput, entityId?: string): Promise<Supplier> {
+    return this.request('PATCH', `/suppliers/${encodeURIComponent(supplierId)}`, updates, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  deleteSupplier(supplierId: string, entityId?: string): Promise<void> {
+    return this.request('DELETE', `/suppliers/${encodeURIComponent(supplierId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** GET /suppliers/by-ref/{ref} — look up a saved supplier by your own supplierRef instead of Clearvo's internal id. */
+  getSupplierByRef(ref: string, entityId?: string): Promise<Supplier> {
+    return this.request('GET', `/suppliers/by-ref/${encodeURIComponent(ref)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Requirements ──────────────────────────────────────────────────────────────
