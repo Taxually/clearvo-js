@@ -352,14 +352,114 @@ export interface ListInvoicesResponse {
   prevCursor: string | null;
 }
 
+/**
+ * A `supplier`/`customer` party on a TaxCalculateRequest. Only `taxId` and
+ * `billingAddress.country` are meaningful for a `supplier` party — `name`/
+ * `b2bOverride`/`exemptionRef`/`shippingAddress` are accepted but ignored
+ * there (those matter only for a `customer` party on a `sale`).
+ */
+export interface TaxCalcPartyInput {
+  /** Free-text display name. Optional and unused for tax determination. */
+  name?: string;
+  /**
+   * Force B2B treatment regardless of VAT verification result. Meaningful
+   * only for `customer`; accepted but ignored on `supplier`.
+   */
+  b2bOverride?: boolean;
+  /** This party's VAT/tax ID. */
+  taxId?: string;
+  /**
+   * Reference to an exemption certificate stored in Clearvo ECM (the
+   * `certificate_ref`, not the party's tax ID). Meaningful only for
+   * `customer` on a `sale`; accepted but ignored on `supplier`.
+   */
+  exemptionRef?: string;
+  /**
+   * Your own reference for this party. `supplier.ref` (on a `purchase`)
+   * resolves saved supplier master data (see `listSuppliers`/
+   * `createSupplier` etc.) — the vendor's name/taxId/address are filled
+   * in from the stored record, and any fields you also supply directly
+   * take precedence over it. An unknown `supplier.ref` is rejected with
+   * 422 `SUPPLIER_REF_NOT_FOUND` rather than silently falling through.
+   *
+   * `customer.ref` (on a `sale`) does NOT resolve customer master data —
+   * it does not fill in name/taxId/address the way `supplier.ref` does.
+   * Its only effect is auto-applying a US exemption certificate: when the
+   * transaction's jurisdiction is the US and this entity uses Exemption
+   * Certificate Management (ECM), Clearvo looks up an active certificate
+   * on file for this `ref` and applies it. Elsewhere, or with no matching
+   * certificate, `customer.ref` has no effect on the calculation.
+   */
+  ref?: string;
+  billingAddress?: { country: string; region?: string; postalCode?: string };
+  /** Meaningful only for `customer`; accepted but ignored on `supplier`. */
+  shippingAddress?: { country: string; region?: string; postalCode?: string };
+}
+
+/**
+ * `supplier` and `customer` are both optional, direction-aware party
+ * fields — the counterparty for the resolved `transactionDirection` is
+ * required, the entity side is optional (auto-enriched from your entity's
+ * own master data, or validated against it if you supply it).
+ *
+ * **Direction rule** (`transactionDirection`, default `'sale'`):
+ * - `'sale'` — an outgoing transaction: the entity is the `supplier`, and
+ *   the counterparty goes in `customer`, which is REQUIRED (422
+ *   `CUSTOMER_REQUIRED` if omitted). `supplier` is OPTIONAL — omit it and
+ *   Clearvo auto-fills it from your entity's own master data; supply it
+ *   and it must be one of the entity's registered tax IDs (any country),
+ *   rejecting a mismatch with 422
+ *   `SUPPLIER_TAX_ID_MISMATCH` (the registered value is never silently
+ *   substituted). `seller` is accepted as a deprecated alias for
+ *   `supplier` on a sale only.
+ * - `'purchase'` — an incoming, input-tax transaction: party roles
+ *   invert. The entity is the `customer` (buyer) and the counterparty is
+ *   the `supplier` (vendor), which is REQUIRED (422 `SUPPLIER_REQUIRED`
+ *   if omitted). `customer` is now OPTIONAL and entity-side — omit it and
+ *   Clearvo auto-fills it from your entity's own master data; supply it
+ *   and it is validated the same way, rejecting a mismatch with 422
+ *   `CUSTOMER_TAX_ID_MISMATCH`. `seller` has no meaning on a purchase and
+ *   is rejected outright with 422 `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE`
+ *   — use `supplier`, which already means the vendor.
+ *
+ * The response's top-level `entityRole` (`'supplier'` for a sale,
+ * `'customer'` for a purchase) tells you which response party block is
+ * your own entity.
+ */
 export interface TaxCalculateRequest {
   currency: string;
   commit?: boolean;
   idempotencyKey?: string;
-  seller: {
+  /**
+   * `'sale'` (default) — an outgoing transaction: the entity is the
+   * supplier and `customer` (the counterparty) is required. `'purchase'`
+   * — an incoming transaction: the entity is the customer and `supplier`
+   * (the counterparty) is required. See this interface's own doc comment
+   * for the full direction rule.
+   */
+  transactionDirection?: 'sale' | 'purchase';
+  /**
+   * @deprecated Use `supplier` instead. Deprecated alias for `supplier`
+   * on a `transactionDirection: 'sale'` calculation only — normalised to
+   * `supplier` before validation runs. Rejected with 422
+   * `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE` when sent alongside
+   * `transactionDirection: 'purchase'` (there is no sensible mapping —
+   * use `supplier` there, which already means the vendor).
+   */
+  seller?: {
     address: { country: string };
     taxId?: string;
   };
+  /**
+   * The supplier party. Required when `transactionDirection` is
+   * `'purchase'` — the actual vendor on the purchase invoice (422
+   * `SUPPLIER_REQUIRED` if missing). Optional when `transactionDirection`
+   * is `'sale'` or omitted — there it is the entity side, auto-enriched
+   * from your entity's own master data when omitted; if supplied, it
+   * must be one of the entity's registered tax IDs (any country) (422
+   * `SUPPLIER_TAX_ID_MISMATCH` on a mismatch).
+   */
+  supplier?: TaxCalcPartyInput;
   shipFrom?: { country: string };
   /**
    * Incoterms 2020 rule for the shipment. Does not gate IOSS eligibility
@@ -374,16 +474,21 @@ export interface TaxCalculateRequest {
    * process collects import VAT separately. Never affects B2B transactions.
    */
   incoterms?: 'EXW' | 'FCA' | 'FAS' | 'FOB' | 'CFR' | 'CIF' | 'CPT' | 'CIP' | 'DAP' | 'DPU' | 'DDP';
-  customer: {
-    type: 'B2B' | 'B2C' | 'B2G';
-    taxId?: string;
-    billingAddress: {
-      country: string;
-      region?: string;
-      postalCode?: string;
-    };
-    shippingAddress?: { country: string; region?: string; postalCode?: string };
-  };
+  /**
+   * The customer party. Required when `transactionDirection` is `'sale'`
+   * or omitted — the counterparty on a sale (422 `CUSTOMER_REQUIRED` if
+   * missing). Optional when `transactionDirection` is `'purchase'` —
+   * there it is the entity side, auto-enriched from your entity's own
+   * master data when omitted; if supplied, it must be one of the
+   * entity's registered tax IDs (any country) (422
+   * `CUSTOMER_TAX_ID_MISMATCH` on a mismatch).
+   *
+   * B2B/B2C is inferred from `taxId` (present + verified = B2B) rather
+   * than declared with an explicit `type` field — use `b2bOverride` to
+   * force B2B treatment when you know the buyer is a business but don't
+   * have their VAT ID at checkout time.
+   */
+  customer?: TaxCalcPartyInput;
   evidence?: {
     ipAddress?: string;
     binCountry?: string;
@@ -457,6 +562,36 @@ export interface TaxCalculateRequest {
   vatUnverifiableFallback?: 'conservative' | 'permissive';
 }
 
+/**
+ * One resolved party (`supplier` or `customer`) on a TaxCalculateResponse.
+ * The entity-side block never carries validation fields; the counterparty
+ * block additionally carries `b2bOverride`/`taxIdValidated`/
+ * `taxIdValidationStatus`. See `TaxCalculateResponse.entityRole` for which
+ * block is which.
+ */
+export interface TaxCalcParty {
+  /** This party's resolved country. */
+  country: string | null;
+  /** State/region code, when resolved (e.g. a US party). Omitted, not null, when absent. */
+  region?: string;
+  /** Omitted, not null, when absent. */
+  postalCode?: string;
+  /** This party's tax/VAT ID, when known. Omitted, not null, when absent. */
+  taxId?: string;
+  /**
+   * True when this block is your own entity (auto-enriched from master
+   * data, or matched against it if you supplied it); false when it is the
+   * counterparty.
+   */
+  isEntity: boolean;
+  /** Present only on the counterparty block. Echoes the request's `b2bOverride`, if supplied. */
+  b2bOverride?: boolean;
+  /** Present only on the counterparty block. True when the supplied `taxId` passed live-authority (e.g. VIES) verification. */
+  taxIdValidated?: boolean;
+  /** Present only on the counterparty block. Outcome of taxId verification, e.g. VALID, INVALID, UNVERIFIED, SKIPPED. */
+  taxIdValidationStatus?: string;
+}
+
 export interface TaxCalculateResponse {
   calculationId: string;
   entityId: string;
@@ -473,6 +608,28 @@ export interface TaxCalculateResponse {
     method: string;
     precision: string;
   };
+  /**
+   * The supplier party for this calculation. On a `'sale'` this is your
+   * own entity (`isEntity: true`, no validation fields). On a
+   * `'purchase'` this is the counterparty — the vendor (`isEntity: false`,
+   * with `b2bOverride`/`taxIdValidated`/`taxIdValidationStatus`). See
+   * `entityRole`.
+   */
+  supplier: TaxCalcParty;
+  /**
+   * The customer party for this calculation. On a `'sale'` this is the
+   * counterparty — the buyer (`isEntity: false`, with
+   * `b2bOverride`/`taxIdValidated`/`taxIdValidationStatus`). On a
+   * `'purchase'` this is your own entity (`isEntity: true`, no validation
+   * fields). See `entityRole`.
+   */
+  customer: TaxCalcParty;
+  /**
+   * Which of the two party blocks above is your own entity — `'supplier'`
+   * for a `'sale'`, `'customer'` for a `'purchase'`. The other block is
+   * the counterparty.
+   */
+  entityRole: 'supplier' | 'customer';
   summary: {
     totalAmount: number;
     totalTax: number;
@@ -637,6 +794,134 @@ export interface ListProductsParams {
 export interface ListProductsResponse {
   products: Product[];
   total: number;
+}
+
+// ── Supplier Master Data ──────────────────────────────────────────────────
+// Mirrors Customer for the other side of a transaction. A received inbound
+// e-invoice is linked to a supplier master row (matched by entity/country/
+// tax ID), and `supplier.ref` on a `transactionDirection: 'purchase'` tax
+// calculation resolves this record exactly like `customer.ref` resolves a
+// saved customer.
+
+export type SupplierSource = 'manual' | 'API' | 'bulk_import' | 'auto_captured';
+
+export interface SupplierTaxIdEntry {
+  country: string;
+  taxId: string;
+}
+
+export interface Supplier {
+  /** Clearvo's internal supplier ID. */
+  id: string;
+  /**
+   * Your own reference for this supplier (e.g. an ERP vendor id). Pass as
+   * `supplier.ref` on `calculateTax()` (transactionDirection: 'purchase')
+   * to reuse a saved supplier without resending full details.
+   */
+  supplierRef?: string | null;
+  name: string;
+  /**
+   * ISO 3166-1 alpha-2 country code of the PRIMARY tax registration
+   * (taxIds[0]). Required together with taxId; a supplier with no known
+   * VAT registration may have neither.
+   */
+  country?: string | null;
+  /**
+   * Tax ID of the primary registration, format-validated and normalized
+   * against country. See taxIds for a supplier registered in more than
+   * one country.
+   */
+  taxId?: string | null;
+  /**
+   * Every tax registration on file for this supplier, primary first
+   * (mirrors country/taxId above). A supplier registered in more than one
+   * country has more than one entry here.
+   */
+  taxIds?: SupplierTaxIdEntry[];
+  /**
+   * ISO 3166-1 alpha-2 country code of this supplier's own place of
+   * establishment — independent of `country` (the primary tax
+   * registration's country above). Defaults to the primary tax
+   * registration's country when not given explicitly.
+   */
+  establishmentCountry?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+  /**
+   * How this record was created: entered manually on the dashboard,
+   * created via this API, bulk/CSV-imported, or auto-captured from a
+   * received inbound e-invoice's supplier details.
+   */
+  source?: SupplierSource;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSupplierInput {
+  name: string;
+  /** Required together with taxId. Mutually exclusive with taxIds. */
+  country?: string;
+  /** Required together with country; format-validated and normalized. Mutually exclusive with taxIds. */
+  taxId?: string;
+  /**
+   * A supplier registered in more than one country: the full ordered list
+   * of registrations, first entry is the primary (mirrored onto
+   * country/taxId in the response). Mutually exclusive with the flat
+   * country/taxId fields above.
+   */
+  taxIds?: SupplierTaxIdEntry[];
+  /** Your own reference (e.g. ERP vendor id). Must be unique per entity. */
+  supplierRef?: string;
+  establishmentCountry?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  /** Entity to create the supplier under. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface UpdateSupplierInput {
+  name?: string;
+  country?: string | null;
+  taxId?: string | null;
+  /**
+   * Full replacement list of this supplier's tax registrations (pass []
+   * to clear every one); first entry becomes the primary, mirrored onto
+   * country/taxId in the response. Mutually exclusive with the flat
+   * country/taxId fields. Omit this field entirely to leave existing
+   * registrations untouched.
+   */
+  taxIds?: SupplierTaxIdEntry[];
+  supplierRef?: string | null;
+  /** Omit to leave unchanged; null clears it. */
+  establishmentCountry?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+}
+
+export interface ListSuppliersParams {
+  entityId?: string;
+  /** Case-insensitive substring match against the stored name. */
+  search?: string;
+  /** Page number, 1-based (default 1). */
+  page?: number;
+  /** Results per page (default 25, max 100). */
+  limit?: number;
+}
+
+export interface ListSuppliersResponse {
+  suppliers: Supplier[];
+  total: number;
+  page?: number;
+  limit?: number;
 }
 
 export interface Webhook {

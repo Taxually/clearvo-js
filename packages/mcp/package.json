@@ -15,6 +15,7 @@
     "build": "tsc && chmod +x dist/index.js",
     "build:mcpb": "node scripts/build-mcpb.js",
     "test:mcpb": "node scripts/smoke-test-mcpb.js",
+    "test:supplier-tools": "node scripts/verify-supplier-tools.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch"
   },

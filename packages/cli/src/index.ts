@@ -157,13 +157,21 @@ program
   });
 
 // ── clearvo calculate <file> ─────────────────────────────────────────────────
+// The JSON file carries the parties (supplier/customer) directly — there is
+// no per-field CLI override for them; edit the file instead.
 program
   .command('calculate <file>')
   .description('Calculate tax for a transaction from a JSON file')
   .option('--commit', 'Record in audit trail (redundant — this is the default; kept for backward compatibility)')
   .option('--dry-run', 'Preview only — do not record or bill this calculation')
+  .option('--direction <sale|purchase>', '"sale" (default) — the entity is the supplier and the customer (from the file) is required. "purchase" — the entity is the customer and the supplier (from the file) is required. Overrides transactionDirection in the file when both are given.')
   .option('--pretty', 'Pretty-print JSON output')
-  .action(async (file: string, opts: { commit?: boolean; dryRun?: boolean; pretty?: boolean }) => {
+  .action(async (file: string, opts: {
+    commit?: boolean;
+    dryRun?: boolean;
+    pretty?: boolean;
+    direction?: 'sale' | 'purchase';
+  }) => {
     const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     // The API defaults an omitted `commit` to true (persisted/billed) — this
     // command matches that default rather than overriding it. --dry-run is
@@ -174,6 +182,7 @@ program
     } else if (opts.commit) {
       body.commit = true;
     }
+    if (opts.direction) body.transactionDirection = opts.direction;
     const result = await api('POST', '/tax/calculate', body);
     print(result, !!opts.pretty);
   });
@@ -319,6 +328,145 @@ products
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (id: string, opts: { pretty?: boolean }) => {
     const result = await api('GET', `/products/${encodeURIComponent(id)}`);
+    print(result, !!opts.pretty);
+  });
+
+// ── clearvo suppliers ───────────────────────────────────────────────────────
+// Mirrors `clearvo customers` (see the MCP list_customers/create_customer/
+// update_customer/delete_customer tools) for the other side of a transaction
+// — suppliers are the vendors on purchase-side tax calculations
+// (`clearvo calculate --direction purchase`) and on received e-invoices.
+const suppliers = program.command('suppliers').description('Manage supplier master data');
+
+suppliers
+  .command('list')
+  .description('List suppliers')
+  .option('--search <text>', 'Case-insensitive substring match against the stored name')
+  .option('--limit <n>', 'Results per page', '25')
+  .option('--page <n>', 'Page number', '1')
+  .option('--entity <entityId>', 'Entity to list suppliers for. Required for account-scoped keys; omit for entity-scoped keys.')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: { search?: string; limit: string; page: string; entity?: string; pretty?: boolean }) => {
+    const qs = new URLSearchParams({ limit: opts.limit, page: opts.page });
+    if (opts.search) qs.set('search', opts.search);
+    const result = await api('GET', `/suppliers?${qs}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+suppliers
+  .command('create')
+  .description('Create a supplier')
+  .requiredOption('--name <name>', 'Supplier name')
+  .option('--country <code>', 'ISO 3166-1 alpha-2 country code of the primary registration. Required together with --tax-id.')
+  .option('--tax-id <taxId>', 'Tax ID of the primary registration. Required together with --country.')
+  .option('--supplier-ref <ref>', 'Your own reference (e.g. ERP vendor id). Must be unique per entity.')
+  .option('--establishment-country <code>', 'ISO 3166-1 alpha-2 country of this supplier\'s own place of establishment — independent of --country. Defaults to --country when omitted.')
+  .option('--address-line1 <text>', 'Address line 1')
+  .option('--address-line2 <text>', 'Address line 2')
+  .option('--city <city>', 'City')
+  .option('--region <region>', 'State/region/province')
+  .option('--postal-code <code>', 'Postal code')
+  .option('--entity <entityId>', 'Entity to create the supplier under. Required for account-scoped keys; omit for entity-scoped keys.')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (opts: {
+    name: string;
+    country?: string;
+    taxId?: string;
+    supplierRef?: string;
+    establishmentCountry?: string;
+    addressLine1?: string;
+    addressLine2?: string;
+    city?: string;
+    region?: string;
+    postalCode?: string;
+    entity?: string;
+    pretty?: boolean;
+  }) => {
+    const body: Record<string, string> = { name: opts.name };
+    if (opts.country) body.country = opts.country;
+    if (opts.taxId) body.taxId = opts.taxId;
+    if (opts.supplierRef) body.supplierRef = opts.supplierRef;
+    if (opts.establishmentCountry) body.establishmentCountry = opts.establishmentCountry;
+    if (opts.addressLine1) body.addressLine1 = opts.addressLine1;
+    if (opts.addressLine2) body.addressLine2 = opts.addressLine2;
+    if (opts.city) body.city = opts.city;
+    if (opts.region) body.region = opts.region;
+    if (opts.postalCode) body.postalCode = opts.postalCode;
+    const result = await api('POST', '/suppliers', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+suppliers
+  .command('update <id>')
+  .description('Update a supplier (name, tax registration, or address)')
+  .option('--name <name>', 'Updated supplier name')
+  .option('--country <code>', 'Updated country of the primary registration')
+  .option('--tax-id <taxId>', 'Updated tax ID of the primary registration')
+  .option('--supplier-ref <ref>', 'Updated own reference')
+  .option('--establishment-country <code>', 'Updated place-of-establishment country')
+  .option('--address-line1 <text>', 'Updated address line 1')
+  .option('--address-line2 <text>', 'Updated address line 2')
+  .option('--city <city>', 'Updated city')
+  .option('--region <region>', 'Updated state/region/province')
+  .option('--postal-code <code>', 'Updated postal code')
+  .option('--entity <entityId>', 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: {
+    name?: string;
+    country?: string;
+    taxId?: string;
+    supplierRef?: string;
+    establishmentCountry?: string;
+    addressLine1?: string;
+    addressLine2?: string;
+    city?: string;
+    region?: string;
+    postalCode?: string;
+    entity?: string;
+    pretty?: boolean;
+  }) => {
+    const body: Record<string, string> = {};
+    if (opts.name) body.name = opts.name;
+    if (opts.country) body.country = opts.country;
+    if (opts.taxId) body.taxId = opts.taxId;
+    if (opts.supplierRef) body.supplierRef = opts.supplierRef;
+    if (opts.establishmentCountry) body.establishmentCountry = opts.establishmentCountry;
+    if (opts.addressLine1) body.addressLine1 = opts.addressLine1;
+    if (opts.addressLine2) body.addressLine2 = opts.addressLine2;
+    if (opts.city) body.city = opts.city;
+    if (opts.region) body.region = opts.region;
+    if (opts.postalCode) body.postalCode = opts.postalCode;
+    const result = await api('PATCH', `/suppliers/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+suppliers
+  .command('get <id>')
+  .description('Get a supplier by ID')
+  .option('--entity <entityId>', 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+    const result = await api('GET', `/suppliers/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+suppliers
+  .command('get-by-ref <ref>')
+  .description('Get a supplier by your own supplierRef')
+  .option('--entity <entityId>', 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (ref: string, opts: { entity?: string; pretty?: boolean }) => {
+    const result = await api('GET', `/suppliers/by-ref/${encodeURIComponent(ref)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    print(result, !!opts.pretty);
+  });
+
+suppliers
+  .command('delete <id>')
+  .description('Soft-delete a supplier')
+  .option('--entity <entityId>', 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
+  .option('--pretty', 'Pretty-print JSON output')
+  .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+    const result = await api('DELETE', `/suppliers/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
     print(result, !!opts.pretty);
   });
 
