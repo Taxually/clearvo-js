@@ -6,6 +6,8 @@ export type {
   CreateEntityInput,
   CreateEntityResponse,
   UpdateEntityInput,
+  CreateOrganisationInput,
+  CreateOrganisationResponse,
   InvoiceSubmitResponse,
   InvoiceStatusResponse,
   ListInvoicesParams,

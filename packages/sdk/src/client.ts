@@ -4,6 +4,8 @@ import type {
   CreateEntityInput,
   CreateEntityResponse,
   UpdateEntityInput,
+  CreateOrganisationInput,
+  CreateOrganisationResponse,
   InvoiceSubmitResponse,
   InvoiceStatusResponse,
   ListInvoicesParams,
@@ -167,6 +169,16 @@ export class ClearvoClient {
 
   updateEntity(entityId: string, updates: UpdateEntityInput): Promise<Entity> {
     return this.request('PATCH', `/entities/${encodeURIComponent(entityId)}`, updates);
+  }
+
+  // ── Organisation Provisioning (partner keys only) ─────────────────────────────
+  // POST /organisations mints a brand-new organisation + default entity +
+  // solutions + a mint-once organisation-scoped apiKey. Requires a
+  // partner-scoped key (apiKeyScope: 'partner') — every other key scope gets
+  // a 403. Not part of the ordinary account-holder flow.
+
+  createOrganisation(input: CreateOrganisationInput): Promise<CreateOrganisationResponse> {
+    return this.request('POST', '/organisations', input);
   }
 
   // ── Product Catalogue ─────────────────────────────────────────────────────────

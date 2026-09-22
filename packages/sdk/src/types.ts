@@ -31,6 +31,44 @@ export interface CreateEntityResponse {
   apiKey: string;
 }
 
+/**
+ * POST /organisations — partner provisioning key only (`apiKeyScope: 'partner'`).
+ * An ordinary entity- or organisation-scoped key gets a 403. Shell-only: no
+ * vatNumber/extraFields/credential field belongs anywhere in this shape.
+ */
+export interface CreateOrganisationInput {
+  name: string;
+  /** Your own idempotency key, unique per tenant. A repeat call with the same value returns 409 with the existing organisationId — no apiKey is issued. */
+  externalReference?: string;
+  /** Non-empty. Solution codes to enable on the new organisation's default entity. */
+  solutions: Array<'einvoicing' | 'periodic_reporting' | 'tax_number_validation' | 'tax_calculations' | 'ecm'>;
+  entity: {
+    legalName: string;
+    /** ISO 3166-1 alpha-2. */
+    country: string;
+    address?: {
+      line1?: string | null;
+      line2?: string | null;
+      city?: string | null;
+      postalCode?: string | null;
+    } | null;
+  };
+}
+
+export interface CreateOrganisationResponse {
+  organisationId: string;
+  plan: 'starter' | 'business' | 'enterprise';
+  entityId: string;
+  entity: {
+    legalName: string;
+    country: string;
+    address: CreateOrganisationInput['entity']['address'] | null;
+  };
+  /** Auto-generated organisation-scoped API key (csk_live_ or csk_test_ prefix). Returned once only — never recoverable after this response. */
+  apiKey: string;
+  apiKeyScope: 'organisation';
+}
+
 export interface UpdateEntityInput {
   name?: string;
   vatNumber?: string;
