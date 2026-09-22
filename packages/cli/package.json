@@ -1,6 +1,6 @@
 {
   "name": "@clearvo/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CLI for the Clearvo tax compliance API — submit invoices, calculate tax, validate tax numbers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

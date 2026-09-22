@@ -24,7 +24,7 @@ const _valid: SubmitInvoiceInput = {
     address: { city: 'Berlin', country: 'DE' },
   },
   customerType: 'B2B',
-  lines: [{ description: 'Widget', quantity: 1, unitPrice: 100, customerType: 'B2B' }],
+  lines: [{ description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 19, customerType: 'B2B' }],
 };
 void _valid;
 

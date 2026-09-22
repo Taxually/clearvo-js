@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "clearvo",
   "display_name": "Clearvo",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Submit e-invoices, calculate global tax (VAT/GST/sales tax), and validate tax numbers via the Clearvo API",
   "long_description": "Connects Claude to the Clearvo tax compliance API. Submit B2B e-invoices to national tax authorities (SDI, KSeF, ANAF, SII, NAV, myDATA, Peppol, and more), calculate VAT/GST/sales tax across 100+ countries, and validate business tax numbers against official registries (VIES, HMRC, ABN Lookup, and others). Requires a free Clearvo account — create one at https://app.clearvo.io/register.",
   "author": {

@@ -98,8 +98,8 @@ export interface InvoiceSubmitResponse {
  * treatment is mapped as-is, never overridden by country inference. A
  * positive rate with no treatment maps to a domestic taxable supply at that
  * rate (the client's rate is authoritative, never rejected as unrecognised);
- * a bare 0% with no treatment is held NEEDS_INFO asking why it is zero
- * (exempt/zero_rated/reverse_charge/intra_community/export) — never guessed.
+ * a bare 0% with no treatment is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT
+ * (state exempt/zero_rated/reverse_charge, or a clientTaxCode) — never guessed.
  *
  * Re-exported from ./generated/openapi-tax-code-contract.js, which is
  * regenerated straight from clearvo-marketing's openapi.json
@@ -142,8 +142,22 @@ export interface LineItemInput {
   description: string;
   quantity: number;
   unitPrice: number;
-  /** Required unless clientTaxCode is supplied (or resolved from the header-level clientTaxCode). */
-  taxRate?: number;
+  /**
+   * Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales
+   * tax alike. ALWAYS required, even when clientTaxCode is supplied: a
+   * missing or out-of-range value is a 400 naming this field. A positive
+   * rate with no clientTaxCode/taxTreatment is reported as a domestic
+   * taxable supply at that rate; a 0% rate with neither is rejected with
+   * 400 ZERO_RATE_NEEDS_TAX_TREATMENT. The retired `vatRate` name is
+   * rejected with 422 UNKNOWN_FIELD_VAT_RENAMED — there is no silent alias.
+   */
+  taxRate: number;
+  /**
+   * Optional tax amount for this line; computed as taxRate × line total
+   * when omitted. The retired `vatAmount` name is rejected by the API with
+   * 422 UNKNOWN_FIELD_VAT_RENAMED.
+   */
+  taxAmount?: number;
   /**
    * RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code),
    * configured in advance via createClientTaxCode. Mutually exclusive with
@@ -158,9 +172,26 @@ export interface LineItemInput {
   customerType?: 'B2B' | 'B2C';
   /** Consulted only when this line has no clientTaxCode. Defaults to 'goods'. */
   supplyType?: 'goods' | 'digital_service' | 'general_service';
-  discount?: number;
-  unit?: string;
-  itemCode?: string;
+  /**
+   * Optional 1-based position of this line on the invoice. Defaults to the
+   * line's index in `lines[]` when omitted.
+   */
+  lineNumber?: number;
+  /**
+   * Line discount as a percentage (0–100). Mutually exclusive with
+   * `discountAmount` — set at most one. Replaces the retired `discount`
+   * (rejected by the API with 422 UNKNOWN_FIELD_LINE_RENAMED).
+   */
+  discountPercent?: number;
+  /**
+   * Line discount as an absolute amount in the invoice currency, always
+   * positive. Mutually exclusive with `discountPercent` — set at most one.
+   */
+  discountAmount?: number;
+  /** UN/ECE Recommendation 20 unit-of-measure code (e.g. "EA", "HUR", "KGM"). Replaces the retired `unit` (422 UNKNOWN_FIELD_LINE_RENAMED). */
+  unitOfMeasure?: string;
+  /** Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (422 UNKNOWN_FIELD_LINE_RENAMED). */
+  sellerItemId?: string;
 }
 
 export interface ShippingInput {
@@ -284,12 +315,12 @@ export interface SubmitInvoiceInput {
   deductionPeriod?: { ejercicio: string; periodo: string };
 }
 
-/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive vatRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is held NEEDS_INFO — movement is never inferred from the customer/seller countries. */
+/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive taxRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT — movement is never inferred from the customer/seller countries. */
 export type ResolvedBy = 'client_tax_code' | 'source_system_code' | 'facts';
 
 /**
  * The full Tax Decision behind one line's resolution — how the caller's
- * clientTaxCode/taxTreatment/vatRate input became an EN16931/BIS category.
+ * clientTaxCode/taxTreatment/taxRate input became an EN16931/BIS category.
  */
 export interface LineTaxResolution {
   resolvedBy: ResolvedBy;
