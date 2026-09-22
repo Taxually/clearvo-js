@@ -169,9 +169,26 @@ export interface LineItemInput {
   customerType?: 'B2B' | 'B2C';
   /** Consulted only when this line has no clientTaxCode. Defaults to 'goods'. */
   supplyType?: 'goods' | 'digital_service' | 'general_service';
-  discount?: number;
-  unit?: string;
-  itemCode?: string;
+  /**
+   * Optional 1-based position of this line on the invoice. Defaults to the
+   * line's index in `lines[]` when omitted.
+   */
+  lineNumber?: number;
+  /**
+   * Line discount as a percentage (0–100). Mutually exclusive with
+   * `discountAmount` — set at most one. Replaces the retired `discount`
+   * (rejected by the API with 422).
+   */
+  discountPercent?: number;
+  /**
+   * Line discount as an absolute amount in the invoice currency, always
+   * positive. Mutually exclusive with `discountPercent` — set at most one.
+   */
+  discountAmount?: number;
+  /** UN/ECE Recommendation 20 unit-of-measure code (e.g. "EA", "HUR", "KGM"). Replaces the retired `unit`. */
+  unitOfMeasure?: string;
+  /** Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode`. */
+  sellerItemId?: string;
 }
 
 export interface ShippingInput {

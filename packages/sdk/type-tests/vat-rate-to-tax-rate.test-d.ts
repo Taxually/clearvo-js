@@ -13,9 +13,14 @@
 
 import type { LineItemInput, SubmitInvoiceInput } from '../src/types.js';
 
-// `taxRate` and `taxAmount` are the correct property names.
-const _valid: LineItemInput = { description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22, taxAmount: 22 };
+// The full canonical line-item shape compiles.
+const _valid: LineItemInput = {
+  description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22, taxAmount: 22,
+  lineNumber: 1, discountPercent: 10, unitOfMeasure: 'EA', sellerItemId: 'SKU-001',
+};
 void _valid;
+const _validDiscountAmount: LineItemInput = { description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22, discountAmount: 5 };
+void _validDiscountAmount;
 
 // `vatRate` is no longer a valid line property — TypeScript's excess-property
 // check on an object literal rejects it.
@@ -38,6 +43,30 @@ const _rejectsVatAmount: LineItemInput = {
   vatAmount: 22,
 };
 void _rejectsVatAmount;
+
+// `discount` was renamed to `discountPercent` (with `discountAmount` as the absolute alternative).
+const _rejectsDiscount: LineItemInput = {
+  description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22,
+  // @ts-expect-error — `discount` was renamed to `discountPercent` (or use `discountAmount`).
+  discount: 10,
+};
+void _rejectsDiscount;
+
+// `unit` was renamed to `unitOfMeasure`.
+const _rejectsUnit: LineItemInput = {
+  description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22,
+  // @ts-expect-error — `unit` was renamed to `unitOfMeasure`.
+  unit: 'EA',
+};
+void _rejectsUnit;
+
+// `itemCode` was renamed to `sellerItemId`.
+const _rejectsItemCode: LineItemInput = {
+  description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22,
+  // @ts-expect-error — `itemCode` was renamed to `sellerItemId`.
+  itemCode: 'SKU-001',
+};
+void _rejectsItemCode;
 
 // The same guard through the full request shape: a line inside
 // SubmitInvoiceInput.lines[] must not accept the retired name either.

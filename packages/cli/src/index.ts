@@ -77,10 +77,13 @@ const program = new Command()
 // names are never tax-type-specific. A file still using the retired
 // `vatRate`/`vatAmount` keys is rejected by the API with 422
 // UNKNOWN_FIELD_VAT_RENAMED naming the `tax`-named replacement; there is no
-// silent alias.
+// silent alias. The remaining line fields are `lineNumber`,
+// `discountPercent` | `discountAmount` (mutually exclusive), `unitOfMeasure`
+// and `sellerItemId` — the retired `discount`/`unit`/`itemCode` names are
+// rejected with 422 the same way.
 program
   .command('send <file>')
-  .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED)')
+  .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount/discount/unit/itemCode keys are rejected with 422)')
   .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
   .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
   .option('--pretty', 'Pretty-print JSON output')

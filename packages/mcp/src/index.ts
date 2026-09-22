@@ -166,7 +166,8 @@ const TOOLS = [
       'Line items carry `taxRate` and `taxAmount` (the platform is global — no tax-type-specific field names). A request ' +
       'that still uses the retired `lines[].vatRate` or `lines[].vatAmount` keys is rejected with 422 ' +
       '`{ error, details: [{ field, code: "UNKNOWN_FIELD_VAT_RENAMED", message }] }` naming the `tax`-named replacement — ' +
-      'there is no silent alias. ' +
+      'there is no silent alias. The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), ' +
+      '`unitOfMeasure` and `sellerItemId` — the retired `discount`/`unit`/`itemCode` names are likewise rejected with 422. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -256,6 +257,11 @@ const TOOLS = [
               },
               customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level customerType, consulted only when this line has no clientTaxCode.' },
               supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
+              lineNumber: { type: 'number', description: 'Optional 1-based position of this line on the invoice. Defaults to its index in lines[].' },
+              discountPercent: { type: 'number', description: 'Line discount as a percentage (0–100). Mutually exclusive with discountAmount — set at most one. Replaces the retired `discount` (rejected with 422).' },
+              discountAmount: { type: 'number', description: 'Line discount as an absolute amount in the invoice currency, always positive. Mutually exclusive with discountPercent — set at most one.' },
+              unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit`.' },
+              sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode`.' },
             },
             required: ['description', 'quantity', 'unitPrice'],
           },

@@ -14,13 +14,20 @@ Backend PR: Taxually-Einvoicing branch `claude/vat-rate-to-tax-rate-rename`. Unt
 - `taxAmount` (was `vatAmount`) — optional; computed as `taxRate × line total` when omitted.
 - Every response that echoes lines (including `GET /invoices/{id}`) returns `taxRate`/`taxAmount` too.
 - Failure mode if you don't upgrade: the API rejects a request that still carries `lines[].vatRate` or `lines[].vatAmount` with **`422`** and `details[].code = "UNKNOWN_FIELD_VAT_RENAMED"`, each detail naming the `tax`-named replacement. There is no silent alias.
-- New compile-time guard `type-tests/vat-rate-to-tax-rate.test-d.ts` keeps the retired names off `LineItemInput`.
-- Unchanged: `discountPercent`/`discountAmount`/`unitOfMeasure`/`sellerItemId`/`clientTaxCode`/`taxTreatment`, and the Spain SII purchase-side `deductibleVatAmount` (CuotaDeducible).
+- **BREAKING** — the rest of the line item now matches the backend's canonical names too, so `/send` has one consistent line-item contract:
+  - `discountPercent` (was `discount`) — percentage 0–100; new `discountAmount` — absolute amount; the two are mutually exclusive.
+  - `unitOfMeasure` (was `unit`) — UN/ECE Rec. 20 unit code.
+  - `sellerItemId` (was `itemCode`) — your own item identifier / SKU.
+  - New optional `lineNumber` — 1-based position, defaults to the index in `lines[]`.
+  - The retired `discount`/`unit`/`itemCode` names are rejected by the API with 422 the same way as `vatRate`/`vatAmount`.
+- New compile-time guard `type-tests/vat-rate-to-tax-rate.test-d.ts` keeps all five retired names (`vatRate`, `vatAmount`, `discount`, `unit`, `itemCode`) off `LineItemInput`.
+- Full `LineItemInput` field list: `description`, `quantity`, `unitPrice`, `taxRate`, `taxAmount`, `clientTaxCode`, `taxTreatment`, `customerType`, `supplyType`, `lineNumber`, `discountPercent`, `discountAmount`, `unitOfMeasure`, `sellerItemId`.
+- Unchanged: `clientTaxCode`/`taxTreatment`, and the Spain SII purchase-side `deductibleVatAmount` (CuotaDeducible).
 
 ### @clearvo/mcp 0.3.0
 
-**BREAKING** — `submit_invoice` `lines[]` input schema: `vatRate` → `taxRate`; new optional `taxAmount` (was `vatAmount`). Tool descriptions for `submit_invoice` and `get_invoice` document the rename and the `422 UNKNOWN_FIELD_VAT_RENAMED` rejection. Desktop Extension manifest version aligned to 0.3.0.
+**BREAKING** — `submit_invoice` `lines[]` input schema: `vatRate` → `taxRate`; new optional `taxAmount` (was `vatAmount`); added `lineNumber`, `discountPercent` | `discountAmount`, `unitOfMeasure`, `sellerItemId` (the retired `discount`/`unit`/`itemCode` are rejected with 422). Tool descriptions for `submit_invoice` and `get_invoice` document the rename and the `422 UNKNOWN_FIELD_VAT_RENAMED` rejection. Desktop Extension manifest version aligned to 0.3.0.
 
 ### @clearvo/cli 0.2.0
 
-**BREAKING** — `clearvo send <file>`: the invoice JSON's line items must use `taxRate`/`taxAmount`. A file still using `vatRate`/`vatAmount` is rejected by the API with `422 UNKNOWN_FIELD_VAT_RENAMED`.
+**BREAKING** — `clearvo send <file>`: the invoice JSON's line items must use `taxRate`/`taxAmount`, `lineNumber`, `discountPercent` | `discountAmount`, `unitOfMeasure`, `sellerItemId`. A file still using `vatRate`/`vatAmount` is rejected by the API with `422 UNKNOWN_FIELD_VAT_RENAMED`; `discount`/`unit`/`itemCode` are rejected with 422 likewise.
