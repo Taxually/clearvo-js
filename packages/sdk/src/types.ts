@@ -1789,10 +1789,12 @@ export interface FrCredentialsResponse {
   verification: { method: 'platform_configuration'; checkedAt: string };
   /** The last 9 digits of taxNumber, derived read-only — null only when nothing is registered yet. */
   siren: string | null;
-  /** Static follow-on actions this response documents, never performed automatically — currently always the
-   *  seller e-reporting step, shown to every caller since this endpoint has no way to know whether the
-   *  registering entity is buyer-only; buyers can disregard it, since inbound receiving needs nothing further
-   *  from them. */
+  /** Static follow-on actions this response documents, never performed automatically — today only ever the
+   *  e-reporting PATCH, shown to every caller (seller or buyer) since this endpoint has no way to know
+   *  whether the registering entity has an e-reporting obligation; read nextSteps[].applicableTo before
+   *  assuming it applies. Inbound receiving starts automatically once einvoicing shows active — no separate
+   *  step needed (code review finding, 2026-09-22: the previous wording told every buyer-side integrator to
+   *  disregard e-reporting for every client, which this endpoint cannot determine on the caller's behalf). */
   nextSteps: FrNextStep[];
   /** One plain-language sentence summarising both capabilities. */
   message: string;

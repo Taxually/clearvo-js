@@ -6,6 +6,7 @@
 // client-tax-codes methods for the pattern these mirror).
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { ClearvoClient } from '../src/client';
 
 describe('ClearvoClient France platform credentials', () => {
@@ -96,5 +97,25 @@ describe('ClearvoClient France platform credentials', () => {
 
     const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
     await expect(client.setFrCredentials({ taxNumber: 'not-a-vat-number' })).rejects.toThrow('INVALID_FORMAT');
+  });
+});
+
+// Code review finding, 2026-09-22: FrCredentialsResponse.nextSteps's doc comment (types.ts) used to
+// tell an integrating developer "buyers can disregard it, since inbound receiving needs nothing
+// further from them" — the exact obligation-applicability assertion the backend module
+// (lib/einvoicing/fr/credentials.ts) and its openapi.json spec are banned from making, since a
+// buyer can carry the fr_ereporting obligation too (CGI art. 290) and this endpoint has no way to
+// determine that on the caller's behalf. This is the text a developer sees on hover in their IDE,
+// so it needs its own guard independent of the backend/spec drift tests.
+describe('FrCredentialsResponse.nextSteps doc comment — no obligation-applicability claim', () => {
+  it('never tells an integrator that buyers can disregard nextSteps or that receiving needs nothing further from them', () => {
+    const typesSrc = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf8');
+    const nextStepsDocMatch = typesSrc.match(/\/\*\*[\s\S]*?\*\/\s*nextSteps: FrNextStep\[\];/);
+    expect(nextStepsDocMatch, 'FrCredentialsResponse.nextSteps must carry a doc comment').toBeTruthy();
+    const doc = nextStepsDocMatch![0];
+    expect(doc).not.toMatch(/can disregard/i);
+    expect(doc).not.toMatch(/nothing further/i);
+    expect(doc).not.toMatch(/buyer-only/i);
+    expect(doc).toMatch(/seller or buyer/i);
   });
 });
