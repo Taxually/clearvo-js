@@ -714,11 +714,9 @@ const TOOLS = [
     name: 'poll_fr_inbound',
     description:
       'Manually trigger a France inbound poll for this entity: resolve status on your own pending outbound ' +
-      'submissions, and discover newly received inbound documents into your inbox. Deliberately temporary — part ' +
-      'of the interim delivery-partner bridge while Taxually\'s own DGFiP PA accreditation is pending, and only ' +
-      'ever needed if you don\'t want to wait for the automatic every-5-minute poll. Requires set_fr_credentials ' +
-      'to already show the einvoicing capability active (get_fr_credentials to check) — otherwise there is ' +
-      'nothing to poll.',
+      'submissions, and discover newly received inbound documents into your inbox. Only ever needed if you ' +
+      'don\'t want to wait for the automatic every-5-minute poll. Requires set_fr_credentials to already show ' +
+      'the einvoicing capability active (get_fr_credentials to check) — otherwise there is nothing to poll.',
     inputSchema: {
       type: 'object' as const,
       properties: {
