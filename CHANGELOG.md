@@ -2,6 +2,18 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the partner-org-provisioning backend PR has merged and deployed
+
+Backend PR: Taxually-Einvoicing #16188 (`claude/partner-org-provisioning`), `POST /v1/organisations`. Until it is live in production, calling this SDK method 403s for every key — it only ever authenticates a `partner`-scoped key, which is minted manually per tenant, not self-serve.
+
+### @clearvo/sdk 0.2.0 (additive, non-breaking)
+
+- New `createOrganisation(input: CreateOrganisationInput): Promise<CreateOrganisationResponse>` — calls `POST /organisations`. For white-label partners only: requires a `partner`-scoped API key (bound to the partner's tenant, issued manually — see the platform docs' Partners section). Any other key scope gets a 403.
+- Creates a new Organisation + its first (default) Entity in one call and returns a freshly minted **organisation**-scoped API key in the response, once — the same mint-once pattern as `createEntity()`. Nothing else needs to be captured to make the next call (`createEntity()`/credentials setup) work.
+- Request shape is deliberately shell-only: `name`, optional `externalReference` (your own idempotency key — a repeat call with the same value under the same tenant returns `409` with the existing `organisationId` and no key), `solutions` (non-empty subset of `'einvoicing' | 'tax_number_validation' | 'tax_calculations' | 'ecm'`), `entity: { legalName, country, address? }`. No tax-identity or credential field belongs in this input — sending one (e.g. `vatNumber`) is rejected with `422`.
+- No MCP tool and no CLI command for this endpoint — deliberate. It authenticates a narrow, tenant-bound partner key that is never issued to an interactive human or agent session (MCP/CLI both assume an entity- or organisation-scoped key reachable from a normal account), so exposing it there would suggest a self-serve flow that doesn't exist.
+- `solutions` is typed as `'einvoicing' | 'tax_number_validation' | 'tax_calculations' | 'ecm'` — the four current `ALL_SOLUTION_CODES`. `periodic_reporting` is not a valid value (folded into `einvoicing` by the `unify-einvoicing-reporting` collapse, migration `V20260916100000`); the server 422s if sent.
+
 ## Unreleased — publish only AFTER the backend rename has deployed
 
 Backend PR: Taxually-Einvoicing branch `claude/vat-rate-to-tax-rate-rename`. Until it is live in production, the API still expects the old names, so these versions must not be published before it.
