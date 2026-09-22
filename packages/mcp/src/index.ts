@@ -682,7 +682,9 @@ const TOOLS = [
       'actions this call never performs itself. Read each step\'s requiredInputs before acting on it: any field ' +
       'it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax position ' +
       '(its e-reporting start date, its real VAT regime) that the platform cannot determine on your behalf. ' +
-      'Sending that body unedited will 400; fill in a real value for each requiredInputs field first.',
+      'Sending that body unedited will 400; fill in a real value for each requiredInputs field first. Also ' +
+      'returns sandbox (whether this write ran against the sandbox environment) and the registration\'s ' +
+      'createdAt/updatedAt.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -702,7 +704,9 @@ const TOOLS = [
       'authority or the platform\'s delivery partner. The response also carries nextSteps — static, advisory ' +
       'follow-on actions this call never performs itself. Read each step\'s requiredInputs before acting on it: ' +
       'any field it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax ' +
-      'position that the platform cannot determine on your behalf.',
+      'position that the platform cannot determine on your behalf. Also returns sandbox (whether this read ran ' +
+      'against the sandbox environment) and the registration\'s createdAt/updatedAt (both null when nothing is ' +
+      'registered yet).',
     inputSchema: {
       type: 'object' as const,
       properties: {

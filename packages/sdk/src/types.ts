@@ -1768,6 +1768,10 @@ export interface SetFrCredentialsInput {
 export interface FrCredentialsResponse {
   ok: boolean;
   entityId: string;
+  /** True when this call ran against the sandbox environment — matches the API key used, not a
+   *  request field. Sandbox always reads every capability (and credentialStatus) as 'sandbox',
+   *  regardless of platform configuration. */
+  sandbox: boolean;
   /** null only on a GET for an entity with no French registration yet. */
   taxNumber: string | null;
   /** Read-through of the stored fr_siret extra field, if one was set via the general registrations API. */
@@ -1792,6 +1796,11 @@ export interface FrCredentialsResponse {
   nextSteps: FrNextStep[];
   /** One plain-language sentence summarising both capabilities. */
   message: string;
+  /** When this entity's French tax registration was first created. */
+  createdAt: string | null;
+  /** When this entity's French tax registration was last written — this POST, if it changed
+   *  anything. Null only on a GET for an entity with no French registration yet. */
+  updatedAt: string | null;
 }
 
 // ── Business (customer-lifecycle) status ────────────────────────────────────
