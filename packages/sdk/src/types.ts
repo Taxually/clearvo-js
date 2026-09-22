@@ -180,7 +180,7 @@ export interface LineItemInput {
   /**
    * Line discount as a percentage (0–100). Mutually exclusive with
    * `discountAmount` — set at most one. Replaces the retired `discount`
-   * (rejected by the API with 422).
+   * (rejected by the API with 422 UNKNOWN_FIELD_LINE_RENAMED).
    */
   discountPercent?: number;
   /**
@@ -188,9 +188,9 @@ export interface LineItemInput {
    * positive. Mutually exclusive with `discountPercent` — set at most one.
    */
   discountAmount?: number;
-  /** UN/ECE Recommendation 20 unit-of-measure code (e.g. "EA", "HUR", "KGM"). Replaces the retired `unit`. */
+  /** UN/ECE Recommendation 20 unit-of-measure code (e.g. "EA", "HUR", "KGM"). Replaces the retired `unit` (422 UNKNOWN_FIELD_LINE_RENAMED). */
   unitOfMeasure?: string;
-  /** Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode`. */
+  /** Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (422 UNKNOWN_FIELD_LINE_RENAMED). */
   sellerItemId?: string;
 }
 

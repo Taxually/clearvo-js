@@ -167,7 +167,8 @@ const TOOLS = [
       'that still uses the retired `lines[].vatRate` or `lines[].vatAmount` keys is rejected with 422 ' +
       '`{ error, details: [{ field, code: "UNKNOWN_FIELD_VAT_RENAMED", message }] }` naming the `tax`-named replacement — ' +
       'there is no silent alias. The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), ' +
-      '`unitOfMeasure` and `sellerItemId` — the retired `discount`/`unit`/`itemCode` names are likewise rejected with 422. ' +
+      '`unitOfMeasure` and `sellerItemId` — the retired `discount`/`unit`/`itemCode`/`exemption` line keys are rejected with 422 ' +
+      '`code: "UNKNOWN_FIELD_LINE_RENAMED"` the same way. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -258,10 +259,10 @@ const TOOLS = [
               customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level customerType, consulted only when this line has no clientTaxCode.' },
               supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
               lineNumber: { type: 'number', description: 'Optional 1-based position of this line on the invoice. Defaults to its index in lines[].' },
-              discountPercent: { type: 'number', description: 'Line discount as a percentage (0–100). Mutually exclusive with discountAmount — set at most one. Replaces the retired `discount` (rejected with 422).' },
+              discountPercent: { type: 'number', description: 'Line discount as a percentage (0–100). Mutually exclusive with discountAmount — set at most one. Replaces the retired `discount` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
               discountAmount: { type: 'number', description: 'Line discount as an absolute amount in the invoice currency, always positive. Mutually exclusive with discountPercent — set at most one.' },
-              unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit`.' },
-              sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode`.' },
+              unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
+              sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
             },
             required: ['description', 'quantity', 'unitPrice', 'taxRate'],
           },
@@ -851,8 +852,8 @@ const TOOLS = [
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
       'Returns everything in list_invoices plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
-      'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount` ' +
-      '(the retired `vatRate`/`vatAmount` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
+      'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
+      'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
       'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
       'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
