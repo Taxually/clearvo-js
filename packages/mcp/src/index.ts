@@ -669,6 +669,41 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_fr_credentials',
+    description:
+      'Register or update the entity\'s French VAT number for e-invoicing/e-reporting onboarding. No secret is ' +
+      'stored — this is a status-visibility endpoint, not a per-entity credential like the other countries below. ' +
+      'The response reports status separately for two capabilities (einvoicing = sending and receiving invoices; ' +
+      'ereporting = reporting sales to the tax office) since the platform connection to its interim delivery ' +
+      'partner is granted per capability, not all-or-nothing. Each capability is active | pending_activation | ' +
+      'sandbox; nothing further is needed from the caller while pending — re-read with get_fr_credentials to see ' +
+      'when it flips. Re-posting the same tax number is idempotent; posting a different one overwrites it and the ' +
+      'response carries previousTaxNumber.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        taxNumber: { type: 'string', description: 'French VAT number (numéro de TVA intracommunautaire). FR-prefixed, lowercase, spaced, or the bare 11-character SIREN+key form are all accepted and normalised.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['taxNumber'],
+    },
+  },
+  {
+    name: 'get_fr_credentials',
+    description:
+      'Read back the entity\'s French VAT number and its onboarding status — the same shape set_fr_credentials ' +
+      'returns, so a caller can poll this after registering. Always returns 200, even when nothing is registered ' +
+      'yet (credentialStatus "not_registered") — never 404, so a poller never has to special-case "nothing saved ' +
+      'yet". Status is derived from the platform\'s own configuration, never a live check against the tax ' +
+      'authority or the platform\'s delivery partner.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to read. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'set_hu_credentials',
     description:
       'Register Hungary NAV Online Számla credentials for an entity: tax number and technical user details. ' +
@@ -1942,6 +1977,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'set_pt_credentials': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/pt/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_fr_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/fr/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_fr_credentials': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'set_eg_credentials': {

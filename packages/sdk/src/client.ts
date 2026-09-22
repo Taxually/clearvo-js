@@ -66,6 +66,8 @@ import type {
   SubmitInvoiceInput,
   ListTaxCodesParams,
   ListTaxCodesResponse,
+  SetFrCredentialsInput,
+  FrCredentialsResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -499,5 +501,18 @@ export class ClearvoClient {
     }
     const q = qs.toString();
     return this.request('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── France platform credentials ────────────────────────────────────────
+  // No secret to store — registers/reads back the entity's own French VAT
+  // number and its per-capability (einvoicing/ereporting) onboarding status.
+
+  setFrCredentials(input: SetFrCredentialsInput): Promise<FrCredentialsResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/fr/credentials', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  getFrCredentials(entityId?: string): Promise<FrCredentialsResponse> {
+    return this.request('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 }

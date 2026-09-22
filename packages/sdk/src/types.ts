@@ -1701,6 +1701,82 @@ export interface ClientTaxCodeResponse {
   warning?: DuplicateTreatmentWarning;
 }
 
+// ── France platform credentials (POST/GET /v1/fr/credentials) ──────────────
+// No secret is stored here — this is a status-visibility endpoint for the
+// entity's own French VAT number (numéro de TVA intracommunautaire), not a
+// per-entity credential like the other countries' set*Credentials calls.
+// Status is reported per capability because the platform's connection to
+// its interim France delivery partner is granted per capability, not
+// all-or-nothing. Mirrors components.schemas.FrCapabilityPresentation and
+// the POST/GET /fr/credentials response shape in clearvo-marketing's
+// public/openapi.json — keep in sync by hand (this endpoint is out of scope
+// for scripts/generate-from-openapi.mjs, which only covers the
+// TaxTreatment/ClearanceStatus tax-code-mapping contract).
+
+/** Per-capability outcome. `active` — the platform's own France connection is configured, this tax number is
+ *  authorised for this capability, and the platform's France channel is the production gateway. `pending_activation`
+ *  — any of those is not yet true; nothing is needed from the caller unless contacted. `sandbox` — a sandbox API
+ *  key; sandbox sends work now regardless of the production verdict either way. */
+export type FrCapabilityStatus = 'active' | 'pending_activation' | 'sandbox';
+
+/** Top-level rollup: the less-advanced of the two capabilities, or `not_registered` when the entity has no French
+ *  tax number on file at all yet (GET only — POST always writes one). */
+export type FrCredentialStatus = FrCapabilityStatus | 'not_registered';
+
+export interface FrCapabilityPresentation {
+  status: FrCapabilityStatus;
+  /** Plain-language capability name, ready to render verbatim. */
+  label: string;
+  /** Ready-to-render, calm, partner-neutral one-liner for this capability. */
+  message: string;
+  /** Who owes the next step. Always 'platform' while pending; null once active. */
+  actionOwner: 'platform' | null;
+}
+
+/** A static follow-on call this response documents, not one it performs itself — registering a French VAT number
+ *  never flips a reporting obligation on its own. */
+export interface FrNextStep {
+  action: string;
+  method: string;
+  path: string;
+  body: Record<string, unknown>;
+  applicableTo: string;
+}
+
+export interface SetFrCredentialsInput {
+  /** French VAT number. FR-prefixed, lowercase, spaced/punctuated, or the bare 11-character SIREN+key form are all
+   *  accepted and normalised. Rejected as 400 INVALID_FORMAT if the shape, SIREN check digit, or key don't match. */
+  taxNumber: string;
+  /** Entity to configure. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface FrCredentialsResponse {
+  ok: boolean;
+  entityId: string;
+  /** null only on a GET for an entity with no French registration yet. */
+  taxNumber: string | null;
+  /** Read-through of the stored fr_siret extra field, if one was set via the general registrations API. */
+  siret?: string | null;
+  /** Present only when a POST changed an already-stored tax number — the value it replaced. */
+  previousTaxNumber?: string;
+  /** The less-advanced of the two capabilities below, or 'not_registered'. */
+  credentialStatus: FrCredentialStatus;
+  capabilities: {
+    einvoicing: FrCapabilityPresentation;
+    ereporting: FrCapabilityPresentation;
+  };
+  /** States what kind of check this is, and when — never a claim that the tax authority or the platform's France
+   *  delivery partner was actually asked. */
+  verification: { method: 'platform_configuration'; checkedAt: string };
+  /** The last 9 digits of taxNumber, derived read-only — null only when nothing is registered yet. */
+  siren: string | null;
+  /** Static follow-on actions; empty for a buyer who needs nothing further. */
+  nextSteps: FrNextStep[];
+  /** One plain-language sentence summarising both capabilities. */
+  message: string;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,

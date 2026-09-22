@@ -105,4 +105,10 @@ export type {
   UpdateSupplierInput,
   ListSuppliersParams,
   ListSuppliersResponse,
+  FrCapabilityStatus,
+  FrCredentialStatus,
+  FrCapabilityPresentation,
+  FrNextStep,
+  SetFrCredentialsInput,
+  FrCredentialsResponse,
 } from './types.js';
