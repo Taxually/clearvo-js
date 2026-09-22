@@ -22,12 +22,20 @@ void _valid;
 const _validDiscountAmount: LineItemInput = { description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22, discountAmount: 5 };
 void _validDiscountAmount;
 
+// `taxRate` is ALWAYS required (0–100), even when clientTaxCode is supplied —
+// the backend returns 400 for a missing/out-of-range rate. Omitting it is a
+// compile error (TS2741 missing property).
+// @ts-expect-error — `taxRate` is required on every line, clientTaxCode or not.
+const _rejectsMissingTaxRate: LineItemInput = { description: 'Widget', quantity: 1, unitPrice: 100, clientTaxCode: 'A1' };
+void _rejectsMissingTaxRate;
+
 // `vatRate` is no longer a valid line property — TypeScript's excess-property
 // check on an object literal rejects it.
 const _rejectsVatRate: LineItemInput = {
   description: 'Widget',
   quantity: 1,
   unitPrice: 100,
+  taxRate: 22,
   // @ts-expect-error — `vatRate` was renamed to `taxRate` (422 UNKNOWN_FIELD_VAT_RENAMED on the wire).
   vatRate: 22,
 };
@@ -78,7 +86,7 @@ const _rejectsVatRateOnSubmit: SubmitInvoiceInput = {
   customer: { name: 'Acme SpA', address: { city: 'Milan', country: 'IT' } },
   lines: [
     // @ts-expect-error — `vatRate` was renamed to `taxRate`.
-    { description: 'Licence', quantity: 1, unitPrice: 1000, vatRate: 22 },
+    { description: 'Licence', quantity: 1, unitPrice: 1000, taxRate: 22, vatRate: 22 },
   ],
 };
 void _rejectsVatRateOnSubmit;

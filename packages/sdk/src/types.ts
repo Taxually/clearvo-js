@@ -98,8 +98,8 @@ export interface InvoiceSubmitResponse {
  * treatment is mapped as-is, never overridden by country inference. A
  * positive rate with no treatment maps to a domestic taxable supply at that
  * rate (the client's rate is authoritative, never rejected as unrecognised);
- * a bare 0% with no treatment is held NEEDS_INFO asking why it is zero
- * (exempt/zero_rated/reverse_charge/intra_community/export) — never guessed.
+ * a bare 0% with no treatment is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT
+ * (state exempt/zero_rated/reverse_charge, or a clientTaxCode) — never guessed.
  *
  * Re-exported from ./generated/openapi-tax-code-contract.js, which is
  * regenerated straight from clearvo-marketing's openapi.json
@@ -143,12 +143,15 @@ export interface LineItemInput {
   quantity: number;
   unitPrice: number;
   /**
-   * Tax rate as a percentage (e.g. 22 for 22%) — VAT, GST or sales tax alike.
-   * Required unless clientTaxCode is supplied (or resolved from the
-   * header-level clientTaxCode). The retired `vatRate` name is rejected by
-   * the API with 422 UNKNOWN_FIELD_VAT_RENAMED — there is no silent alias.
+   * Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales
+   * tax alike. ALWAYS required, even when clientTaxCode is supplied: a
+   * missing or out-of-range value is a 400 naming this field. A positive
+   * rate with no clientTaxCode/taxTreatment is reported as a domestic
+   * taxable supply at that rate; a 0% rate with neither is rejected with
+   * 400 ZERO_RATE_NEEDS_TAX_TREATMENT. The retired `vatRate` name is
+   * rejected with 422 UNKNOWN_FIELD_VAT_RENAMED — there is no silent alias.
    */
-  taxRate?: number;
+  taxRate: number;
   /**
    * Optional tax amount for this line; computed as taxRate × line total
    * when omitted. The retired `vatAmount` name is rejected by the API with
@@ -312,7 +315,7 @@ export interface SubmitInvoiceInput {
   deductionPeriod?: { ejercicio: string; periodo: string };
 }
 
-/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive taxRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is held NEEDS_INFO — movement is never inferred from the customer/seller countries. */
+/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive taxRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT — movement is never inferred from the customer/seller countries. */
 export type ResolvedBy = 'client_tax_code' | 'source_system_code' | 'facts';
 
 /**

@@ -69,8 +69,9 @@ const program = new Command()
 // flag for the common single-code-per-invoice case. A positive taxRate with
 // no clientTaxCode/taxTreatment is reported as a domestic taxable supply at
 // that rate (the client's rate is authoritative, never rejected as
-// unrecognised); a bare 0% with neither is held NEEDS_INFO asking why it is
-// zero. An unrecognised clientTaxCode never rejects the invoice — it's held
+// unrecognised); a bare 0% with neither is rejected with 400
+// ZERO_RATE_NEEDS_TAX_TREATMENT. taxRate itself (0–100) is ALWAYS required,
+// even with a clientTaxCode — missing/out-of-range is a 400. An unrecognised clientTaxCode never rejects the invoice — it's held
 // (status HELD_UNMAPPED_TAX_CODE) with a machine-readable reason in the
 // response instead.
 // Line items carry `taxRate`/`taxAmount` — the platform is global, so field

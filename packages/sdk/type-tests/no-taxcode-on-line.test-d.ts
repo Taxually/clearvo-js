@@ -42,12 +42,14 @@ const _validLine: LineItemInput = {
   description: 'Software licence',
   quantity: 1,
   unitPrice: 100,
+  taxRate: 22,
   clientTaxCode: 'A1',
 };
 const _validLineWithHint: LineItemInput = {
   description: 'Export of goods',
   quantity: 1,
   unitPrice: 100,
+  taxRate: 0,
   taxTreatment: 'exempt',
   customerType: 'B2B',
   supplyType: 'goods',

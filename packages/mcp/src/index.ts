@@ -174,8 +174,8 @@ const TOOLS = [
       'create_client_tax_code / list_tax_codes), or an AUTHORITATIVE taxTreatment (exempt/out_of_scope/zero_rated/' +
       'reverse_charge) for a line with no configured code — a stated taxTreatment is mapped as-is, never overridden ' +
       'by country inference. A positive taxRate with neither is reported as a domestic taxable supply at that rate ' +
-      '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held ' +
-      'NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export). An unrecognised ' +
+      '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is rejected ' +
+      'with 400 ZERO_RATE_NEEDS_TAX_TREATMENT — state exempt/zero_rated/reverse_charge or a clientTaxCode. An unrecognised ' +
       'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
       'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
       'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
@@ -244,7 +244,7 @@ const TOOLS = [
               description: { type: 'string' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number', description: 'Unit price excluding tax' },
-              taxRate: { type: 'number', description: 'Tax rate as a percentage (e.g. 22 for 22%) — VAT, GST or sales tax alike. Required unless clientTaxCode is supplied. Replaces the retired vatRate (rejected with 422 UNKNOWN_FIELD_VAT_RENAMED). A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is held NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export); it is never guessed.' },
+              taxRate: { type: 'number', description: 'REQUIRED. Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales tax alike. Always required, even when clientTaxCode is supplied — missing or out of range is a 400 naming this field. Replaces the retired vatRate (rejected with 422 UNKNOWN_FIELD_VAT_RENAMED). A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT — state exempt/zero_rated/reverse_charge or a clientTaxCode; it is never guessed.' },
               taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (rejected with 422 UNKNOWN_FIELD_VAT_RENAMED).' },
               clientTaxCode: {
                 type: 'string',
@@ -253,7 +253,7 @@ const TOOLS = [
               taxTreatment: {
                 type: 'string',
                 enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'],
-                description: 'Explicit, AUTHORITATIVE tax treatment for this line, used when clientTaxCode is omitted — it is mapped as-is, never overridden by country inference. REQUIRED whenever the line is 0% (a bare 0% is held NEEDS_INFO asking why it is zero); a positive rate with no treatment maps to a domestic taxable supply at that rate. Cross-border/exempt/reverse-charge must be stated here, never inferred. Mutually exclusive with clientTaxCode.',
+                description: 'Explicit, AUTHORITATIVE tax treatment for this line, used when clientTaxCode is omitted — it is mapped as-is, never overridden by country inference. REQUIRED whenever the line is 0% and has no clientTaxCode (a bare 0% is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT); a positive rate with no treatment maps to a domestic taxable supply at that rate. Cross-border/exempt/reverse-charge must be stated here, never inferred. Mutually exclusive with clientTaxCode.',
               },
               customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level customerType, consulted only when this line has no clientTaxCode.' },
               supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
@@ -263,7 +263,7 @@ const TOOLS = [
               unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit`.' },
               sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode`.' },
             },
-            required: ['description', 'quantity', 'unitPrice'],
+            required: ['description', 'quantity', 'unitPrice', 'taxRate'],
           },
         },
         totalAmount: { type: 'number', description: 'Net total excluding tax' },
