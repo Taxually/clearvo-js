@@ -57,7 +57,7 @@ function print(data: unknown, pretty: boolean) {
 const program = new Command()
   .name('clearvo')
   .description('Clearvo CLI — submit invoices, calculate tax, validate tax numbers')
-  .version('0.1.0');
+  .version('0.2.0');
 
 // ── clearvo send <file> ───────────────────────────────────────────────────────
 // Hard cut: there is no `taxCode` field anywhere in the request — not on a
@@ -73,9 +73,14 @@ const program = new Command()
 // zero. An unrecognised clientTaxCode never rejects the invoice — it's held
 // (status HELD_UNMAPPED_TAX_CODE) with a machine-readable reason in the
 // response instead.
+// Line items carry `taxRate`/`taxAmount` — the platform is global, so field
+// names are never tax-type-specific. A file still using the retired
+// `vatRate`/`vatAmount` keys is rejected by the API with 422
+// UNKNOWN_FIELD_VAT_RENAMED naming the `tax`-named replacement; there is no
+// silent alias.
 program
   .command('send <file>')
-  .description('Submit an invoice from a JSON file')
+  .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED)')
   .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
   .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
   .option('--pretty', 'Pretty-print JSON output')

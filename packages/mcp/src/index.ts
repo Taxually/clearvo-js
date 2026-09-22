@@ -163,12 +163,16 @@ const TOOLS = [
       'with 422 `{ error, details: [{ field, code, message }] }` — each detail carries ' +
       '`code: "UNKNOWN_FIELD_BUYER_RENAMED"` and a `message` naming the exact `customer`-named ' +
       'replacement — there is no silent alias. ' +
+      'Line items carry `taxRate` and `taxAmount` (the platform is global — no tax-type-specific field names). A request ' +
+      'that still uses the retired `lines[].vatRate` or `lines[].vatAmount` keys is rejected with 422 ' +
+      '`{ error, details: [{ field, code: "UNKNOWN_FIELD_VAT_RENAMED", message }] }` naming the `tax`-named replacement — ' +
+      'there is no silent alias. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
       'create_client_tax_code / list_tax_codes), or an AUTHORITATIVE taxTreatment (exempt/out_of_scope/zero_rated/' +
       'reverse_charge) for a line with no configured code — a stated taxTreatment is mapped as-is, never overridden ' +
-      'by country inference. A positive vatRate with neither is reported as a domestic taxable supply at that rate ' +
+      'by country inference. A positive taxRate with neither is reported as a domestic taxable supply at that rate ' +
       '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held ' +
       'NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export). An unrecognised ' +
       'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
@@ -239,7 +243,8 @@ const TOOLS = [
               description: { type: 'string' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number', description: 'Unit price excluding tax' },
-              vatRate: { type: 'number', description: 'VAT/tax rate as a percentage (e.g. 22 for 22%). Required unless clientTaxCode is supplied. A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is held NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export); it is never guessed.' },
+              taxRate: { type: 'number', description: 'Tax rate as a percentage (e.g. 22 for 22%) — VAT, GST or sales tax alike. Required unless clientTaxCode is supplied. Replaces the retired vatRate (rejected with 422 UNKNOWN_FIELD_VAT_RENAMED). A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is held NEEDS_INFO asking why it is zero (exempt/zero_rated/reverse_charge/intra_community/export); it is never guessed.' },
+              taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (rejected with 422 UNKNOWN_FIELD_VAT_RENAMED).' },
               clientTaxCode: {
                 type: 'string',
                 description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
@@ -260,7 +265,7 @@ const TOOLS = [
         documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note"' },
         clientTaxCode: {
           type: 'string',
-          description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/vatRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
+          description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/taxRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
         },
         customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional customer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the customer\'s own country, which also exempts the customer from HU\'s mandatory street-address requirement.' },
         correctsInvoiceId: {
@@ -840,7 +845,8 @@ const TOOLS = [
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
       'Returns everything in list_invoices plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
-      'and the submitted XML. For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
+      'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount` ' +
+      '(the retired `vatRate`/`vatAmount` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
       'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
       'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +

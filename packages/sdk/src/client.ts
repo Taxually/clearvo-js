@@ -459,7 +459,7 @@ export class ClearvoClient {
   // ── Client Tax Codes ──────────────────────────────────────────────────────
   // Maps a customer's own ERP tax code (e.g. a SAP two-digit code) to the
   // tax treatment it represents. Used as an INPUT on submitInvoice() (pass
-  // clientTaxCode on a line item instead of taxCode+vatRate) and returned as
+  // clientTaxCode on a line item instead of taxCode+taxRate) and returned as
   // an OUTPUT on calculateTax() (the response echoes back your matching code
   // for ERP posting). `rate` is always response-only — never send it.
 

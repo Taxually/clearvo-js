@@ -56,6 +56,8 @@ Then ask Claude: *"Submit a test invoice for €1,000 to Acme SpA (IT12345678901
 
 `submit_invoice` line items have no `taxCode` field — the EN16931 category is always a resolved output. Pass `clientTaxCode` (RECOMMENDED) or a `taxTreatment` hint (`exempt`/`out_of_scope`/`zero_rated`/`reverse_charge`) instead, and set `dryRun: true` to preview the resolution without submitting for real.
 
+Line items carry `taxRate` and `taxAmount` — field names are never tax-type-specific (the platform covers VAT, GST and sales tax). The retired `vatRate`/`vatAmount` names are rejected by the API with `422 UNKNOWN_FIELD_VAT_RENAMED`; upgrade to `@clearvo/sdk` ≥ 0.2.0, `@clearvo/mcp` ≥ 0.3.0 or `@clearvo/cli` ≥ 0.2.0 (see [CHANGELOG](./CHANGELOG.md)).
+
 ## TypeScript SDK
 
 ```bash

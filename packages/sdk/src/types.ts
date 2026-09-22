@@ -142,8 +142,19 @@ export interface LineItemInput {
   description: string;
   quantity: number;
   unitPrice: number;
-  /** Required unless clientTaxCode is supplied (or resolved from the header-level clientTaxCode). */
+  /**
+   * Tax rate as a percentage (e.g. 22 for 22%) — VAT, GST or sales tax alike.
+   * Required unless clientTaxCode is supplied (or resolved from the
+   * header-level clientTaxCode). The retired `vatRate` name is rejected by
+   * the API with 422 UNKNOWN_FIELD_VAT_RENAMED — there is no silent alias.
+   */
   taxRate?: number;
+  /**
+   * Optional tax amount for this line; computed as taxRate × line total
+   * when omitted. The retired `vatAmount` name is rejected by the API with
+   * 422 UNKNOWN_FIELD_VAT_RENAMED.
+   */
+  taxAmount?: number;
   /**
    * RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code),
    * configured in advance via createClientTaxCode. Mutually exclusive with
@@ -284,12 +295,12 @@ export interface SubmitInvoiceInput {
   deductionPeriod?: { ejercicio: string; periodo: string };
 }
 
-/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive vatRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is held NEEDS_INFO — movement is never inferred from the customer/seller countries. */
+/** Which tier resolved a line: an entity-configured client_tax_codes row, a connector's own system_enum row, or the facts tier. The facts tier is MAP-ONLY: an AUTHORITATIVE taxTreatment is mapped as-is, a positive taxRate with no treatment becomes a domestic taxable supply at that rate, and a bare 0% with no treatment is held NEEDS_INFO — movement is never inferred from the customer/seller countries. */
 export type ResolvedBy = 'client_tax_code' | 'source_system_code' | 'facts';
 
 /**
  * The full Tax Decision behind one line's resolution — how the caller's
- * clientTaxCode/taxTreatment/vatRate input became an EN16931/BIS category.
+ * clientTaxCode/taxTreatment/taxRate input became an EN16931/BIS category.
  */
 export interface LineTaxResolution {
   resolvedBy: ResolvedBy;
