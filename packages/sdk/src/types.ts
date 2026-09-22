@@ -40,8 +40,15 @@ export interface CreateOrganisationInput {
   name: string;
   /** Your own idempotency key, unique per tenant. A repeat call with the same value returns 409 with the existing organisationId — no apiKey is issued. */
   externalReference?: string;
-  /** Non-empty. Solution codes to enable on the new organisation's default entity. */
-  solutions: Array<'einvoicing' | 'periodic_reporting' | 'tax_number_validation' | 'tax_calculations' | 'ecm'>;
+  /**
+   * Non-empty. Solution codes to enable on the new organisation's default
+   * entity — must match the backend's ALL_SOLUTION_CODES
+   * (lib/onboarding/entity-solutions.ts) exactly. 'periodic_reporting' was
+   * folded into 'einvoicing' by the unify-einvoicing-reporting collapse
+   * (migrations/V20260916100000) and is no longer a valid code — the server
+   * 422s with "Unknown solution code" if you send it.
+   */
+  solutions: Array<'einvoicing' | 'tax_number_validation' | 'tax_calculations' | 'ecm'>;
   entity: {
     legalName: string;
     /** ISO 3166-1 alpha-2. */

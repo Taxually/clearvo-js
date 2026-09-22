@@ -29,9 +29,9 @@ const _fullInput: CreateOrganisationInput = {
 };
 void _fullInput;
 
-// `solutions` only accepts the four real ALL_SOLUTION_CODES plus 'ecm' — an
-// unknown code must not type-check. If this ever compiles again, `solutions`
-// has drifted from the backend's SolutionCode union.
+// `solutions` only accepts the four real ALL_SOLUTION_CODES — an unknown
+// code must not type-check. If this ever compiles again, `solutions` has
+// drifted from the backend's SolutionCode union.
 const _invalidSolution: CreateOrganisationInput = {
   name: 'Acme Partner Org',
   // @ts-expect-error — 'invoicing' is not a valid solution code (the real code is 'einvoicing').
@@ -39,6 +39,18 @@ const _invalidSolution: CreateOrganisationInput = {
   entity: { legalName: 'Acme Partner Org GmbH', country: 'DE' },
 };
 void _invalidSolution;
+
+// 'periodic_reporting' was folded into 'einvoicing' (unify-einvoicing-reporting,
+// migrations/V20260916100000) and must not type-check — the server 422s with
+// "Unknown solution code" if it's sent. If this ever compiles again, the SDK
+// has re-drifted from the backend's ALL_SOLUTION_CODES.
+const _staleSolution: CreateOrganisationInput = {
+  name: 'Acme Partner Org',
+  // @ts-expect-error — 'periodic_reporting' was folded into 'einvoicing' and is no longer a valid solution code.
+  solutions: ['periodic_reporting'],
+  entity: { legalName: 'Acme Partner Org GmbH', country: 'DE' },
+};
+void _staleSolution;
 
 // No vatNumber, extraFields, or other tax-identity/credential field belongs
 // on this shape — the endpoint is shell-only. If this ever compiles again,
