@@ -604,7 +604,7 @@ function taxCodeMutationBody(opts: {
   code?: string; country?: string; region?: string;
   movement?: string; taxability?: string; customerType?: string; supplyType?: string;
   rateBand?: string; reverseCharge?: boolean; useTaxSelfAssessed?: boolean;
-  filingTag?: string; direction?: string; description?: string;
+  filingTag?: string; direction?: string; description?: string; exemptionReasonText?: string;
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   if (opts.code)        body.code = opts.code;
@@ -620,6 +620,7 @@ function taxCodeMutationBody(opts: {
   if (opts.filingTag)   body.filingTag = opts.filingTag;
   if (opts.direction)   body.direction = opts.direction;
   if (opts.description) body.description = opts.description;
+  if (opts.exemptionReasonText) body.exemptionReasonText = opts.exemptionReasonText;
   return body;
 }
 
@@ -649,13 +650,14 @@ taxCodes
   .option('--filing-tag <tag>', 'Pure metadata for a future Taxsure integration — never consumed by any computation')
   .option('--direction <direction>', 'sale or purchase — omit for a code that applies to both')
   .option('--description <text>', 'Optional longer description')
+  .option('--exemption-reason-text <text>', 'Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code, never derived or auto-generated')
   .option('--entity <entityId>', 'Entity to create the client tax code under (required for account-scoped keys)')
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (opts: {
     code: string; country: string; region?: string; movement: string; taxability: string;
     customerType?: string; supplyType: string; rateBand?: string; reverseCharge?: boolean;
     useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
-    entity?: string; pretty?: boolean;
+    exemptionReasonText?: string; entity?: string; pretty?: boolean;
   }) => {
     const body = taxCodeMutationBody(opts);
     const result = await api('POST', '/tax/client-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
@@ -678,13 +680,14 @@ taxCodes
   .option('--filing-tag <tag>', 'Updated filing tag')
   .option('--direction <direction>', 'sale or purchase')
   .option('--description <text>', 'Updated description')
+  .option('--exemption-reason-text <text>', 'Updated free-text exemption wording — see `tax-codes create`')
   .option('--entity <entityId>', 'Entity the client tax code belongs to (required for account-scoped keys)')
   .option('--pretty', 'Pretty-print JSON output')
   .action(async (id: string, opts: {
     code?: string; country?: string; region?: string; movement?: string; taxability?: string;
     customerType?: string; supplyType?: string; rateBand?: string; reverseCharge?: boolean;
     useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
-    entity?: string; pretty?: boolean;
+    exemptionReasonText?: string; entity?: string; pretty?: boolean;
   }) => {
     const body = taxCodeMutationBody(opts);
     const result = await api('PATCH', `/tax/client-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
