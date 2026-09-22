@@ -653,11 +653,14 @@ export interface TaxCalculateResponse {
      * alongside `classification`. Always populated when classification data
      * is present, even when taxTreatmentOverride or commodityCode later
      * determined the line's actual rate band (classification runs
-     * unconditionally before jurisdiction/rate-band resolution).
-     * AI_FALLBACK: no real classification signal existed — confidence
-     * carries no real meaning and must never be presented as a percentage.
+     * unconditionally before jurisdiction/rate-band resolution). No live AI
+     * classification ever occurs on this endpoint — EXPLICIT/STRIPE_CODE/
+     * CACHED are deterministic catalogue/mapping hits; CACHED_BY_NAME is an
+     * exact, unambiguous productName match (a 2+-entry match is treated as
+     * no match); DEFAULT means no code/name match was found and the account
+     * default category (or the standard physical-goods category) was used.
      */
-    classificationSource?: 'EXPLICIT' | 'STRIPE_CODE' | 'CACHED' | 'AI' | 'AI_FALLBACK' | null;
+    classificationSource?: 'EXPLICIT' | 'STRIPE_CODE' | 'CACHED' | 'CACHED_BY_NAME' | 'DEFAULT' | null;
     sourcingRationale?: {
       /** This line's resolved rate band (STANDARD/REDUCED/ZERO/EXEMPT/etc). Always present when sourcingRationale is. */
       rateBand?: string;
