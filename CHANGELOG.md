@@ -2,6 +2,26 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the FR credentials backend PR has merged and deployed
+
+Backend PR: Taxually-Einvoicing #16203 (`claude/fr-credentials-api`), `POST`/`GET /v1/fr/credentials`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored by this endpoint — it registers/reads back the entity's own French VAT number and reports honest per-capability onboarding status (`active` / `pending_activation` / `sandbox`) instead of a blind "saved", mirroring the pattern Poland's `set_pl_credentials`/`get_pl_credentials` already established.
+
+### @clearvo/sdk 0.2.0 (additive, non-breaking)
+
+- New `setFrCredentials(input: SetFrCredentialsInput): Promise<FrCredentialsResponse>` and `getFrCredentials(entityId?: string): Promise<FrCredentialsResponse>`. `SetFrCredentialsInput` accepts only `taxNumber` (French VAT number; SIREN is derived read-only in the response, never a request field) plus the usual optional `entityId` for account-scoped keys.
+- `FrCredentialsResponse` always returns `200`: `sandbox` (matches the API key's environment, not a request field), `credentialStatus` (`active | pending_activation | sandbox | not_registered`), per-capability `capabilities.{einvoicing,ereporting}` (status/label/message/actionOwner), `verification.method: 'platform_configuration'` (a config check, never a live authority/partner call), `nextSteps` with `requiredInputs` for any placeholder field, `siren`/`siret` read-only, `previousTaxNumber` on overwrite, and `createdAt`/`updatedAt`.
+- New `updateBusinessStatus(input: UpdateBusinessStatusInput): Promise<UpdateBusinessStatusResponse>` and `pollFrInbound(entityId?: string): Promise<FrInboundPollResponse>` — SDK parity for the already-shipped `PATCH /v1/invoices/{id}/business-status` and `POST /v1/fr/inbound/poll` endpoints (no wire-shape change, just SDK coverage catching up).
+
+### @clearvo/mcp 0.3.0 (additive, non-breaking)
+
+- New `set_fr_credentials` / `get_fr_credentials` tools, matching the SDK methods above one-for-one. Tool descriptions are explicit that `verification.method` is a configuration check, not a live check against the tax authority or the platform's France delivery partner.
+- New `poll_fr_inbound` / `update_business_status` tools for the endpoints named above.
+
+### @clearvo/cli 0.2.0 (additive, non-breaking)
+
+- New `clearvo fr credentials set --tax-number <taxNumber> [--entity <entityId>]` and `clearvo fr credentials get [--entity <entityId>]`.
+- New `clearvo fr inbound poll [--entity <entityId>]` for manually triggering the France inbound poll (the automatic poll already runs every 5 minutes).
+
 ## Unreleased — publish only AFTER the backend rename has deployed
 
 Backend PR: Taxually-Einvoicing branch `claude/vat-rate-to-tax-rate-rename`. Until it is live in production, the API still expects the old names, so these versions must not be published before it.
