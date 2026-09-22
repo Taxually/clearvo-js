@@ -1417,6 +1417,19 @@ const TOOLS = [
         region: { type: 'string' },
         postalCode: { type: 'string' },
         peppolParticipantId: { type: 'string', description: '"schemeId:value" form, e.g. "0106:12345678". Supplying it is treated as confirmed immediately.' },
+        countrySpecific: {
+          type: 'object',
+          description: 'Country-specific master data, only meaningful for the named country.',
+          properties: {
+            ar: {
+              type: 'object',
+              description: 'Argentina AFIP buyer VAT condition.',
+              properties: {
+                condicionIVAReceptorId: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign. Backfilled onto AR invoices submitted via customerRef whenever the send request omits its own value.' },
+              },
+            },
+          },
+        },
         entityId: { type: 'string', description: 'Entity to create the customer under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['name'],
@@ -1451,6 +1464,19 @@ const TOOLS = [
         region: { type: 'string' },
         postalCode: { type: 'string' },
         peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Setting it is treated as confirmed immediately; pass null to clear it.' },
+        countrySpecific: {
+          type: 'object',
+          description: 'Country-specific master data, only meaningful for the named country.',
+          properties: {
+            ar: {
+              type: 'object',
+              description: 'Argentina AFIP buyer VAT condition.',
+              properties: {
+                condicionIVAReceptorId: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign. Pass null to clear the stored value.' },
+              },
+            },
+          },
+        },
         entityId: { type: 'string', description: 'Entity the customer belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['customerId'],
@@ -1489,6 +1515,19 @@ const TOOLS = [
         region: { type: 'string' },
         postalCode: { type: 'string' },
         peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Supplying it is treated as confirmed immediately. Omit to leave an existing confirmed value untouched.' },
+        countrySpecific: {
+          type: 'object',
+          description: 'Country-specific master data, only meaningful for the named country. Omit a sub-field to leave it untouched, not clear it.',
+          properties: {
+            ar: {
+              type: 'object',
+              description: 'Argentina AFIP buyer VAT condition.',
+              properties: {
+                condicionIVAReceptorId: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign.' },
+              },
+            },
+          },
+        },
         entityId: { type: 'string', description: 'Entity to upsert the customer under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['customerRef', 'name'],
