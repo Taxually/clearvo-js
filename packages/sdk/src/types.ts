@@ -1771,7 +1771,10 @@ export interface FrCredentialsResponse {
   verification: { method: 'platform_configuration'; checkedAt: string };
   /** The last 9 digits of taxNumber, derived read-only — null only when nothing is registered yet. */
   siren: string | null;
-  /** Static follow-on actions; empty for a buyer who needs nothing further. */
+  /** Static follow-on actions this response documents, never performed automatically — currently always the
+   *  seller e-reporting step, shown to every caller since this endpoint has no way to know whether the
+   *  registering entity is buyer-only; buyers can disregard it, since inbound receiving needs nothing further
+   *  from them. */
   nextSteps: FrNextStep[];
   /** One plain-language sentence summarising both capabilities. */
   message: string;
