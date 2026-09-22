@@ -678,7 +678,11 @@ const TOOLS = [
       'partner is granted per capability, not all-or-nothing. Each capability is active | pending_activation | ' +
       'sandbox; nothing further is needed from the caller while pending — re-read with get_fr_credentials to see ' +
       'when it flips. Re-posting the same tax number is idempotent; posting a different one overwrites it and the ' +
-      'response carries previousTaxNumber.',
+      'response carries previousTaxNumber. The response also carries nextSteps — static, advisory follow-on ' +
+      'actions this call never performs itself. Read each step\'s requiredInputs before acting on it: any field ' +
+      'it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax position ' +
+      '(its e-reporting start date, its real VAT regime) that the platform cannot determine on your behalf. ' +
+      'Sending that body unedited will 400; fill in a real value for each requiredInputs field first.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -695,7 +699,10 @@ const TOOLS = [
       'returns, so a caller can poll this after registering. Always returns 200, even when nothing is registered ' +
       'yet (credentialStatus "not_registered") — never 404, so a poller never has to special-case "nothing saved ' +
       'yet". Status is derived from the platform\'s own configuration, never a live check against the tax ' +
-      'authority or the platform\'s delivery partner.',
+      'authority or the platform\'s delivery partner. The response also carries nextSteps — static, advisory ' +
+      'follow-on actions this call never performs itself. Read each step\'s requiredInputs before acting on it: ' +
+      'any field it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax ' +
+      'position that the platform cannot determine on your behalf.',
     inputSchema: {
       type: 'object' as const,
       properties: {

@@ -1733,6 +1733,16 @@ export interface FrCapabilityPresentation {
   actionOwner: 'platform' | null;
 }
 
+/** One field inside FrNextStep.body the caller must replace with a real value before sending —
+ *  the platform has no way to determine it (it's a fact about the entity's own tax position, not
+ *  something derivable from the registration itself). `options` is present only for a field with
+ *  a closed set of valid values (currently only vatRegime). */
+export interface FrNextStepRequiredInput {
+  field: string;
+  description: string;
+  options?: readonly { value: string; label: string }[];
+}
+
 /** A static follow-on call this response documents, not one it performs itself — registering a French VAT number
  *  never flips a reporting obligation on its own. */
 export interface FrNextStep {
@@ -1741,6 +1751,10 @@ export interface FrNextStep {
   path: string;
   body: Record<string, unknown>;
   applicableTo: string;
+  /** Fields inside `body` that are null placeholders, not real values — sending `body` verbatim
+   *  will 400 (e.g. EFFECTIVE_FROM_REQUIRED); the caller must replace each one with a real fact
+   *  about the entity before calling. Omitted when `body` needs no such replacement. */
+  requiredInputs?: FrNextStepRequiredInput[];
 }
 
 export interface SetFrCredentialsInput {
