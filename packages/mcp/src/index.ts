@@ -118,6 +118,16 @@ async function callApi(
 // timeout or opaque failure further down the chain.
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
+// Shared sentences for set_fr_credentials/get_fr_credentials, kept word-for-word identical to
+// their twins on the hosted MCP connector (Taxually-Einvoicing lib/mcp/tools.ts) — a sandbox key
+// masks the real production activation state either way, and sandbox sends work but receiving
+// cannot be exercised there at all (focus-ux-product.md M3/Q1).
+const FR_SANDBOX_MASKS_ACTIVATION_NOTE =
+  'With a sandbox key every capability reports sandbox, masking the real production activation ' +
+  'state either way; to see production activation, call get_fr_credentials with a live read-scope key.';
+const FR_SANDBOX_NO_RECEIVING_NOTE =
+  'Sandbox sends are accepted locally, but inbound receiving cannot be exercised in sandbox.';
+
 const TOOLS = [
   {
     name: 'submit_invoice',
@@ -677,11 +687,16 @@ const TOOLS = [
       'ereporting = reporting sales to the tax office) since the platform connection to its interim delivery ' +
       'partner is granted per capability, not all-or-nothing. Each capability is active | pending_activation | ' +
       'sandbox; nothing further is needed from the caller while pending — re-read with get_fr_credentials to see ' +
-      'when it flips. Re-posting the same tax number is idempotent; posting a different one overwrites it and the ' +
+      'when it flips. ' + FR_SANDBOX_MASKS_ACTIVATION_NOTE + ' ' + FR_SANDBOX_NO_RECEIVING_NOTE + ' ' +
+      'Re-posting the same tax number is idempotent; posting a different one overwrites it and the ' +
       'response carries previousTaxNumber. The response also carries nextSteps — static, advisory follow-on ' +
-      'actions this call never performs itself. Read each step\'s requiredInputs before acting on it: any field ' +
+      'actions this call never performs itself; applicableTo names who a step is typically for but never asserts ' +
+      'a buyer-only entity is exempt — confirm the entity\'s own scope. Read each step\'s requiredInputs before ' +
+      'acting on it: any field ' +
       'it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax position ' +
-      '(its e-reporting start date, its real VAT regime) that the platform cannot determine on your behalf. ' +
+      'that the platform cannot determine on your behalf. effectiveFrom in particular is not the entity\'s free ' +
+      'choice: it is set by the French rollout calendar according to the entity\'s own size category (or the ' +
+      'later date it came into scope), and may only be brought forward, never lawfully chosen later. ' +
       'Sending that body unedited will 400; fill in a real value for each requiredInputs field first. Also ' +
       'returns sandbox (whether this write ran against the sandbox environment) and the registration\'s ' +
       'createdAt/updatedAt.',
@@ -701,10 +716,17 @@ const TOOLS = [
       'returns, so a caller can poll this after registering. Always returns 200, even when nothing is registered ' +
       'yet (credentialStatus "not_registered") — never 404, so a poller never has to special-case "nothing saved ' +
       'yet". Status is derived from the platform\'s own configuration, never a live check against the tax ' +
-      'authority or the platform\'s delivery partner. The response also carries nextSteps — static, advisory ' +
-      'follow-on actions this call never performs itself. Read each step\'s requiredInputs before acting on it: ' +
+      'authority or the platform\'s delivery partner. ' + FR_SANDBOX_MASKS_ACTIVATION_NOTE + ' ' +
+      FR_SANDBOX_NO_RECEIVING_NOTE + ' ' +
+      'The response also carries nextSteps — static, advisory ' +
+      'follow-on actions this call never performs itself; applicableTo names who a step is typically for but ' +
+      'never asserts a buyer-only entity is exempt — confirm the entity\'s own scope. Read each step\'s ' +
+      'requiredInputs before acting on it: ' +
       'any field it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax ' +
-      'position that the platform cannot determine on your behalf. Also returns sandbox (whether this read ran ' +
+      'position that the platform cannot determine on your behalf. effectiveFrom in particular is not the ' +
+      'entity\'s free choice: it is set by the French rollout calendar according to the entity\'s own size ' +
+      'category (or the later date it came into scope), and may only be brought forward, never lawfully chosen ' +
+      'later. Also returns sandbox (whether this read ran ' +
       'against the sandbox environment) and the registration\'s createdAt/updatedAt (both null when nothing is ' +
       'registered yet).',
     inputSchema: {
