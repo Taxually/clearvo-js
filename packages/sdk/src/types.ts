@@ -1780,6 +1780,60 @@ export interface FrCredentialsResponse {
   message: string;
 }
 
+// ── Business (customer-lifecycle) status ────────────────────────────────────
+// Mirrors PATCH /v1/invoices/{id}/business-status. Only valid for an INBOUND
+// (received) invoice — the calling entity is the customer recording their
+// own decision on it. FR is the only country with a wired-up partner push
+// today (via the Marosa/PPF bridge); DE records the same state machine as a
+// platform-only decision with no partner push.
+
+export type BusinessStatus =
+  | 'IN_HAND'
+  | 'APPROVED'
+  | 'PARTIALLY_APPROVED'
+  | 'DISPUTED'
+  | 'SUSPENDED'
+  | 'REFUSED'
+  | 'COMPLETED'
+  | 'PAYMENT_SENT'
+  | 'PAYMENT_RECEIVED';
+
+export interface UpdateBusinessStatusInput {
+  /** Invoice id or referenceId of a received (inbound) invoice. */
+  id: string;
+  status: BusinessStatus;
+  /** Required when status is DISPUTED, REFUSED, or SUSPENDED. */
+  rejectionDetail?: { reason: string; message?: string };
+  /** Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface UpdateBusinessStatusResponse {
+  ok: boolean;
+  businessStatus: BusinessStatus;
+  updatedAt: string;
+}
+
+// ── France inbound poll (Marosa interim bridge) ─────────────────────────────
+// Mirrors POST /v1/fr/inbound/poll's entity-API-key mode: resolves status on
+// this entity's own PENDING outbound submissions and discovers newly
+// RECEIVED inbound documents. DELIBERATELY TEMPORARY, part of the Marosa
+// interim bridge while Taxually's own DGFiP PA accreditation is pending —
+// see the clearvo-fr-marosa skill.
+
+export interface FrInboundPollResult {
+  entityId: string;
+  resolved: number;
+  newInvoices: number;
+  errors: string[];
+}
+
+export interface FrInboundPollResponse {
+  ok: boolean;
+  results: FrInboundPollResult[];
+  totalNewInvoices: number;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,

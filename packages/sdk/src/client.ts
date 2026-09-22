@@ -68,6 +68,9 @@ import type {
   ListTaxCodesResponse,
   SetFrCredentialsInput,
   FrCredentialsResponse,
+  UpdateBusinessStatusInput,
+  UpdateBusinessStatusResponse,
+  FrInboundPollResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -514,5 +517,28 @@ export class ClearvoClient {
 
   getFrCredentials(entityId?: string): Promise<FrCredentialsResponse> {
     return this.request('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Business (customer-lifecycle) status ─────────────────────────────────
+  // Only valid for a received (inbound) invoice — records the calling
+  // entity's own decision (approve, dispute, mark paid, ...) on it.
+
+  updateBusinessStatus(input: UpdateBusinessStatusInput): Promise<UpdateBusinessStatusResponse> {
+    const { id, entityId, ...body } = input;
+    return this.request(
+      'PATCH',
+      `/invoices/${encodeURIComponent(id)}/business-status`,
+      body,
+      entityId ? { 'x-entity-id': entityId } : undefined
+    );
+  }
+
+  // ── France inbound poll (Marosa interim bridge) ──────────────────────────
+  // Manual, entity-API-key trigger — resolves this entity's own pending
+  // outbound submissions and discovers newly received inbound documents.
+  // DELIBERATELY TEMPORARY; see the clearvo-fr-marosa skill.
+
+  pollFrInbound(entityId?: string): Promise<FrInboundPollResponse> {
+    return this.request('POST', '/fr/inbound/poll', {}, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 }

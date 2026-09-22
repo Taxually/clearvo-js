@@ -111,4 +111,9 @@ export type {
   FrNextStep,
   SetFrCredentialsInput,
   FrCredentialsResponse,
+  BusinessStatus,
+  UpdateBusinessStatusInput,
+  UpdateBusinessStatusResponse,
+  FrInboundPollResult,
+  FrInboundPollResponse,
 } from './types.js';

@@ -704,6 +704,55 @@ const TOOLS = [
     },
   },
   {
+    name: 'poll_fr_inbound',
+    description:
+      'Manually trigger a France inbound poll for this entity: resolve status on your own pending outbound ' +
+      'submissions, and discover newly received inbound documents into your inbox. Deliberately temporary — part ' +
+      'of the interim delivery-partner bridge while Taxually\'s own DGFiP PA accreditation is pending, and only ' +
+      'ever needed if you don\'t want to wait for the automatic every-5-minute poll. Requires set_fr_credentials ' +
+      'to already show the einvoicing capability active (get_fr_credentials to check) — otherwise there is ' +
+      'nothing to poll.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'update_business_status',
+    description:
+      'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice — approve, ' +
+      'partially approve, dispute, suspend, refuse, or mark paid. Only valid on an INBOUND invoice you received: ' +
+      'the calling entity is the customer recording their own decision on it. For an invoice you issued, the ' +
+      'other side\'s response syncs automatically once they act on their own side — there is nothing to call ' +
+      'here for that direction. rejectionDetail is required when status is DISPUTED, REFUSED, or SUSPENDED. ' +
+      'Fails 409 if the transition isn\'t valid from the invoice\'s current status, and 422 ' +
+      '(FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s tax number — ' +
+      'neither is retryable by changing the request; the status was not changed either way.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Invoice id or referenceId of a received (inbound) invoice — as returned by get_invoice or list_invoices.' },
+        status: {
+          type: 'string',
+          enum: ['IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED'],
+          description: 'The new business-lifecycle status.',
+        },
+        rejectionDetail: {
+          type: 'object' as const,
+          description: 'Required when status is DISPUTED, REFUSED, or SUSPENDED.',
+          properties: {
+            reason: { type: 'string', description: 'Short machine-usable reason code.' },
+            message: { type: 'string', description: 'Optional human-readable detail.' },
+          },
+        },
+        entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'status'],
+    },
+  },
+  {
     name: 'set_hu_credentials',
     description:
       'Register Hungary NAV Online Számla credentials for an entity: tax number and technical user details. ' +
@@ -1987,6 +2036,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_fr_credentials': {
       const { entityId } = args as { entityId?: string };
       return callApi('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'poll_fr_inbound': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('POST', '/fr/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_business_status': {
+      const { id, entityId, ...body } = args as { id: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/invoices/${encodeURIComponent(id)}/business-status`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'set_eg_credentials': {

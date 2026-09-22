@@ -143,6 +143,27 @@ export function createProgram(): Command {
       const result = await api('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': idempotencyKey });
       print(result, !!opts.pretty);
     });
+
+  // ── clearvo business-status <id> ─────────────────────────────────────────────
+  // Records a customer-lifecycle ("business") status decision on a received
+  // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or
+  // mark paid. Only valid on an INBOUND invoice: the calling entity is the
+  // customer recording its own decision. For an invoice you issued, the other
+  // side's response syncs automatically once they act on their own side.
+  program
+    .command('business-status <id>')
+    .description('Record a customer-lifecycle status decision on a received (inbound) invoice')
+    .requiredOption('--status <status>', 'IN_HAND | APPROVED | PARTIALLY_APPROVED | DISPUTED | SUSPENDED | REFUSED | COMPLETED | PAYMENT_SENT | PAYMENT_RECEIVED')
+    .option('--reason <reason>', 'Short machine-usable reason code. Required when --status is DISPUTED, REFUSED, or SUSPENDED.')
+    .option('--message <message>', 'Optional human-readable detail alongside --reason.')
+    .option('--entity <entityId>', 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { status: string; reason?: string; message?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { status: opts.status };
+      if (opts.reason) body.rejectionDetail = { reason: opts.reason, ...(opts.message ? { message: opts.message } : {}) };
+      const result = await api('PATCH', `/invoices/${encodeURIComponent(id)}/business-status`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
   
   // ── clearvo reconciliation [id] ───────────────────────────────────────────────
   // ES SII block 3. Read-only: the AEAT Consulta reconciliation sweep runs on its
@@ -637,7 +658,23 @@ export function createProgram(): Command {
       const result = await api('GET', '/fr/credentials', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
-  
+
+  // clearvo fr inbound poll — manual trigger, part of the temporary Marosa
+  // interim bridge (see the clearvo-fr-marosa skill). Resolves status on this
+  // entity's own pending outbound submissions and discovers newly received
+  // inbound documents; the automatic poll already runs every 5 minutes, so
+  // this is only for when you don't want to wait for it.
+  const frInbound = fr.command('inbound').description('France inbound document polling (Marosa interim bridge)');
+  frInbound
+    .command('poll')
+    .description('Manually trigger a France inbound poll for this entity')
+    .option('--entity <entityId>', 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('POST', '/fr/inbound/poll', {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo tax-codes ────────────────────────────────────────────────────────
   // A client tax code maps your own ERP tax code (e.g. a SAP two-digit code) to
   // a Clearvo Tax Decision — movement, taxability, customerType, supplyType,
