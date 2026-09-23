@@ -136,6 +136,14 @@ export interface PartyInput {
   endpointSchemeId?: string;
   /** Customer only — resolve a previously-saved customer record instead of repeating its fields. */
   customerRef?: string;
+  /**
+   * Supplier only — resolve a previously-saved supplier record instead of
+   * repeating its fields. Primarily used on a self-billed invoice
+   * (countrySpecific.peppol.selfBilling: true — see SendInvoiceRequest's
+   * own doc comment), where `supplier` identifies the real third-party
+   * seller rather than the entity itself.
+   */
+  supplierRef?: string;
 }
 
 export interface LineItemInput {
@@ -227,7 +235,25 @@ export interface SubmitInvoiceInput {
   currency: string;
   country: string;
   taxIncluded?: boolean;
+  /**
+   * Optional on an ordinary sale — auto-derived from the entity's own
+   * master data when omitted. On a self-billed invoice
+   * (countrySpecific.peppol.selfBilling: true), `supplier` identifies the
+   * real third-party seller instead and is effectively required — omitting
+   * it with no resolvable `supplierRef` fails with 422
+   * MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never
+   * applies to it (see `customer` below).
+   */
   supplier?: PartyInput;
+  /**
+   * The counterparty. On an ordinary sale this is the customer. On a
+   * self-billed invoice (countrySpecific.peppol.selfBilling: true),
+   * `customer` is instead the entity's OWN identity (the buyer being
+   * self-billed for) — auto-derived when omitted, tax-ID-compared against
+   * the entity's own registration the same way `supplier` normally is, and
+   * its endpointId/endpointSchemeId (BT-49) backfilled from the entity's
+   * own confirmed Peppol Participant ID when omitted.
+   */
   customer: PartyInput;
   /** Optional customer classification for the whole invoice. Can be overridden per line via lines[].customerType. */
   customerType?: 'B2B' | 'B2C';
@@ -275,6 +301,13 @@ export interface SubmitInvoiceInput {
    * - `de.invoiceFormat` — per-request override of ZUGFERD vs. XRECHNUNG.
    * - `de.leitwegId` — BT-10 German public-sector routing ID (XRechnung
    *   only); falls back to the top-level `buyerReference` when omitted.
+   * - `peppol.selfBilling` (boolean, default false) — marks this as a
+   *   self-billing document (the customer issues on the seller's behalf),
+   *   switching to a self-billing CustomizationID/ProfileID and UNTDID
+   *   1001 type codes (389 invoice / 261 credit note). See `supplier` and
+   *   `customer` above for how party semantics change. Silently ignored
+   *   for SG and JP (self-billing document-type registration not yet
+   *   supported for those two).
    */
   countrySpecific?: Record<string, unknown>;
   notifyCustomer?: boolean;

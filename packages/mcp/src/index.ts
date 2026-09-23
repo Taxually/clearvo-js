@@ -148,6 +148,11 @@ const TOOLS = [
       '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). A Spain SII/VeriFactu invoice for ' +
       'an entity with no current Spanish registration is held NEEDS_INFO (errorCode ' +
       'MISSING_SUPPLIER_REGISTRATION, fixUrl) — add the registration, then resubmit. ' +
+      'Set countrySpecific.peppol.selfBilling=true for a self-billed invoice (you, the customer, ' +
+      'issuing on the real seller\'s behalf) — supplier then identifies that real seller (required; ' +
+      'supplierRef resolves a saved one) and customer becomes your OWN entity\'s identity instead ' +
+      '(auto-derived, tax-ID-checked). See supplier/customer/countrySpecific.peppol.selfBilling below ' +
+      'for the full behavior. ' +
       'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
       'and — for any customer that is not a private individual — a customer street address plus (only ' +
       'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
@@ -189,10 +194,10 @@ const TOOLS = [
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
         supplier: {
           type: 'object',
-          description: 'The issuing company (your entity). Pull name and taxId from your entity settings.',
+          description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef fails with 422 MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
           properties: {
             name: { type: 'string' },
-            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH.' },
+            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH. Does not apply on a self-billed invoice, where this is the real seller\'s own tax ID, taken as supplied.' },
             address: {
               type: 'object',
               properties: {
@@ -203,12 +208,16 @@ const TOOLS = [
               },
               required: ['city', 'country'],
             },
+            supplierRef: {
+              type: 'string',
+              description: 'Your own reference for a previously-saved supplier (see the dashboard\'s Suppliers page, or create_supplier/update_supplier). When set, Clearvo fills in any of name/taxId/address you omit here from the saved record — fields you do supply still take precedence. Primarily used on a self-billed invoice, where this is the real seller being self-billed for.',
+            },
           },
           required: ['name', 'address'],
         },
         customer: {
           type: 'object',
-          description: 'The customer receiving the invoice.',
+          description: 'The customer receiving the invoice. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this is instead your OWN entity\'s identity (the buyer being self-billed for) — auto-derived when omitted, tax-ID-compared against your own registration the same way supplier normally is (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch), and its Peppol endpoint identity backfilled from your entity\'s own confirmed Peppol Participant ID when omitted.',
           properties: {
             name: { type: 'string' },
             taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment' },
@@ -319,6 +328,16 @@ const TOOLS = [
                 duaNumber: {
                   type: 'string',
                   description: 'NumeroDUA (Documento Único Administrativo) — required, and only meaningful, when this purchase\'s tipoFactura resolves to F5 (import). Missing on an import produces NEEDS_INFO naming countrySpecific.es.duaNumber.',
+                },
+              },
+            },
+            peppol: {
+              type: 'object',
+              description: 'Peppol-routed invoice fields.',
+              properties: {
+                selfBilling: {
+                  type: 'boolean',
+                  description: 'Default false. Set true to mark this as a self-billing document (the customer issues on the seller\'s behalf) — switches to a self-billing CustomizationID/ProfileID and UNTDID 1001 type codes (389 invoice / 261 credit note), and swaps supplier/customer semantics (see their own descriptions above). AU/NZ use their own PINT-AUNZ self-billing profile; every other Peppol country except SG/JP uses the generic EU BIS Self-Billing 3.0 profile; silently ignored (falls back to regular billing) for SG/JP.',
                 },
               },
             },
