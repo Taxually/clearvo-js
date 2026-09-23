@@ -696,9 +696,72 @@ export interface TaxCalculateResponse {
   entityRole: 'supplier' | 'customer';
   summary: {
     totalAmount: number;
+    /** Never includes `customsDuty.amount` — see that field's own doc comment. */
     totalTax: number;
+    /** Never includes `customsDuty.amount` — see that field's own doc comment. */
     totalAmountWithTax: number;
+    /** US retail-delivery-fee rows (e.g. Colorado, Minnesota) — buyer-charged, included in totals. Absent when none apply. */
+    retailDeliveryFees?: Array<{ state: string; name: string; amount: number }>;
   };
+  /**
+   * Present when IOSS treatment is applied — the seller's IOSS number and
+   * the country they registered it in.
+   */
+  ioss?: {
+    number: string;
+    registrationCountry: string;
+    /** Total goods value used to verify the ≤ €150 threshold. */
+    totalGoodsValue: number;
+    currency: string;
+  };
+  /**
+   * Present only when a SELLER_COST fee_rules row applied to this
+   * calculation (today, only the EU temporary per-item customs duty on
+   * low-value IOSS consignments, 2026-07-01 to 2028-06-30) — sibling of
+   * `ioss` above, never nested inside it, never an entry in
+   * `summary.retailDeliveryFees[]`. `includedInTotals` is always `false`:
+   * `summary.totalTax`/`totalAmountWithTax` never include this amount. It
+   * is an informational ESTIMATE of a cost borne by the declarant (the
+   * IOSS holder or their indirect customs representative) — never
+   * collected from the buyer, never remitted by Clearvo. If a merchant
+   * chooses to recharge it to the buyer at the time of sale, that charge
+   * becomes part of the VAT-taxable amount of the sale (it is not itself
+   * VAT and is never added here).
+   */
+  customsDuty?: {
+    /** The fee_rules row's own fee_code, e.g. 'EU_LOW_VALUE_CONSIGNMENT_CUSTOMS_DUTY'. */
+    feeCode: string;
+    /** Always 'EUR' — the duty is never converted into the calculation's own `currency`; no FX is involved. */
+    currency: string;
+    /** Total duty owed this calculation — perItemAmount × itemCount. */
+    amount: number;
+    /** The per-distinct-classification rate the rule charges (e.g. 3.00). */
+    perItemAmount: number;
+    /** Distinct qualifying classification groups counted this calculation — see items[] below. */
+    itemCount: number;
+    /** The tariff-code digit-length used to group lines into items[] (e.g. 6 = HS6/H7). */
+    classificationDigits: number;
+    /** One entry per distinct normalised classification code, plus one entry per missing/malformed-code line (classificationCode: null). */
+    items: Array<{ classificationCode: string | null; lineIds: string[] }>;
+    /** lineIds of every qualifying line whose commodityCode was missing or unusable — each also appears as a null-classificationCode entry in items[] above. */
+    linesMissingCommodityCode?: string[];
+    /** Always false — this amount is never folded into summary.totalTax/totalAmountWithTax. */
+    includedInTotals: false;
+    /** Always 'DECLARANT' — owed by the IOSS holder or their indirect customs representative, never the buyer. */
+    payableBy: 'DECLARANT';
+    /** Always true — customs assesses the actual debt on release; this is a forecast, not a final figure. */
+    estimate: true;
+    /** ISO date — the resolved fee_rules row's own effective_from. */
+    effectiveFrom: string;
+  };
+  /**
+   * Present only on a credit note whose original invoice (same cart shape)
+   * would otherwise have owed a `customsDuty` — the duty accrued on the
+   * original import declaration is never refunded on a return, so the
+   * credit note neither charges nor reverses it. `customsDuty` itself is
+   * omitted (not zeroed) on the same response.
+   */
+  customsDutyNote?: 'NOT_REVERSED_ON_CREDIT_NOTE';
   lineItems: Array<{
     id: string;
     taxCode: string;

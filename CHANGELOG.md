@@ -2,6 +2,18 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — additive, safe to publish any time
+
+### @clearvo/sdk (types only — non-breaking)
+
+`TaxCalculateResponse` gains three fields the backend has emitted for a while but this SDK never typed:
+
+- `summary.retailDeliveryFees?: Array<{ state: string; name: string; amount: number }>` — US retail-delivery-fee rows (Colorado, Minnesota); buyer-charged, already included in `summary.totalTax`/`totalAmountWithTax`.
+- `ioss?: { number, registrationCountry, totalGoodsValue, currency }` — present when IOSS treatment is applied.
+- `customsDuty?: { feeCode, currency, amount, perItemAmount, itemCount, classificationDigits, items[], linesMissingCommodityCode?, includedInTotals: false, payableBy: 'DECLARANT', estimate: true, effectiveFrom }` and `customsDutyNote?: 'NOT_REVERSED_ON_CREDIT_NOTE'` — the EU's temporary (2026-07-01 to 2028-06-30) per-distinct-tariff-classification customs duty estimate on low-value IOSS consignments. `includedInTotals` is always `false`: this amount is never folded into `summary.totalTax`/`totalAmountWithTax` — it is owed by the IOSS holder or their indirect customs representative, never collected from the buyer or remitted by Clearvo. `customsDutyNote` appears instead of `customsDuty` on a credit note (the duty is never reversed on a return). See `docs/features/ioss-per-item-customs-duty` in `Taxually-Einvoicing` for the full legal basis.
+
+No wire format changed — these fields were already present on the real API response; only the SDK's own type was missing them.
+
 ## Unreleased — publish only AFTER the backend rename has deployed
 
 Backend PR: Taxually-Einvoicing branch `claude/vat-rate-to-tax-rate-rename`. Until it is live in production, the API still expects the old names, so these versions must not be published before it.
