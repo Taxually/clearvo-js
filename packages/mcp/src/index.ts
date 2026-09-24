@@ -1965,6 +1965,49 @@ const TOOLS = [
       required: ['clientTaxCodeId'],
     },
   },
+  {
+    name: 'get_client_tax_code_options',
+    description:
+      'Discover the valid field combinations for create_client_tax_code/update_client_tax_code — call this BEFORE ' +
+      'guessing an enum value. With no country, returns every movement/supplyType value unfiltered. With country, ' +
+      'narrows movements/rateBands to what is actually valid there and resolves whether region is required and ' +
+      'whether reverseCharge/useTaxSelfAssessed are even relevant concepts for that jurisdiction. With country + ' +
+      'region, rateBands additionally carries each band\'s live resolved rate percentage. With direction, movements ' +
+      'is further narrowed to sale- or purchase-relevant values. This is the exact same source of truth the ' +
+      'dashboard\'s Client Tax Codes form uses — never hardcode a guessed option list.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', description: '2- or 3-letter ISO code, e.g. "DE". Omit to get the unfiltered global option set.' },
+        region: { type: 'string', description: 'Sub-country scope (e.g. a US state) — refines rateBands\' resolved rate percentages. Only meaningful alongside country.' },
+        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Further narrows movements to sale- or purchase-relevant values.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'get_client_tax_code_exemption_reason_options',
+    description:
+      'Candidate exemptionReasonCode values for an IN-PROGRESS (not yet saved) client tax code, given the other ' +
+      'fields you have already chosen. exemptionReasonCode itself is free-text metadata (never validated against an ' +
+      'enum at save time), but this tells you what a human configuring the same code on the dashboard would be ' +
+      'offered — call it after get_client_tax_code_options once you know country/movement/taxability, especially for ' +
+      'a taxability="exempt" or "out_of_scope" code, rather than inventing a reason code from scratch.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', description: '2- or 3-letter ISO code.' },
+        movement: { type: 'string', enum: ['local', 'intra_community', 'export', 'distance_sale', 'import', 'own_goods_movement'] },
+        taxability: { type: 'string', enum: ['taxable', 'exempt', 'out_of_scope'] },
+        reverseCharge: { type: 'string', enum: ['true', 'false'], description: 'Pass as the literal string "true" or "false".' },
+        supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'] },
+        customerType: { type: 'string', enum: ['b2b', 'b2c'] },
+        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'] },
+        direction: { type: 'string', enum: ['sale', 'purchase'] },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
   // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Only ever requests a
   // JSON shape (format=summary by default, or format=status): callApi() parses every response as
   // JSON, so the raw XML file body itself is never a fit shape for this transport — a caller who
@@ -1995,6 +2038,35 @@ const TOOLS = [
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['period'],
+    },
+  },
+  // Consolidated cross-jurisdiction transaction view — MCP twin of GET /v1/mandate-transactions.
+  {
+    name: 'list_mandate_transactions',
+    description:
+      'Query the consolidated cross-jurisdiction transaction view — one row per resolved (or in-progress) mandate ' +
+      'decision, whatever mechanism it resolved to (per-document e-invoicing clearance, an aggregate accumulate-then' +
+      '-flush e-report, or no mandate at all). Pass uploadBatchId to see every row a specific bulk upload produced, ' +
+      'or omit it and use state/mandate/period/country/from/to to query more broadly. state="HELD" is the direct ' +
+      'answer to "which transactions reference a client tax code that does not exist" — inspect each held row\'s ' +
+      'holdReason (e.g. HELD_UNMAPPED_TAX_CODE naming the missing code) and actionOwner ("customer" means only you ' +
+      'can fix it, typically by calling create_client_tax_code; "platform" means it is a Clearvo-side gap). Each row ' +
+      'also carries provenance.matchedRule (which compliance-mandate rule fired) and terminalArtifact (the resulting ' +
+      'einvoice or reporting period, when one exists yet).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        uploadBatchId: { type: 'string', description: 'Exact match — every row a specific bulk upload (sync or async) produced. NULL for a row from a single-document submit_invoice, so this filter naturally excludes those.' },
+        state: { type: 'string', enum: ['PENDING', 'RESOLVED', 'NEEDS_INFO', 'HELD_UNKNOWN_MANDATE', 'OBLIGATION_DISABLED', 'HELD_UNMAPPED_DECISION', 'RECEIVED', 'HELD', 'OPEN', 'ACCUMULATED-OPEN-PERIOD', 'CLOSED', 'SUBMITTED', 'FILED', 'CLEARED'], description: 'Case-insensitive. HELD is an alias covering HELD_UNKNOWN_MANDATE + OBLIGATION_DISABLED + HELD_UNMAPPED_DECISION (which includes HELD_UNMAPPED_TAX_CODE as a holdReason). OPEN/ACCUMULATED-OPEN-PERIOD, CLOSED, SUBMITTED, FILED are reporting-period status aliases; CLEARED means einvoicing_records.cleared_at is set.' },
+        mandate: { type: 'string', description: 'Exact match against the resolved Compliance Mandate, e.g. "FR_EINVOICING", "FR_EREPORTING", "ES_SII", "NONE".' },
+        period: { type: 'string', description: 'Exact match against the reporting period key, e.g. "2026-09-D1" for a France décade.' },
+        country: { type: 'string', description: 'ISO-3166-1 alpha-2, exact match, case-insensitive.' },
+        from: { type: 'string', description: 'YYYY-MM-DD — issue_date >= this date.' },
+        to: { type: 'string', description: 'YYYY-MM-DD — issue_date <= this date.' },
+        page: { type: 'number', description: 'Page number, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Results per page, 1-200 (default 50)' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
     },
   },
 ] as const;
@@ -2401,12 +2473,43 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('DELETE', `/tax/client-codes/${encodeURIComponent(clientTaxCodeId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'get_client_tax_code_options': {
+      const { country, region, direction, entityId } = args as { country?: string; region?: string; direction?: string; entityId?: string };
+      const qs = new URLSearchParams();
+      if (country) qs.set('country', country);
+      if (region) qs.set('region', region);
+      if (direction) qs.set('direction', direction);
+      const q = qs.toString();
+      return callApi('GET', `/tax/client-codes/options${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_client_tax_code_exemption_reason_options': {
+      const { entityId, ...params } = args as { entityId?: string } & Record<string, unknown>;
+      const qs = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) if (value != null) qs.set(key, String(value));
+      const q = qs.toString();
+      return callApi('GET', `/tax/client-codes/exemption-reasons${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'get_pt_monthly_saft': {
       const { period, entityId, format } = args as { period: string; entityId?: string; format?: string };
       // Only the two JSON shapes are ever requested here — never the XML file (see the tool's
       // own comment above). Anything other than 'status' falls back to the summary manifest.
       const qs = new URLSearchParams({ period, format: format === 'status' ? 'status' : 'summary' });
       return callApi('GET', `/pt/saft?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_mandate_transactions': {
+      const { entityId } = args as { entityId?: string };
+      const qs = new URLSearchParams();
+      for (const k of ['uploadBatchId', 'state', 'mandate', 'period', 'country', 'from', 'to', 'page', 'limit', 'entityId'] as const) {
+        if (args[k] !== undefined) qs.set(k, String(args[k]));
+      }
+      const q = qs.toString();
+      // entityId is forwarded BOTH ways: as x-entity-id so the backend can resolve entity
+      // context for an account-scoped key at all, and as a query param, which the route
+      // separately reads as its own secondary filter (same convention as GET /v1/invoices).
+      return callApi('GET', `/mandate-transactions${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
     }
 
     default:
