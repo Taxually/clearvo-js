@@ -1734,6 +1734,164 @@ export interface ClientTaxCodeResponse {
   warning?: DuplicateTreatmentWarning;
 }
 
+// ── France platform credentials (POST/GET /v1/fr/credentials) ──────────────
+// No secret is stored here — this is a status-visibility endpoint for the
+// entity's own French VAT number (numéro de TVA intracommunautaire), not a
+// per-entity credential like the other countries' set*Credentials calls.
+// Status is reported per capability because the platform's connection to
+// its interim France delivery partner is granted per capability, not
+// all-or-nothing. Mirrors components.schemas.FrCapabilityPresentation and
+// the POST/GET /fr/credentials response shape in clearvo-marketing's
+// public/openapi.json — keep in sync by hand (this endpoint is out of scope
+// for scripts/generate-from-openapi.mjs, which only covers the
+// TaxTreatment/ClearanceStatus tax-code-mapping contract).
+
+/** Per-capability outcome. `active` — the platform's own France connection is configured, this tax number is
+ *  authorised for this capability, and the platform's France channel is the production gateway. `pending_activation`
+ *  — any of those is not yet true; nothing is needed from the caller unless contacted. `sandbox` — a sandbox API
+ *  key; sandbox sends work now regardless of the production verdict either way. */
+export type FrCapabilityStatus = 'active' | 'pending_activation' | 'sandbox';
+
+/** Top-level rollup: the less-advanced of the two capabilities, or `not_registered` when the entity has no French
+ *  tax number on file at all yet (GET only — POST always writes one). */
+export type FrCredentialStatus = FrCapabilityStatus | 'not_registered';
+
+export interface FrCapabilityPresentation {
+  status: FrCapabilityStatus;
+  /** Plain-language capability name, ready to render verbatim. */
+  label: string;
+  /** Ready-to-render, calm, partner-neutral one-liner for this capability. */
+  message: string;
+  /** Who owes the next step. Always 'platform' while pending; null once active. */
+  actionOwner: 'platform' | null;
+}
+
+/** One field inside FrNextStep.body the caller must replace with a real value before sending —
+ *  the platform has no way to determine it (it's a fact about the entity's own tax position, not
+ *  something derivable from the registration itself). `options` is present only for a field with
+ *  a closed set of valid values (currently only vatRegime). */
+export interface FrNextStepRequiredInput {
+  field: string;
+  description: string;
+  options?: readonly { value: string; label: string }[];
+}
+
+/** A static follow-on call this response documents, not one it performs itself — registering a French VAT number
+ *  never flips a reporting obligation on its own. */
+export interface FrNextStep {
+  action: string;
+  method: string;
+  path: string;
+  body: Record<string, unknown>;
+  applicableTo: string;
+  /** Fields inside `body` that are null placeholders, not real values — sending `body` verbatim
+   *  will 400 (e.g. EFFECTIVE_FROM_REQUIRED); the caller must replace each one with a real fact
+   *  about the entity before calling. Omitted when `body` needs no such replacement. */
+  requiredInputs?: FrNextStepRequiredInput[];
+}
+
+export interface SetFrCredentialsInput {
+  /** French VAT number. FR-prefixed, lowercase, spaced/punctuated, or the bare 11-character SIREN+key form are all
+   *  accepted and normalised. Rejected as 400 INVALID_FORMAT if the shape, SIREN check digit, or key don't match. */
+  taxNumber: string;
+  /** Entity to configure. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface FrCredentialsResponse {
+  ok: boolean;
+  entityId: string;
+  /** True when this call ran against the sandbox environment — matches the API key used, not a
+   *  request field. Sandbox always reads every capability (and credentialStatus) as 'sandbox',
+   *  regardless of platform configuration. */
+  sandbox: boolean;
+  /** null only on a GET for an entity with no French registration yet. */
+  taxNumber: string | null;
+  /** Read-through of the stored fr_siret extra field, if one was set via the general registrations API. */
+  siret?: string | null;
+  /** Present only when a POST changed an already-stored tax number — the value it replaced. */
+  previousTaxNumber?: string;
+  /** The less-advanced of the two capabilities below, or 'not_registered'. */
+  credentialStatus: FrCredentialStatus;
+  capabilities: {
+    einvoicing: FrCapabilityPresentation;
+    ereporting: FrCapabilityPresentation;
+  };
+  /** States what kind of check this is, and when — never a claim that the tax authority or the platform's France
+   *  delivery partner was actually asked. */
+  verification: { method: 'platform_configuration'; checkedAt: string };
+  /** The last 9 digits of taxNumber, derived read-only — null only when nothing is registered yet. */
+  siren: string | null;
+  /** Static follow-on actions this response documents, never performed automatically — today only ever the
+   *  e-reporting PATCH, shown to every caller (seller or buyer) since this endpoint has no way to know
+   *  whether the registering entity has an e-reporting obligation; read nextSteps[].applicableTo before
+   *  assuming it applies. Inbound receiving starts automatically once einvoicing shows active — no separate
+   *  step needed (code review finding, 2026-09-22: the previous wording told every buyer-side integrator to
+   *  disregard e-reporting for every client, which this endpoint cannot determine on the caller's behalf). */
+  nextSteps: FrNextStep[];
+  /** One plain-language sentence summarising both capabilities. */
+  message: string;
+  /** When this entity's French tax registration was first created. */
+  createdAt: string | null;
+  /** When this entity's French tax registration was last written — this POST, if it changed
+   *  anything. Null only on a GET for an entity with no French registration yet. */
+  updatedAt: string | null;
+}
+
+// ── Business (customer-lifecycle) status ────────────────────────────────────
+// Mirrors PATCH /v1/invoices/{id}/business-status. Only valid for an INBOUND
+// (received) invoice — the calling entity is the customer recording their
+// own decision on it. FR is the only country with a wired-up partner push
+// today (via the Marosa/PPF bridge); DE records the same state machine as a
+// platform-only decision with no partner push.
+
+export type BusinessStatus =
+  | 'IN_HAND'
+  | 'APPROVED'
+  | 'PARTIALLY_APPROVED'
+  | 'DISPUTED'
+  | 'SUSPENDED'
+  | 'REFUSED'
+  | 'COMPLETED'
+  | 'PAYMENT_SENT'
+  | 'PAYMENT_RECEIVED';
+
+export interface UpdateBusinessStatusInput {
+  /** Invoice id or referenceId of a received (inbound) invoice. */
+  id: string;
+  status: BusinessStatus;
+  /** Required when status is DISPUTED, REFUSED, or SUSPENDED. */
+  rejectionDetail?: { reason: string; message?: string };
+  /** Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface UpdateBusinessStatusResponse {
+  ok: boolean;
+  businessStatus: BusinessStatus;
+  updatedAt: string;
+}
+
+// ── France inbound poll (Marosa interim bridge) ─────────────────────────────
+// Mirrors POST /v1/fr/inbound/poll's entity-API-key mode: resolves status on
+// this entity's own PENDING outbound submissions and discovers newly
+// RECEIVED inbound documents. DELIBERATELY TEMPORARY, part of the Marosa
+// interim bridge while Taxually's own DGFiP PA accreditation is pending —
+// see the clearvo-fr-marosa skill.
+
+export interface FrInboundPollResult {
+  entityId: string;
+  resolved: number;
+  newInvoices: number;
+  errors: string[];
+}
+
+export interface FrInboundPollResponse {
+  ok: boolean;
+  results: FrInboundPollResult[];
+  totalNewInvoices: number;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,

@@ -118,6 +118,16 @@ async function callApi(
 // timeout or opaque failure further down the chain.
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
+// Shared sentences for set_fr_credentials/get_fr_credentials, kept word-for-word identical to
+// their twins on the hosted MCP connector (Taxually-Einvoicing lib/mcp/tools.ts) — a sandbox key
+// masks the real production activation state either way, and sandbox sends work but receiving
+// cannot be exercised there at all (focus-ux-product.md M3/Q1).
+const FR_SANDBOX_MASKS_ACTIVATION_NOTE =
+  'With a sandbox key every capability reports sandbox, masking the real production activation ' +
+  'state either way; to see production activation, call get_fr_credentials with a live read-scope key.';
+const FR_SANDBOX_NO_RECEIVING_NOTE =
+  'Sandbox sends are accepted locally, but inbound receiving cannot be exercised in sandbox.';
+
 const TOOLS = [
   {
     name: 'submit_invoice',
@@ -685,6 +695,111 @@ const TOOLS = [
         entityId:                 { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['nif'],
+    },
+  },
+  {
+    name: 'set_fr_credentials',
+    description:
+      'Register or update the entity\'s French VAT number for e-invoicing/e-reporting onboarding. No secret is ' +
+      'stored — this is a status-visibility endpoint, not a per-entity credential like the other countries below. ' +
+      'The response reports status separately for two capabilities (einvoicing = sending and receiving invoices; ' +
+      'ereporting = reporting sales to the tax office) since the platform connection to its interim delivery ' +
+      'partner is granted per capability, not all-or-nothing. Each capability is active | pending_activation | ' +
+      'sandbox; nothing further is needed from the caller while pending — re-read with get_fr_credentials to see ' +
+      'when it flips. ' + FR_SANDBOX_MASKS_ACTIVATION_NOTE + ' ' + FR_SANDBOX_NO_RECEIVING_NOTE + ' ' +
+      'Re-posting the same tax number is idempotent; posting a different one overwrites it and the ' +
+      'response carries previousTaxNumber. The response also carries nextSteps — static, advisory follow-on ' +
+      'actions this call never performs itself; applicableTo names who a step is typically for but never asserts ' +
+      'a buyer-only entity is exempt — confirm the entity\'s own scope. Read each step\'s requiredInputs before ' +
+      'acting on it: any field ' +
+      'it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax position ' +
+      'that the platform cannot determine on your behalf. effectiveFrom in particular is not the entity\'s free ' +
+      'choice: it is set by the French rollout calendar according to the entity\'s own size category (or the ' +
+      'later date it came into scope), and may only be brought forward, never lawfully chosen later. ' +
+      'Sending that body unedited will 400; fill in a real value for each requiredInputs field first. Also ' +
+      'returns sandbox (whether this write ran against the sandbox environment) and the registration\'s ' +
+      'createdAt/updatedAt.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        taxNumber: { type: 'string', description: 'French VAT number (numéro de TVA intracommunautaire). FR-prefixed, lowercase, spaced, or the bare 11-character SIREN+key form are all accepted and normalised.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['taxNumber'],
+    },
+  },
+  {
+    name: 'get_fr_credentials',
+    description:
+      'Read back the entity\'s French VAT number and its onboarding status — the same shape set_fr_credentials ' +
+      'returns, so a caller can poll this after registering. Always returns 200, even when nothing is registered ' +
+      'yet (credentialStatus "not_registered") — never 404, so a poller never has to special-case "nothing saved ' +
+      'yet". Status is derived from the platform\'s own configuration, never a live check against the tax ' +
+      'authority or the platform\'s delivery partner. ' + FR_SANDBOX_MASKS_ACTIVATION_NOTE + ' ' +
+      FR_SANDBOX_NO_RECEIVING_NOTE + ' ' +
+      'The response also carries nextSteps — static, advisory ' +
+      'follow-on actions this call never performs itself; applicableTo names who a step is typically for but ' +
+      'never asserts a buyer-only entity is exempt — confirm the entity\'s own scope. Read each step\'s ' +
+      'requiredInputs before acting on it: ' +
+      'any field it lists is a null placeholder in body, not a real value — a fact about the entity\'s own tax ' +
+      'position that the platform cannot determine on your behalf. effectiveFrom in particular is not the ' +
+      'entity\'s free choice: it is set by the French rollout calendar according to the entity\'s own size ' +
+      'category (or the later date it came into scope), and may only be brought forward, never lawfully chosen ' +
+      'later. Also returns sandbox (whether this read ran ' +
+      'against the sandbox environment) and the registration\'s createdAt/updatedAt (both null when nothing is ' +
+      'registered yet).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to read. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'poll_fr_inbound',
+    description:
+      'Manually trigger a France inbound poll for this entity: resolve status on your own pending outbound ' +
+      'submissions, and discover newly received inbound documents into your inbox. Only ever needed if you ' +
+      'don\'t want to wait for the automatic every-5-minute poll. Requires set_fr_credentials to already show ' +
+      'the einvoicing capability active (get_fr_credentials to check) — otherwise there is nothing to poll.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'update_business_status',
+    description:
+      'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice — approve, ' +
+      'partially approve, dispute, suspend, refuse, or mark paid. Only valid on an INBOUND invoice you received: ' +
+      'the calling entity is the customer recording their own decision on it. For an invoice you issued, the ' +
+      'other side\'s response syncs automatically once they act on their own side — there is nothing to call ' +
+      'here for that direction. rejectionDetail is required when status is DISPUTED, REFUSED, or SUSPENDED. ' +
+      'Fails 409 if the transition isn\'t valid from the invoice\'s current status, and 422 ' +
+      '(FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s tax number — ' +
+      'neither is retryable by changing the request; the status was not changed either way.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Invoice id or referenceId of a received (inbound) invoice — as returned by get_invoice or list_invoices.' },
+        status: {
+          type: 'string',
+          enum: ['IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED'],
+          description: 'The new business-lifecycle status.',
+        },
+        rejectionDetail: {
+          type: 'object' as const,
+          description: 'Required when status is DISPUTED, REFUSED, or SUSPENDED.',
+          properties: {
+            reason: { type: 'string', description: 'Short machine-usable reason code.' },
+            message: { type: 'string', description: 'Optional human-readable detail.' },
+          },
+        },
+        entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'status'],
     },
   },
   {
@@ -1961,6 +2076,26 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'set_pt_credentials': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/pt/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_fr_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/fr/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_fr_credentials': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'poll_fr_inbound': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('POST', '/fr/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_business_status': {
+      const { id, entityId, ...body } = args as { id: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/invoices/${encodeURIComponent(id)}/business-status`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'set_eg_credentials': {
