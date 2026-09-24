@@ -1597,6 +1597,8 @@ export type ClientTaxCodeRateBand = 'standard' | 'reduced' | 'second_reduced' | 
 export type ClientTaxCodeFilingTag =
   | 'cash_accounting_settled' | 'cash_accounting_unsettled' | 'split_payment' | 'statement_of_intent'
   | 'withholding' | 'bad_debt_adjustment' | 'triangular_party_b' | 'triangular_party_c';
+/** Purchase-side input-tax recoverability only. 'restricted' is the only value where recoverablePercentage carries real data — 'full'/'blocked' already imply 100/0. */
+export type ClientTaxCodeRecoverabilityType = 'full' | 'blocked' | 'restricted';
 
 export interface ClientTaxCode {
   id: string;
@@ -1620,6 +1622,12 @@ export interface ClientTaxCode {
   filingTag: ClientTaxCodeFilingTag | null;
   /** Optional scope. null (default) means the code applies to both sale and purchase. */
   direction: ClientTaxCodeDirection | null;
+  /** Purchase-side input-tax recoverability only. null for a sale code, or a purchase code with no recoverability position yet. */
+  recoverabilityType: ClientTaxCodeRecoverabilityType | null;
+  /** Decimal-fraction-free percentage (50 = 50%), set only when recoverabilityType="restricted". null otherwise. */
+  recoverablePercentage: number | null;
+  /** Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. Max 30 characters. */
+  exemptionReasonCode: string | null;
   /** EN16931 tax category code: S, AA, AB, AC, AE, K, G, E, O, or Z. Response-only, computed live from the fields above — never a stored or caller-supplied value. */
   taxCode: string;
   /**
@@ -1653,6 +1661,12 @@ export interface CreateClientTaxCodeInput {
   useTaxSelfAssessed?: boolean;
   filingTag?: ClientTaxCodeFilingTag;
   direction?: ClientTaxCodeDirection;
+  /** Purchase-side input-tax recoverability only. Omit for a sale code, or a purchase code with no recoverability position yet. */
+  recoverabilityType?: ClientTaxCodeRecoverabilityType;
+  /** Required (and only meaningful) when recoverabilityType="restricted" — a percentage strictly between 0 and 100 (0 and 100 are already "blocked"/"full"). */
+  recoverablePercentage?: number;
+  /** Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. Max 30 characters. */
+  exemptionReasonCode?: string;
   description?: string;
   /** Only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code. Never derived or auto-generated. */
   exemptionReasonText?: string;
@@ -1878,6 +1892,136 @@ export interface MandateTransaction {
 export interface ListMandateTransactionsResponse {
   transactions: MandateTransaction[];
   pagination: { total: number; page: number; limit: number; pages: number; hasNext: boolean; hasPrev: boolean };
+}
+
+// ── Bulk CSV ingestion (POST /v1/send/bulk, GET /v1/send/bulk/{batchId},
+// GET /v1/send/bulk/{batchId}/errors) ───────────────────────────────────────
+// The public API used to split sync/async across two endpoints (/send/bulk vs
+// /send/bulk-async); that split was folded into one door 2026-09-18
+// (unify-bulk-send-endpoint) — the server decides the real transport by
+// request size regardless of which SDK method is called.
+
+export type BulkUploadBatchStatus = 'UPLOADED' | 'VALIDATING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type BulkSendRowOutcome = 'ACCEPTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'HELD' | 'NO_OBLIGATION' | 'SKIPPED_DUPLICATE' | 'ERRORED';
+
+export interface BulkSendRow {
+  rowNumber: number;
+  outcome: BulkSendRowOutcome;
+  invoiceNumber?: string;
+  sourceReference?: string | null;
+  /** The transaction's Clearvo id when it reached dispatch. */
+  recordId?: string;
+  mandate?: string | null;
+  clearanceStatus?: string | null;
+  /** The idempotency key this row was dispatched under — present whenever the row passed structural validation, regardless of outcome. */
+  idempotencyKey?: string;
+  /** The row's own `country` CSV column — present under the same conditions as idempotencyKey. */
+  country?: string;
+  /** Set when outcome is ERRORED (or a per-row structural validation failure). */
+  errorCode?: string;
+  errorMessage?: string;
+  /** Per-field detail for a rejection carrying one (validation-rules or a country-specific schema validator) — the field-level reasons behind a generic top-level errorMessage. */
+  errorDetails?: Array<{ field?: string; message: string }>;
+  /** Present only for a HELD outcome — why the row is held and who must act. */
+  holdReason?: string | null;
+  actionOwner?: string | null;
+}
+
+export interface BulkSendSummary {
+  total: number;
+  /** Rows that cleared (or are pending clearance) under a per-document mandate. */
+  accepted: number;
+  /** Rows folded into an aggregate reporting period. */
+  accumulated: number;
+  needsInfo: number;
+  skippedDuplicate: number;
+  held: number;
+  noObligation: number;
+  errored: number;
+}
+
+/** Present (non-null) only when the file had more data rows than the synchronous 500-row cap — the excess rows were hashed off, UNMODIFIED, to a brand-new async batch rather than discarded. */
+export interface BulkSendContinuation {
+  /** Rows past the first 500 that were handed off, never reflected in `rows`/`summary`. */
+  rowCount: number;
+  /** Present when the hand-off succeeded — poll getBulkUploadStatus(batchId). */
+  batchId?: string;
+  status?: string;
+  /** Present when the hand-off itself failed — these rows were NEVER queued; resubmit them (a fresh call with only the unprocessed rows — already-completed ones dedupe safely by content). */
+  error?: { code: string; message: string };
+}
+
+export interface SubmitInvoicesBulkInput {
+  /** The raw CSV text (not base64) — header row plus up to 500 data rows for the synchronous transport. */
+  csvContent: string;
+  /** Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface SubmitInvoicesBulkAsyncInput {
+  /** The raw CSV text (not base64) — no row-count ceiling enforced client-side (the route itself bounds total upload size). */
+  csvContent: string;
+  /** Optional filename to record against the batch. Ignored if the file ends up processed synchronously. */
+  filename?: string;
+  entityId?: string;
+}
+
+/** Returned when the upload was processed synchronously in-request (the whole file fit under the 500-row/25MB cap). */
+export interface SubmitInvoicesBulkResponse {
+  ok: boolean;
+  summary: BulkSendSummary;
+  rows: BulkSendRow[];
+  continuation: BulkSendContinuation | null;
+}
+
+/** Returned by submitInvoicesBulkAsync when the file was queued rather than processed synchronously. status is 'UPLOADED' for a freshly-queued batch; on a `duplicate: true` response it reflects whatever status the pre-existing matched batch is actually in (VALIDATING/COMPLETED/FAILED/CANCELLED), not necessarily 'UPLOADED'. */
+export interface SubmitInvoicesBulkAsyncQueuedResponse {
+  ok: boolean;
+  batchId: string;
+  status: BulkUploadBatchStatus;
+  /** True means this exact file was already processed by an earlier call — nothing new was queued. */
+  duplicate?: boolean;
+}
+
+export interface GetBulkUploadStatusResponse {
+  batchId: string;
+  status: BulkUploadBatchStatus;
+  filename: string | null;
+  uploadedBy: string | null;
+  total: number;
+  /** Same keys as the synchronous response's per-row `outcome` field. Zero for any outcome this batch had no rows land in. */
+  outcomeCounts: Partial<Record<BulkSendRowOutcome, number>>;
+  /** e.g. "4,102 added to a filing, 12 missing information, 3 errored" — always derived from outcomeCounts. */
+  summary: string;
+  outcomeLabels: Record<BulkSendRowOutcome, string>;
+  createdAt: string;
+  validatedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface BulkUploadStructuralErrorRow {
+  rowNumber: number;
+  errorCode: string;
+  errorMessage: string | null;
+  rawRow: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ListBulkUploadErrorsParams {
+  /** Page number, 1-based (default 1). */
+  page?: number;
+  /** Results per page (default 50, max 200). */
+  limit?: number;
+  entityId?: string;
+}
+
+export interface ListBulkUploadErrorsResponse {
+  batchId: string;
+  status: BulkUploadBatchStatus;
+  page: number;
+  limit: number;
+  total: number;
+  errors: BulkUploadStructuralErrorRow[];
 }
 
 // ── France platform credentials (POST/GET /v1/fr/credentials) ──────────────

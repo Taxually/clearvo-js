@@ -77,10 +77,35 @@ import type {
   UpdateBusinessStatusInput,
   UpdateBusinessStatusResponse,
   FrInboundPollResponse,
+  SubmitInvoicesBulkInput,
+  SubmitInvoicesBulkAsyncInput,
+  SubmitInvoicesBulkResponse,
+  SubmitInvoicesBulkAsyncQueuedResponse,
+  GetBulkUploadStatusResponse,
+  ListBulkUploadErrorsParams,
+  ListBulkUploadErrorsResponse,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
+
+// Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
+// POST /v1/send/bulk's synchronous ceiling (Taxually-Einvoicing lib/mcp/tools.ts).
+const MAX_BULK_ROWS = 500;
+const MAX_BULK_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/** Data-row count of a CSV's raw text (header row excluded, blank lines ignored) — client-side only, used by submitInvoicesBulk's pre-check against MAX_BULK_ROWS. */
+function countCsvDataRows(csvContent: string): number {
+  const lines = csvContent.split(/\r\n|\r|\n/).filter(line => line.length > 0);
+  return Math.max(0, lines.length - 1);
+}
+
+/** Builds the multipart/form-data body submitInvoicesBulk(Async) send to POST /v1/send/bulk — a single 'file' field carrying the raw CSV text, same field name the route expects. */
+function csvFormData(csvContent: string, filename: string): FormData {
+  const formData = new FormData();
+  formData.append('file', new Blob([csvContent], { type: 'text/csv' }), filename);
+  return formData;
+}
 
 export class ClearvoClient {
   private readonly apiKey: string;
@@ -98,15 +123,19 @@ export class ClearvoClient {
     body?: unknown,
     extraHeaders?: Record<string, string>
   ): Promise<T> {
+    // FormData (e.g. bulk CSV upload) must not get a JSON Content-Type or be stringified —
+    // fetch sets the correct multipart boundary itself when the body is a FormData instance,
+    // and stringifying it would send "[object FormData]".
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const response = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers: {
         'x-api-key': this.apiKey,
-        'Content-Type': 'application/json',
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         'Accept': 'application/json',
         ...extraHeaders,
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -553,6 +582,79 @@ export class ClearvoClient {
     // context for an account-scoped key at all, and as a query param, which the route
     // separately reads as its own secondary filter (same convention as GET /v1/invoices).
     return this.request('GET', `/mandate-transactions${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Bulk CSV ingestion ───────────────────────────────────────────────────
+  // The public API used to split sync/async across two endpoints (/send/bulk
+  // vs /send/bulk-async); that split was folded into one door 2026-09-18
+  // (unify-bulk-send-endpoint) — both methods below still exist (a caller who
+  // wants a guaranteed-synchronous small file vs. one who doesn't want a
+  // client-side size check still has a reason to pick between them), but BOTH
+  // now POST to the exact same route, which decides the real transport by
+  // request size regardless of which method was called.
+
+  /**
+   * Submits (does not just validate) many transactions at once from a CSV file, through the
+   * exact same resolution/dispatch pipeline as submitInvoice, one call per row. Up to 500 rows /
+   * 25MB, processed synchronously with per-row outcomes in the response — throws (without
+   * calling the API at all) for a csvContent over either limit, naming submitInvoicesBulkAsync
+   * instead. No idempotency key needed: each row's own content (or its source_reference column)
+   * is already the de-duplication key, so a byte-identical re-run of the same file is a safe
+   * no-op.
+   */
+  submitInvoicesBulk(input: SubmitInvoicesBulkInput): Promise<SubmitInvoicesBulkResponse> {
+    const { csvContent, entityId } = input;
+    const rowCount = countCsvDataRows(csvContent);
+    const byteLength = new TextEncoder().encode(csvContent).length;
+    if (rowCount > MAX_BULK_ROWS || byteLength > MAX_BULK_UPLOAD_BYTES) {
+      throw new Error(
+        `This CSV has ${rowCount} data rows (${byteLength} bytes) — submitInvoicesBulk accepts at most ${MAX_BULK_ROWS} rows ` +
+        `and ${MAX_BULK_UPLOAD_BYTES / (1024 * 1024)}MB per call. Use submitInvoicesBulkAsync instead for a file this size — ` +
+        'no request was sent.',
+      );
+    }
+    return this.request('POST', '/send/bulk', csvFormData(csvContent, 'invoices.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /**
+   * Submits (does not just validate) many transactions at once from a CSV file — for a file too
+   * large for submitInvoicesBulk's 500-row/25MB synchronous ceiling, or simply to skip that
+   * method's client-side size check. The underlying route decides the real transport by request
+   * size: a small csvContent may still come back as a completed synchronous result rather than a
+   * queued batch. When it DOES queue, it returns { batchId, status: 'UPLOADED' } immediately —
+   * poll getBulkUploadStatus with that batchId every 30-60 seconds until status is
+   * COMPLETED/FAILED/CANCELLED, then call listBulkUploadErrors if any rows errored.
+   */
+  submitInvoicesBulkAsync(input: SubmitInvoicesBulkAsyncInput): Promise<SubmitInvoicesBulkResponse | SubmitInvoicesBulkAsyncQueuedResponse> {
+    const { csvContent, filename, entityId } = input;
+    return this.request('POST', '/send/bulk', csvFormData(csvContent, filename || 'invoices.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /**
+   * Poll one async bulk upload batch — created via submitInvoicesBulkAsync, or handed back as a
+   * `continuation` batchId when submitInvoicesBulk's own file had more than 500 rows. 404s (as a
+   * thrown ClearvoError) when no such batch exists, or it belongs to a different entity than this
+   * key is scoped to.
+   */
+  getBulkUploadStatus(batchId: string, entityId?: string): Promise<GetBulkUploadStatusResponse> {
+    return this.request('GET', `/send/bulk/${encodeURIComponent(batchId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /**
+   * Paginated, row-level structural errors for one async bulk upload batch — every row that never
+   * reached mandate resolution (a malformed date/amount/currency, or a downstream rejection
+   * before resolution). A row that DID reach resolution (however it was classified) is not a
+   * structural error and is not listed here — call listMandateTransactions with the same
+   * uploadBatchId instead.
+   */
+  listBulkUploadErrors(batchId: string, params: ListBulkUploadErrorsParams = {}): Promise<ListBulkUploadErrorsResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/send/bulk/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── France platform credentials ────────────────────────────────────────
