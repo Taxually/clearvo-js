@@ -36,15 +36,18 @@ export function createProgram(): Command {
     body?: unknown,
     extraHeaders?: Record<string, string>
   ): Promise<unknown> {
+    // FormData (e.g. bulk CSV upload) must not get a JSON Content-Type or be stringified —
+    // fetch sets the correct multipart boundary itself when the body is a FormData instance.
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method,
       headers: {
         'x-api-key': getApiKey(),
-        'Content-Type': 'application/json',
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         'Accept': 'application/json',
         ...extraHeaders,
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({})) as Record<string, unknown>;
     if (!res.ok) {
@@ -106,7 +109,87 @@ export function createProgram(): Command {
       const result = await api('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
       print(result, !!opts.pretty);
     });
-  
+
+  // ── clearvo send-bulk / send-bulk-async <file> ───────────────────────────────
+  // MCP twins: submit_invoices_bulk / submit_invoices_bulk_async. The public API
+  // used to split sync/async across two endpoints (/send/bulk vs /send/bulk-async);
+  // that split was folded into one door 2026-09-18 (unify-bulk-send-endpoint) —
+  // both commands below still exist (a caller who wants a guaranteed-synchronous
+  // small file vs. one who doesn't want a client-side size check still has a
+  // reason to pick between them), but BOTH now POST to the exact same route, which
+  // decides the real transport by request size regardless of which command was used.
+  const MAX_BULK_ROWS = 500;
+  const MAX_BULK_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+  function countCsvDataRows(csvContent: string): number {
+    const lines = csvContent.split(/\r\n|\r|\n/).filter(line => line.length > 0);
+    return Math.max(0, lines.length - 1);
+  }
+
+  function csvFormData(csvContent: string, filename: string): FormData {
+    const formData = new FormData();
+    formData.append('file', new Blob([csvContent], { type: 'text/csv' }), filename);
+    return formData;
+  }
+
+  program
+    .command('send-bulk <file>')
+    .description('Submit many transactions at once from a CSV file (up to 500 rows / 25MB, processed synchronously) — see `clearvo send-bulk-async` for a larger file')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
+      const csvContent = readFileSync(file, 'utf8');
+      const rowCount = countCsvDataRows(csvContent);
+      const byteLength = Buffer.byteLength(csvContent, 'utf8');
+      if (rowCount > MAX_BULK_ROWS || byteLength > MAX_BULK_UPLOAD_BYTES) {
+        console.error(
+          `This CSV has ${rowCount} data rows (${byteLength} bytes) — send-bulk accepts at most ${MAX_BULK_ROWS} rows ` +
+          `and ${MAX_BULK_UPLOAD_BYTES / (1024 * 1024)}MB per call. Use \`clearvo send-bulk-async\` instead for a file this size.`
+        );
+        process.exit(1);
+      }
+      const result = await api('POST', '/send/bulk', csvFormData(csvContent, file.split('/').pop() || 'invoices.csv'), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('send-bulk-async <file>')
+    .description('Submit many transactions at once from a CSV file too large for `send-bulk`\'s 500-row/25MB synchronous ceiling — the server decides the real transport by size regardless')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
+      const csvContent = readFileSync(file, 'utf8');
+      const filename = file.split('/').pop() || 'invoices.csv';
+      const result = await api('POST', '/send/bulk', csvFormData(csvContent, filename), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('bulk-upload-status <batchId>')
+    .description('Poll one async bulk upload batch — created via `send-bulk-async`, or a `continuation.batchId` handed back by `send-bulk`')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/send/bulk/${encodeURIComponent(batchId)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('bulk-upload-errors <batchId>')
+    .description('Paginated, row-level structural errors for one async bulk upload batch — a row that reached mandate resolution is not listed here, use `clearvo mandate-transactions --upload-batch-id` instead')
+    .option('--page <page>', 'Page number, 1-based')
+    .option('--limit <limit>', 'Results per page (default 50, max 200)')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { page?: string; limit?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.page) qs.set('page', opts.page);
+      if (opts.limit) qs.set('limit', opts.limit);
+      const q = qs.toString();
+      const result = await api('GET', `/send/bulk/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo amend-report <id> <file> ─────────────────────────────────────────
   // ES SII block 3. Files an AEAT "A1" amendment against an already-registered SII
   // invoice — <file> is the FULL corrected invoice, same JSON shape `send` takes
@@ -686,7 +769,8 @@ export function createProgram(): Command {
     code?: string; country?: string; region?: string;
     movement?: string; taxability?: string; customerType?: string; supplyType?: string;
     rateBand?: string; reverseCharge?: boolean; useTaxSelfAssessed?: boolean;
-    filingTag?: string; direction?: string; description?: string; exemptionReasonText?: string;
+    filingTag?: string; direction?: string; recoverabilityType?: string; recoverablePercentage?: string;
+    exemptionReasonCode?: string; description?: string; exemptionReasonText?: string;
   }): Record<string, unknown> {
     const body: Record<string, unknown> = {};
     if (opts.code)        body.code = opts.code;
@@ -701,6 +785,9 @@ export function createProgram(): Command {
     if (opts.useTaxSelfAssessed !== undefined) body.useTaxSelfAssessed = opts.useTaxSelfAssessed;
     if (opts.filingTag)   body.filingTag = opts.filingTag;
     if (opts.direction)   body.direction = opts.direction;
+    if (opts.recoverabilityType) body.recoverabilityType = opts.recoverabilityType;
+    if (opts.recoverablePercentage) body.recoverablePercentage = Number(opts.recoverablePercentage);
+    if (opts.exemptionReasonCode) body.exemptionReasonCode = opts.exemptionReasonCode;
     if (opts.description) body.description = opts.description;
     if (opts.exemptionReasonText) body.exemptionReasonText = opts.exemptionReasonText;
     return body;
@@ -731,6 +818,9 @@ export function createProgram(): Command {
     .option('--use-tax-self-assessed', 'Mark use tax as self-assessed')
     .option('--filing-tag <tag>', 'Pure metadata for a future Taxsure integration — never consumed by any computation')
     .option('--direction <direction>', 'sale or purchase — omit for a code that applies to both')
+    .option('--recoverability-type <type>', 'full, blocked, or restricted — purchase-side input-tax recoverability only')
+    .option('--recoverable-percentage <percent>', 'Required (and only meaningful) when --recoverability-type=restricted — strictly between 0 and 100 (0 and 100 are already blocked/full)')
+    .option('--exemption-reason-code <code>', 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum')
     .option('--description <text>', 'Optional longer description')
     .option('--exemption-reason-text <text>', 'Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code, never derived or auto-generated')
     .option('--entity <entityId>', 'Entity to create the client tax code under (required for account-scoped keys)')
@@ -738,8 +828,9 @@ export function createProgram(): Command {
     .action(async (opts: {
       code: string; country: string; region?: string; movement: string; taxability: string;
       customerType?: string; supplyType: string; rateBand?: string; reverseCharge?: boolean;
-      useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
-      exemptionReasonText?: string; entity?: string; pretty?: boolean;
+      useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string;
+      recoverabilityType?: string; recoverablePercentage?: string; exemptionReasonCode?: string;
+      description?: string; exemptionReasonText?: string; entity?: string; pretty?: boolean;
     }) => {
       const body = taxCodeMutationBody(opts);
       const result = await api('POST', '/tax/client-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
@@ -761,6 +852,9 @@ export function createProgram(): Command {
     .option('--use-tax-self-assessed', 'Set useTaxSelfAssessed to true')
     .option('--filing-tag <tag>', 'Updated filing tag')
     .option('--direction <direction>', 'sale or purchase')
+    .option('--recoverability-type <type>', 'full, blocked, or restricted — see `tax-codes create`')
+    .option('--recoverable-percentage <percent>', 'See `tax-codes create`')
+    .option('--exemption-reason-code <code>', 'Updated free-text exemption reason code — see `tax-codes create`')
     .option('--description <text>', 'Updated description')
     .option('--exemption-reason-text <text>', 'Updated free-text exemption wording — see `tax-codes create`')
     .option('--entity <entityId>', 'Entity the client tax code belongs to (required for account-scoped keys)')
@@ -768,8 +862,9 @@ export function createProgram(): Command {
     .action(async (id: string, opts: {
       code?: string; country?: string; region?: string; movement?: string; taxability?: string;
       customerType?: string; supplyType?: string; rateBand?: string; reverseCharge?: boolean;
-      useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string; description?: string;
-      exemptionReasonText?: string; entity?: string; pretty?: boolean;
+      useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string;
+      recoverabilityType?: string; recoverablePercentage?: string; exemptionReasonCode?: string;
+      description?: string; exemptionReasonText?: string; entity?: string; pretty?: boolean;
     }) => {
       const body = taxCodeMutationBody(opts);
       const result = await api('PATCH', `/tax/client-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);

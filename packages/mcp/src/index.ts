@@ -118,6 +118,34 @@ async function callApi(
 // timeout or opaque failure further down the chain.
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
+// Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
+// POST /v1/send/bulk's synchronous ceiling (Taxually-Einvoicing lib/mcp/tools.ts). The public API
+// used to split sync/async across two endpoints (/send/bulk vs /send/bulk-async); that split was
+// folded into one door 2026-09-18 (unify-bulk-send-endpoint) — both tool names below still exist
+// (a caller who wants a guaranteed-synchronous small file vs. one who doesn't want a client-side
+// size check still has a reason to pick between them), but BOTH now POST to the exact same route,
+// which decides the real transport by request size regardless of which tool was called.
+const MAX_BULK_ROWS = 500;
+const MAX_BULK_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Data-row count of a CSV's raw text (header row excluded, blank lines ignored) — used only by
+ * submit_invoices_bulk's pre-check against MAX_BULK_ROWS above, entirely client-side (no API
+ * call), so a caller blowing the sync cap gets pointed at submit_invoices_bulk_async instead of a
+ * confusing 413/truncated response from the route itself.
+ */
+function countCsvDataRows(csvContent: string): number {
+  const lines = csvContent.split(/\r\n|\r|\n/).filter(line => line.length > 0);
+  return Math.max(0, lines.length - 1);
+}
+
+/** Builds the multipart/form-data body submit_invoices_bulk(_async) send to POST /v1/send/bulk — a single 'file' field carrying the raw CSV text, same field name the route expects. */
+function csvFormData(csvContent: string, filename: string): FormData {
+  const formData = new FormData();
+  formData.append('file', new Blob([csvContent], { type: 'text/csv' }), filename);
+  return formData;
+}
+
 // Shared sentences for set_fr_credentials/get_fr_credentials, kept word-for-word identical to
 // their twins on the hosted MCP connector (Taxually-Einvoicing lib/mcp/tools.ts) — a sandbox key
 // masks the real production activation state either way, and sandbox sends work but receiving
@@ -1920,6 +1948,9 @@ const TOOLS = [
         useTaxSelfAssessed: { type: 'boolean', description: 'Defaults to false.' },
         filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'], description: 'Pure metadata for a future Taxsure integration — never consumed by any computation.' },
         direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Omit for a code that applies to both.' },
+        recoverabilityType: { type: 'string', enum: ['full', 'blocked', 'restricted'], description: 'Purchase-side input-tax recoverability only. Omit for a sale code, or a purchase code with no recoverability position yet.' },
+        recoverablePercentage: { type: 'number', description: 'Required (and only meaningful) when recoverabilityType="restricted" — a percentage strictly between 0 and 100 (0 and 100 are already "blocked"/"full").' },
+        exemptionReasonCode: { type: 'string', description: 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. See get_client_tax_code_exemption_reason_options for candidate values.' },
         description: { type: 'string' },
         exemptionReasonText: { type: 'string', description: 'Free-text exemption wording, only meaningful for an exempt, out-of-scope, or reverse-charge code — passed through verbatim onto every invoice using this code, printed exactly as given. Never derived or auto-generated; omit if you have none.' },
         entityId: { type: 'string', description: 'Entity to create the client tax code under. Required for account-scoped keys; omit for entity-scoped keys.' },
@@ -1946,6 +1977,9 @@ const TOOLS = [
         useTaxSelfAssessed: { type: 'boolean' },
         filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'] },
         direction: { type: 'string', enum: ['sale', 'purchase'] },
+        recoverabilityType: { type: 'string', enum: ['full', 'blocked', 'restricted'] },
+        recoverablePercentage: { type: 'number' },
+        exemptionReasonCode: { type: 'string', description: 'See create_client_tax_code. Send null to clear it.' },
         description: { type: 'string' },
         exemptionReasonText: { type: 'string', description: 'Free-text exemption wording — see create_client_tax_code. Send null to clear it.' },
         entityId: { type: 'string', description: 'Entity the client tax code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
@@ -2006,6 +2040,94 @@ const TOOLS = [
         direction: { type: 'string', enum: ['sale', 'purchase'] },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
+    },
+  },
+  // Bulk ingestion — MCP twins of POST /v1/send/bulk (both transports — the server picks by
+  // size, see MAX_BULK_ROWS's own comment above), GET /v1/send/bulk/{batchId}, and
+  // GET /v1/send/bulk/{batchId}/errors.
+  {
+    name: 'submit_invoices_bulk',
+    description:
+      'Submits (does not just validate) many transactions at once from a CSV file, through the exact same resolution/' +
+      'dispatch pipeline as submit_invoice, one call per row. csvContent is the raw CSV text — never base64-encode it. Up ' +
+      'to 500 rows / 25 MB, processed synchronously with per-row outcomes in the response — this tool refuses (without ' +
+      'calling the API at all) a csvContent over either limit and names submit_invoices_bulk_async in the error, since a ' +
+      'larger file is better handled asynchronously from the start. Unlike submit_invoice, no idempotency key is needed: ' +
+      'each row\'s own content (entity + transaction_date + currency + amounts + country, or its source_reference column ' +
+      'when present) is already the de-duplication key, so a byte-identical re-run of the same file is a safe no-op — set ' +
+      'source_reference per row for the most reliable re-run behaviour. For a batched mandate (e.g. Spain SII, France ' +
+      'e-reporting) rows are accumulated into a reporting period, not sent to an authority immediately — the human review/ ' +
+      'confirm gate on Filings still applies identically regardless of which door (dashboard, API, or here) the rows ' +
+      'arrived through.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — header row plus up to 500 data rows. See the transaction_date/currency/country/net_amount/tax_amount required columns and the optional source_reference/tax_code columns documented for POST /v1/send/bulk. tax_code is the entity\'s own client tax code (mapped in advance via create_client_tax_code/list_client_tax_codes); a BLANK tax_code gets the platform default \'S\', which must itself be registered — otherwise every such row is held (clearanceStatus HELD_UNMAPPED_TAX_CODE, reason.codeSource \'default\', message naming the fix: register \'S\' or fill tax_code per row). A freshly onboarded entity with no codes registered yet should expect exactly this on its first upload.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['csvContent'],
+    },
+  },
+  {
+    name: 'submit_invoices_bulk_async',
+    description:
+      'Submits (does not just validate) many transactions at once from a CSV file — for a file too large for ' +
+      'submit_invoices_bulk\'s 500-row/25MB synchronous ceiling, or simply to skip that tool\'s client-side size check. ' +
+      'csvContent is the raw CSV text (not base64); same column shape and content-based de-duplication as ' +
+      'submit_invoices_bulk (source_reference recommended per row for reliable re-runs — no idempotency key needed). The ' +
+      'underlying route decides the real transport by request size: a small csvContent may still come back as a completed ' +
+      'synchronous result (the same shape submit_invoices_bulk returns — summary/rows, no batchId) rather than a queued ' +
+      'batch. When it DOES queue, it returns { batchId, status: \'UPLOADED\' } immediately — poll get_bulk_upload_status ' +
+      'with that batchId every 30-60 seconds until status is COMPLETED/FAILED/CANCELLED, then call list_bulk_upload_errors ' +
+      'if any rows errored. A response with duplicate: true means this exact file was already processed by an earlier ' +
+      'call — nothing new was queued. Note: a stdio MCP client reads this file from local disk, so unlike the hosted ' +
+      'connector there is no practical argument-size ceiling here beyond the route\'s own upload limit.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — same column shape as submit_invoices_bulk, with no row-count ceiling enforced by this tool (the route itself bounds total upload size).' },
+        filename: { type: 'string', description: 'Optional filename to record against the batch (e.g. "september-sales.csv"). Defaults to a generic name. Ignored if the file ends up processed synchronously.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['csvContent'],
+    },
+  },
+  {
+    name: 'get_bulk_upload_status',
+    description:
+      'Poll one async bulk upload batch — created via submit_invoices_bulk_async, or handed back as a `continuation` ' +
+      'batchId when submit_invoices_bulk\'s own file had more than 500 rows. Returns status (UPLOADED/VALIDATING/' +
+      'COMPLETED/FAILED/CANCELLED), total, outcomeCounts keyed by the same BulkSendRowOutcome vocabulary submit_invoices_bulk ' +
+      'returns per row (ACCEPTED/ACCUMULATED/NEEDS_INFO/HELD/NO_OBLIGATION/SKIPPED_DUPLICATE/ERRORED), and a human-readable ' +
+      'summary. Call list_bulk_upload_errors afterward when outcomeCounts.ERRORED is greater than zero. 404 means no such ' +
+      'batch, or it belongs to a different entity than this key is scoped to.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by submit_invoices_bulk_async, or by submit_invoices_bulk\'s own continuation.batchId field.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'list_bulk_upload_errors',
+    description:
+      'Paginated, row-level structural errors for one async bulk upload batch — every row that never reached mandate ' +
+      'resolution (a malformed date/amount/currency, or a downstream rejection before resolution), each with a stable ' +
+      'errorCode, its rowNumber in the original file, and a plain-language errorMessage. A row that DID reach resolution ' +
+      '(however it was classified — accepted/accumulated/held/needs-info/no-obligation) is not a structural error and is not ' +
+      'listed here; call list_mandate_transactions with the same uploadBatchId instead — it covers every row from the ' +
+      'batch, structural-error or not. JSON only — there is no CSV export on this tool.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by submit_invoices_bulk_async, or by submit_invoices_bulk\'s own continuation.batchId field.' },
+        page: { type: 'number', description: 'Page number, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Results per page (default 50, max 200)' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
     },
   },
   // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Only ever requests a
@@ -2510,6 +2632,39 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       // context for an account-scoped key at all, and as a query param, which the route
       // separately reads as its own secondary filter (same convention as GET /v1/invoices).
       return callApi('GET', `/mandate-transactions${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'submit_invoices_bulk': {
+      const { csvContent, entityId } = args as { csvContent: string; entityId?: string };
+      const rowCount = countCsvDataRows(csvContent);
+      const byteLength = Buffer.byteLength(csvContent, 'utf8');
+      if (rowCount > MAX_BULK_ROWS || byteLength > MAX_BULK_UPLOAD_BYTES) {
+        throw new Error(
+          `This CSV has ${rowCount} data rows (${byteLength} bytes) — submit_invoices_bulk accepts at most ${MAX_BULK_ROWS} rows ` +
+          `and ${MAX_BULK_UPLOAD_BYTES / (1024 * 1024)}MB per call. Use submit_invoices_bulk_async instead for a file this size — ` +
+          'no request was sent.',
+        );
+      }
+      return callApi('POST', '/send/bulk', csvFormData(csvContent, 'invoices.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'submit_invoices_bulk_async': {
+      const { csvContent, filename, entityId } = args as { csvContent: string; filename?: string; entityId?: string };
+      return callApi('POST', '/send/bulk', csvFormData(csvContent, filename || 'invoices.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'get_bulk_upload_status': {
+      const { batchId, entityId } = args as { batchId: string; entityId?: string };
+      return callApi('GET', `/send/bulk/${encodeURIComponent(batchId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'list_bulk_upload_errors': {
+      const { batchId, page, limit, entityId } = args as { batchId: string; page?: number; limit?: number; entityId?: string };
+      const qs = new URLSearchParams();
+      if (page != null) qs.set('page', String(page));
+      if (limit != null) qs.set('limit', String(limit));
+      const q = qs.toString();
+      return callApi('GET', `/send/bulk/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
     }
 
     default:
