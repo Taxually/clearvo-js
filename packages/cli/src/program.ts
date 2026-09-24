@@ -820,7 +820,7 @@ export function createProgram(): Command {
     .option('--direction <direction>', 'sale or purchase — omit for a code that applies to both')
     .option('--recoverability-type <type>', 'full, blocked, or restricted — purchase-side input-tax recoverability only')
     .option('--recoverable-percentage <percent>', 'Required (and only meaningful) when --recoverability-type=restricted — strictly between 0 and 100 (0 and 100 are already blocked/full)')
-    .option('--exemption-reason-code <code>', 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum')
+    .option('--exemption-reason-code <code>', 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum, max 30 characters')
     .option('--description <text>', 'Optional longer description')
     .option('--exemption-reason-text <text>', 'Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code, never derived or auto-generated')
     .option('--entity <entityId>', 'Entity to create the client tax code under (required for account-scoped keys)')

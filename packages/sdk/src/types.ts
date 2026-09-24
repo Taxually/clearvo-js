@@ -1626,7 +1626,7 @@ export interface ClientTaxCode {
   recoverabilityType: ClientTaxCodeRecoverabilityType | null;
   /** Decimal-fraction-free percentage (50 = 50%), set only when recoverabilityType="restricted". null otherwise. */
   recoverablePercentage: number | null;
-  /** Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. */
+  /** Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. Max 30 characters. */
   exemptionReasonCode: string | null;
   /** EN16931 tax category code: S, AA, AB, AC, AE, K, G, E, O, or Z. Response-only, computed live from the fields above — never a stored or caller-supplied value. */
   taxCode: string;
@@ -1665,7 +1665,7 @@ export interface CreateClientTaxCodeInput {
   recoverabilityType?: ClientTaxCodeRecoverabilityType;
   /** Required (and only meaningful) when recoverabilityType="restricted" — a percentage strictly between 0 and 100 (0 and 100 are already "blocked"/"full"). */
   recoverablePercentage?: number;
-  /** Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. */
+  /** Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. Max 30 characters. */
   exemptionReasonCode?: string;
   description?: string;
   /** Only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code. Never derived or auto-generated. */
@@ -1907,11 +1907,24 @@ export type BulkSendRowOutcome = 'ACCEPTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'HE
 export interface BulkSendRow {
   rowNumber: number;
   outcome: BulkSendRowOutcome;
+  invoiceNumber?: string;
+  sourceReference?: string | null;
   /** The transaction's Clearvo id when it reached dispatch. */
-  id: string | null;
+  recordId?: string;
+  mandate?: string | null;
+  clearanceStatus?: string | null;
+  /** The idempotency key this row was dispatched under — present whenever the row passed structural validation, regardless of outcome. */
+  idempotencyKey?: string;
+  /** The row's own `country` CSV column — present under the same conditions as idempotencyKey. */
+  country?: string;
   /** Set when outcome is ERRORED (or a per-row structural validation failure). */
-  errorCode: string | null;
-  errorMessage: string | null;
+  errorCode?: string;
+  errorMessage?: string;
+  /** Per-field detail for a rejection carrying one (validation-rules or a country-specific schema validator) — the field-level reasons behind a generic top-level errorMessage. */
+  errorDetails?: Array<{ field?: string; message: string }>;
+  /** Present only for a HELD outcome — why the row is held and who must act. */
+  holdReason?: string | null;
+  actionOwner?: string | null;
 }
 
 export interface BulkSendSummary {
@@ -1961,11 +1974,11 @@ export interface SubmitInvoicesBulkResponse {
   continuation: BulkSendContinuation | null;
 }
 
-/** Returned by submitInvoicesBulkAsync when the file was queued rather than processed synchronously. */
+/** Returned by submitInvoicesBulkAsync when the file was queued rather than processed synchronously. status is 'UPLOADED' for a freshly-queued batch; on a `duplicate: true` response it reflects whatever status the pre-existing matched batch is actually in (VALIDATING/COMPLETED/FAILED/CANCELLED), not necessarily 'UPLOADED'. */
 export interface SubmitInvoicesBulkAsyncQueuedResponse {
   ok: boolean;
   batchId: string;
-  status: 'UPLOADED';
+  status: BulkUploadBatchStatus;
   /** True means this exact file was already processed by an earlier call — nothing new was queued. */
   duplicate?: boolean;
 }

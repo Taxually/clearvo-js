@@ -1950,7 +1950,7 @@ const TOOLS = [
         direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Omit for a code that applies to both.' },
         recoverabilityType: { type: 'string', enum: ['full', 'blocked', 'restricted'], description: 'Purchase-side input-tax recoverability only. Omit for a sale code, or a purchase code with no recoverability position yet.' },
         recoverablePercentage: { type: 'number', description: 'Required (and only meaningful) when recoverabilityType="restricted" — a percentage strictly between 0 and 100 (0 and 100 are already "blocked"/"full").' },
-        exemptionReasonCode: { type: 'string', description: 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum. See get_client_tax_code_exemption_reason_options for candidate values.' },
+        exemptionReasonCode: { type: 'string', description: 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum, max 30 characters. See get_client_tax_code_exemption_reason_options for candidate values.' },
         description: { type: 'string' },
         exemptionReasonText: { type: 'string', description: 'Free-text exemption wording, only meaningful for an exempt, out-of-scope, or reverse-charge code — passed through verbatim onto every invoice using this code, printed exactly as given. Never derived or auto-generated; omit if you have none.' },
         entityId: { type: 'string', description: 'Entity to create the client tax code under. Required for account-scoped keys; omit for entity-scoped keys.' },
