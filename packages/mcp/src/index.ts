@@ -2500,12 +2500,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'list_mandate_transactions': {
+      const { entityId } = args as { entityId?: string };
       const qs = new URLSearchParams();
       for (const k of ['uploadBatchId', 'state', 'mandate', 'period', 'country', 'from', 'to', 'page', 'limit', 'entityId'] as const) {
         if (args[k] !== undefined) qs.set(k, String(args[k]));
       }
       const q = qs.toString();
-      return callApi('GET', `/mandate-transactions${q ? `?${q}` : ''}`, undefined);
+      // entityId is forwarded BOTH ways: as x-entity-id so the backend can resolve entity
+      // context for an account-scoped key at all, and as a query param, which the route
+      // separately reads as its own secondary filter (same convention as GET /v1/invoices).
+      return callApi('GET', `/mandate-transactions${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
     }
 
     default:

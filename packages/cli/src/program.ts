@@ -903,7 +903,10 @@ export function createProgram(): Command {
       if (opts.limit)         qs.set('limit', opts.limit);
       if (opts.entity)        qs.set('entityId', opts.entity);
       const q = qs.toString();
-      const result = await api('GET', `/mandate-transactions${q ? `?${q}` : ''}`);
+      // entityId is forwarded BOTH ways: as x-entity-id so the backend can resolve entity
+      // context for an account-scoped key at all, and as a query param, which the route
+      // separately reads as its own secondary filter (same convention as GET /v1/invoices).
+      const result = await api('GET', `/mandate-transactions${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 
