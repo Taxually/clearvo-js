@@ -1734,6 +1734,152 @@ export interface ClientTaxCodeResponse {
   warning?: DuplicateTreatmentWarning;
 }
 
+// ── GET /v1/tax/client-codes/options — valid field combinations for building/
+// filtering a Client Tax Code form. Call before createClientTaxCode/
+// updateClientTaxCode rather than guessing an enum value — the same source
+// of truth the dashboard's own form uses.
+
+export interface GetClientTaxCodeOptionsParams {
+  /** 2- or 3-letter ISO code, e.g. "DE". Omit to get the unfiltered global option set. */
+  country?: string;
+  /** Sub-country scope (e.g. a US state) — refines rateBands' resolved rate percentages. Only meaningful alongside country. */
+  region?: string;
+  /** Further narrows movements to sale- or purchase-relevant values. */
+  direction?: ClientTaxCodeDirection;
+  entityId?: string;
+}
+
+export interface ClientTaxCodeOptionsResponse {
+  ok: boolean;
+  countries: string[];
+  movements: Array<{ value: ClientTaxCodeMovement; label: string; valid: boolean }>;
+  supplyTypes: Array<{ value: ClientTaxCodeSupplyType; label: string }>;
+  rateBands: Array<{ value: ClientTaxCodeRateBand; label: string; valid: boolean; rate: number | null }> | null;
+  regionRequired: boolean | null;
+  reverseChargeRelevant: boolean | null;
+  useTaxSelfAssessedRelevant: boolean | null;
+  zeroRatedGuidance: string | null;
+}
+
+// ── GET /v1/tax/client-codes/exemption-reasons — candidate exemptionReasonCode
+// values for an in-progress (not yet saved) client tax code.
+
+export interface GetClientTaxCodeExemptionReasonOptionsParams {
+  country?: string;
+  movement?: ClientTaxCodeMovement;
+  taxability?: ClientTaxCodeTaxability;
+  reverseCharge?: boolean;
+  supplyType?: ClientTaxCodeSupplyType;
+  customerType?: ClientTaxCodeCustomerType;
+  rateBand?: ClientTaxCodeRateBand;
+  direction?: ClientTaxCodeDirection;
+  entityId?: string;
+}
+
+export interface ClientTaxCodeExemptionReasonOptionsResponse {
+  ok: boolean;
+  reasons: Array<{
+    code: string;
+    text: string;
+    /** Every output format (PEPPOL/IT/PL) that would emit this exact code for this decision — deduped by code, not repeated once per format. */
+    formats: string[];
+  }>;
+}
+
+// ── GET /v1/mandate-transactions — consolidated cross-jurisdiction
+// transaction view. One row per resolved (or in-progress) mandate decision,
+// whatever mechanism it resolved to (per-document e-invoicing clearance, an
+// aggregate accumulate-then-flush e-report, or no mandate at all).
+
+export type MandateTransactionStateFilter =
+  | 'PENDING' | 'RESOLVED' | 'NEEDS_INFO' | 'HELD_UNKNOWN_MANDATE' | 'OBLIGATION_DISABLED'
+  | 'HELD_UNMAPPED_DECISION' | 'RECEIVED'
+  | 'HELD'
+  | 'OPEN' | 'ACCUMULATED-OPEN-PERIOD'
+  | 'CLOSED' | 'SUBMITTED' | 'FILED'
+  | 'CLEARED';
+
+export interface ListMandateTransactionsParams {
+  /** Every row a specific bulk upload (sync or async) produced. NULL for a row from a single-document submitInvoice, so this filter naturally excludes those. */
+  uploadBatchId?: string;
+  /** Case-insensitive. See MandateTransactionStateFilter for the full vocabulary, including the HELD/OPEN/CLOSED aliases. */
+  state?: MandateTransactionStateFilter;
+  /** Exact match against the resolved Compliance Mandate, e.g. "FR_EINVOICING", "FR_EREPORTING", "ES_SII", "NONE". */
+  mandate?: string;
+  /** Exact match against the reporting period key, e.g. "2026-09-D1" for a France décade. */
+  period?: string;
+  /** ISO-3166-1 alpha-2, exact match, case-insensitive. */
+  country?: string;
+  /** YYYY-MM-DD — issue_date >= this date. */
+  from?: string;
+  /** YYYY-MM-DD — issue_date <= this date. */
+  to?: string;
+  page?: number;
+  limit?: number;
+  entityId?: string;
+}
+
+export type MandateTransactionTerminalArtifact =
+  | { type: 'einvoice'; einvoicingRecordId: string; clearanceStatus: string; clearanceStatusLabel: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
+  | { type: 'period'; periodId: string; periodKey: string; periodStatus: string; closedAt: string | null; submittedAt: string | null; filedAt: string | null }
+  | { type: 'recorded_only' }
+  | null;
+
+export interface MandateTransaction {
+  id: string;
+  entityId: string;
+  country: string;
+  sourceChannel: string;
+  idempotencyKey: string;
+  state: string;
+  issueDate: string | null;
+  taxPointDate: string | null;
+  paymentDate: string | null;
+  currency: string | null;
+  totalNet: number | null;
+  totalTax: number | null;
+  totalGross: number | null;
+  amountDue: number | null;
+  supplierTaxId: string | null;
+  customerTaxId: string | null;
+  isLate: boolean;
+  isRectification: boolean;
+  rectifiesTransactionId: string | null;
+  dispatchedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  mandate: string | null;
+  mandateClass: string | null;
+  /** Free-text reason this row is held or needs info — e.g. HELD_UNMAPPED_TAX_CODE's message naming the missing client tax code. Null for a row that was never held. */
+  holdReason: string | null;
+  /** Who must act to clear a held/needs-info row: 'platform' (an engineering/config gap) or 'customer' (a data gap only the merchant can fill, e.g. createClientTaxCode). Null for a row that was never held. */
+  actionOwner: string | null;
+  reportByDate: string | null;
+  provenance: {
+    matchedRuleId: string | null;
+    matchedRuleVersion: string | null;
+    resolvedAt: string | null;
+    matchedRule: { country: string; movement: string | null; customerType: string | null; description: string | null } | null;
+  };
+  period: {
+    id: string;
+    periodKey: string;
+    periodStart: string | null;
+    periodEnd: string | null;
+    status: string;
+    closedAt: string | null;
+    submittedAt: string | null;
+    filedAt: string | null;
+    latestSubmissionAttempt: { status: string; receiptReference: string | null; error: string | null; createdAt: string | null } | null;
+  } | null;
+  terminalArtifact: MandateTransactionTerminalArtifact;
+}
+
+export interface ListMandateTransactionsResponse {
+  transactions: MandateTransaction[];
+  pagination: { total: number; page: number; limit: number; pages: number; hasNext: boolean; hasPrev: boolean };
+}
+
 // ── France platform credentials (POST/GET /v1/fr/credentials) ──────────────
 // No secret is stored here — this is a status-visibility endpoint for the
 // entity's own French VAT number (numéro de TVA intracommunautaire), not a

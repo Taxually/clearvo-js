@@ -812,7 +812,101 @@ export function createProgram(): Command {
       const result = await api('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
-  
+
+  // GET /v1/tax/client-codes/options — valid field combinations for `tax-codes
+  // create`/`tax-codes update`. Call this before guessing an enum value — the
+  // same source of truth the dashboard's own form uses.
+  taxCodes
+    .command('options')
+    .description('Discover valid movement/rateBand/supplyType values for `tax-codes create`/`update`')
+    .option('--country <code>', 'ISO 3166-1 alpha-2 or alpha-3 (e.g. DE). Omit for the unfiltered global option set')
+    .option('--region <region>', 'Sub-country scope (e.g. a US state) — refines rateBands\' resolved rate percentages. Only meaningful alongside --country')
+    .option('--direction <direction>', 'sale or purchase — further narrows movements')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; region?: string; direction?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.country)   qs.set('country', opts.country.toUpperCase());
+      if (opts.region)    qs.set('region', opts.region.toUpperCase());
+      if (opts.direction) qs.set('direction', opts.direction);
+      const q = qs.toString();
+      const result = await api('GET', `/tax/client-codes/options${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // GET /v1/tax/client-codes/exemption-reasons — candidate exemptionReasonCode
+  // values for an in-progress (not yet saved) client tax code.
+  taxCodes
+    .command('exemption-reasons')
+    .description('Candidate exemptionReasonCode values for an in-progress client tax code (call `tax-codes options` first)')
+    .option('--country <code>', 'ISO 3166-1 alpha-2 or alpha-3')
+    .option('--movement <movement>', 'local, intra_community, export, distance_sale, import, or own_goods_movement')
+    .option('--taxability <taxability>', 'taxable, exempt, or out_of_scope')
+    .option('--reverse-charge <bool>', 'true or false')
+    .option('--supply-type <type>', 'goods, digital_service, or general_service')
+    .option('--customer-type <type>', 'b2b or b2c')
+    .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero')
+    .option('--direction <direction>', 'sale or purchase')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: {
+      country?: string; movement?: string; taxability?: string; reverseCharge?: string;
+      supplyType?: string; customerType?: string; rateBand?: string; direction?: string;
+      entity?: string; pretty?: boolean;
+    }) => {
+      const qs = new URLSearchParams();
+      if (opts.country)       qs.set('country', opts.country.toUpperCase());
+      if (opts.movement)      qs.set('movement', opts.movement);
+      if (opts.taxability)    qs.set('taxability', opts.taxability);
+      if (opts.reverseCharge) qs.set('reverseCharge', opts.reverseCharge);
+      if (opts.supplyType)    qs.set('supplyType', opts.supplyType);
+      if (opts.customerType)  qs.set('customerType', opts.customerType);
+      if (opts.rateBand)      qs.set('rateBand', opts.rateBand);
+      if (opts.direction)     qs.set('direction', opts.direction);
+      const q = qs.toString();
+      const result = await api('GET', `/tax/client-codes/exemption-reasons${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo mandate-transactions ─────────────────────────────────────────────
+  // Consolidated cross-jurisdiction transaction view — one row per resolved
+  // (or in-progress) mandate decision. `--state held` is the direct answer to
+  // "which transactions reference a client tax code that does not exist" —
+  // inspect holdReason/actionOwner on each row.
+  program
+    .command('mandate-transactions')
+    .description('Query the consolidated cross-jurisdiction transaction view')
+    .option('--upload-batch-id <id>', 'Every row a specific bulk upload produced')
+    .option('--state <state>', 'PENDING, RESOLVED, NEEDS_INFO, HELD, OPEN, CLOSED, SUBMITTED, FILED, or CLEARED (case-insensitive) — see the API docs for the full raw-state vocabulary')
+    .option('--mandate <mandate>', 'Exact match, e.g. FR_EINVOICING, FR_EREPORTING, ES_SII, NONE')
+    .option('--period <period>', 'Exact match against the reporting period key, e.g. 2026-09-D1')
+    .option('--country <code>', 'ISO 3166-1 alpha-2')
+    .option('--from <date>', 'YYYY-MM-DD — issue_date >= this date')
+    .option('--to <date>', 'YYYY-MM-DD — issue_date <= this date')
+    .option('--page <page>', 'Page number, 1-based')
+    .option('--limit <limit>', 'Results per page, 1-200')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: {
+      uploadBatchId?: string; state?: string; mandate?: string; period?: string; country?: string;
+      from?: string; to?: string; page?: string; limit?: string; entity?: string; pretty?: boolean;
+    }) => {
+      const qs = new URLSearchParams();
+      if (opts.uploadBatchId) qs.set('uploadBatchId', opts.uploadBatchId);
+      if (opts.state)         qs.set('state', opts.state);
+      if (opts.mandate)       qs.set('mandate', opts.mandate);
+      if (opts.period)        qs.set('period', opts.period);
+      if (opts.country)       qs.set('country', opts.country.toUpperCase());
+      if (opts.from)          qs.set('from', opts.from);
+      if (opts.to)            qs.set('to', opts.to);
+      if (opts.page)          qs.set('page', opts.page);
+      if (opts.limit)         qs.set('limit', opts.limit);
+      if (opts.entity)        qs.set('entityId', opts.entity);
+      const q = qs.toString();
+      const result = await api('GET', `/mandate-transactions${q ? `?${q}` : ''}`);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo calculations ─────────────────────────────────────────────────────
   const calculations = program.command('calculations').description('View committed tax calculation history');
   

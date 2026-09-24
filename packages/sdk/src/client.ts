@@ -66,6 +66,12 @@ import type {
   SubmitInvoiceInput,
   ListTaxCodesParams,
   ListTaxCodesResponse,
+  GetClientTaxCodeOptionsParams,
+  ClientTaxCodeOptionsResponse,
+  GetClientTaxCodeExemptionReasonOptionsParams,
+  ClientTaxCodeExemptionReasonOptionsResponse,
+  ListMandateTransactionsParams,
+  ListMandateTransactionsResponse,
   SetFrCredentialsInput,
   FrCredentialsResponse,
   UpdateBusinessStatusInput,
@@ -504,6 +510,46 @@ export class ClearvoClient {
     }
     const q = qs.toString();
     return this.request('GET', `/tax/codes${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** GET /v1/tax/client-codes/options — valid field combinations for creating/updating a client tax code. Call before createClientTaxCode/updateClientTaxCode rather than guessing an enum value. */
+  getClientTaxCodeOptions(params: GetClientTaxCodeOptionsParams = {}): Promise<ClientTaxCodeOptionsResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/tax/client-codes/options${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** GET /v1/tax/client-codes/exemption-reasons — candidate exemptionReasonCode values for an in-progress (not yet saved) client tax code. */
+  getClientTaxCodeExemptionReasonOptions(params: GetClientTaxCodeExemptionReasonOptionsParams = {}): Promise<ClientTaxCodeExemptionReasonOptionsResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/tax/client-codes/exemption-reasons${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Mandate transactions ─────────────────────────────────────────────────
+  // Consolidated cross-jurisdiction transaction view — one row per resolved
+  // (or in-progress) mandate decision, whatever mechanism it resolved to.
+  // state: 'HELD' is the direct answer to "which transactions reference a
+  // client tax code that does not exist" — inspect holdReason/actionOwner on
+  // each row.
+
+  listMandateTransactions(params: ListMandateTransactionsParams = {}): Promise<ListMandateTransactionsResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    if (entityId !== undefined) qs.set('entityId', entityId);
+    const q = qs.toString();
+    return this.request('GET', `/mandate-transactions${q ? `?${q}` : ''}`);
   }
 
   // ── France platform credentials ────────────────────────────────────────
