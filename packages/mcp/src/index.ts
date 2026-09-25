@@ -1288,7 +1288,7 @@ const TOOLS = [
         type: {
           type: 'string',
           enum: ['VAT', 'IOSS', 'UNION_OSS', 'NON_UNION_OSS', 'VOEC'],
-          description: 'Registration type. VAT=standard per-country, IOSS=EU Import One-Stop Shop, UNION_OSS=EU OSS for registered businesses, NON_UNION_OSS=EU OSS for non-EU sellers, VOEC=Norway digital goods',
+          description: 'Registration type. VAT=standard per-country, IOSS=EU Import One-Stop Shop, UNION_OSS=EU OSS — only valid when the entity itself is established in an EU member state, NON_UNION_OSS=EU OSS — only valid when the entity has no EU establishment at all, VOEC=Norway digital goods. Requesting the ineligible OSS type for this entity\'s own establishment returns error code SCHEME_NOT_ELIGIBLE.',
         },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Not required for IOSS (applies EU-wide).' },
         taxNumber: { type: 'string', description: 'The registration or VAT number issued by the authority. Optional — can be added later once received. Omit to self-certify that the registration exists without yet recording the number.' },
