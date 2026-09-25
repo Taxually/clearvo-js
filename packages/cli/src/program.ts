@@ -235,15 +235,17 @@ export function createProgram(): Command {
   // side's response syncs automatically once they act on their own side.
   program
     .command('business-status <id>')
-    .description('Record a customer-lifecycle status decision on a received (inbound) invoice')
-    .requiredOption('--status <status>', 'IN_HAND | APPROVED | PARTIALLY_APPROVED | DISPUTED | SUSPENDED | REFUSED | COMPLETED | PAYMENT_SENT | PAYMENT_RECEIVED')
-    .option('--reason <reason>', 'Short machine-usable reason code. Required when --status is DISPUTED, REFUSED, or SUSPENDED.')
-    .option('--message <message>', 'Optional human-readable detail alongside --reason.')
+    .description('Record a customer-lifecycle status decision on a received (inbound) invoice — FR/DE or Brazil (Manifestação do Destinatário)')
+    .requiredOption('--status <status>', 'FR/DE: IN_HAND | APPROVED | PARTIALLY_APPROVED | DISPUTED | SUSPENDED | REFUSED | COMPLETED | PAYMENT_SENT | PAYMENT_RECEIVED. Brazil: CIENCIA | CONFIRMACAO | OPERACAO_NAO_REALIZADA | DESCONHECIMENTO.')
+    .option('--reason <reason>', 'Short machine-usable reason code (FR/DE). Required when --status is DISPUTED, REFUSED, or SUSPENDED.')
+    .option('--message <message>', 'Human-readable detail — optional alongside --reason for FR/DE, required (15-255 characters) for Brazil\'s OPERACAO_NAO_REALIZADA, and forbidden for DESCONHECIMENTO. Can be passed without --reason.')
     .option('--entity <entityId>', 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { status: string; reason?: string; message?: string; entity?: string; pretty?: boolean }) => {
       const body: Record<string, unknown> = { status: opts.status };
-      if (opts.reason) body.rejectionDetail = { reason: opts.reason, ...(opts.message ? { message: opts.message } : {}) };
+      if (opts.reason || opts.message) {
+        body.rejectionDetail = { ...(opts.reason ? { reason: opts.reason } : {}), ...(opts.message ? { message: opts.message } : {}) };
+      }
       const result = await api('PATCH', `/invoices/${encodeURIComponent(id)}/business-status`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
@@ -755,6 +757,77 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { entity?: string; pretty?: boolean }) => {
       const result = await api('POST', '/fr/inbound/poll', {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // Brazil NF-e receiving onboarding/status (POST/GET /v1/br/credentials,
+  // POST /v1/br/inbound/poll, GET /v1/br/sync-status, PATCH /v1/br/settings).
+  // Mirrors the `fr` namespace's shape. Only A1 (PKCS#12) e-CNPJ certificates
+  // are supported — A3 has no headless path and is refused server-side.
+  const br = program.command('br').description('Brazil NF-e receiving onboarding/status');
+  const brCredentials = br.command('credentials').description('Manage the entity\'s e-CNPJ A1 certificate for Distribuição DFe');
+
+  brCredentials
+    .command('set')
+    .description('Register or update the entity\'s Brazil e-CNPJ A1 certificate (.pfx)')
+    .requiredOption('--pfx-file <path>', 'Path to the e-CNPJ A1 certificate export (.pfx). Read and base64-encoded locally — never sent as a raw file path.')
+    .requiredOption('--password <password>', 'The .pfx password. Never stored — used once to unlock the certificate for this save.')
+    .requiredOption('--consent', 'Confirms authorization for Clearvo to use this certificate to fetch invoices addressed to this CNPJ and to record this entity\'s own manifestation responses with SEFAZ on its behalf.')
+    .option('--auto-ciencia <bool>', 'Whether Clearvo auto-registers Ciência da Operação as documents are discovered. Defaults to true.', (v: string) => v !== 'false')
+    .option('--entity <entityId>', 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pfxFile: string; password: string; consent: boolean; autoCiencia?: boolean; entity?: string; pretty?: boolean }) => {
+      const pfxBase64 = readFileSync(opts.pfxFile).toString('base64');
+      const body: Record<string, unknown> = { pfxBase64, password: opts.password, consent: opts.consent };
+      if (opts.autoCiencia !== undefined) body.autoCiencia = opts.autoCiencia;
+      const result = await api('POST', '/br/credentials', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  brCredentials
+    .command('get')
+    .description('Read back the entity\'s stored e-CNPJ certificate status (CNPJ, expiry, autoCiencia) — no key material returned')
+    .option('--entity <entityId>', 'Entity to read. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/br/credentials', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // clearvo br inbound poll — manual trigger. Clearvo's own hourly sweep
+  // already does this; the shared SEFAZ 20/hour-per-CNPJ-root budget and the
+  // per-entity 60-minute cooldown both still apply and answer 429 before any
+  // real SEFAZ call is attempted.
+  const brInbound = br.command('inbound').description('Brazil Distribuição DFe inbound polling');
+  brInbound
+    .command('poll')
+    .description('Manually trigger a Distribuição DFe poll cycle for this entity')
+    .option('--entity <entityId>', 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('POST', '/br/inbound/poll', {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  br
+    .command('sync-status')
+    .description('Check the health of the Brazil Distribuição DFe poll job for an entity — pure DB read, never calls SEFAZ')
+    .option('--entity <entityId>', 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/br/sync-status', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  const brSettings = br.command('settings').description('Configure Brazil-specific entity settings');
+  brSettings
+    .command('update')
+    .description('Flip Brazil auto-Ciência on or off for an entity that already has a certificate on file — never re-requires the certificate')
+    .requiredOption('--auto-ciencia <bool>', 'true | false')
+    .option('--entity <entityId>', 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { autoCiencia: string; entity?: string; pretty?: boolean }) => {
+      const result = await api('PATCH', '/br/settings', { autoCiencia: opts.autoCiencia !== 'false' }, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 

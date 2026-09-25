@@ -800,29 +800,39 @@ const TOOLS = [
   {
     name: 'update_business_status',
     description:
-      'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice — approve, ' +
-      'partially approve, dispute, suspend, refuse, or mark paid. Only valid on an INBOUND invoice you received: ' +
-      'the calling entity is the customer recording their own decision on it. For an invoice you issued, the ' +
-      'other side\'s response syncs automatically once they act on their own side — there is nothing to call ' +
-      'here for that direction. rejectionDetail is required when status is DISPUTED, REFUSED, or SUSPENDED. ' +
-      'Fails 409 if the transition isn\'t valid from the invoice\'s current status, and 422 ' +
-      '(FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s tax number — ' +
-      'neither is retryable by changing the request; the status was not changed either way.',
+      'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice. The one shared ' +
+      'tool every registered regime goes through — currently France, Germany, and Brazil (Manifestação do ' +
+      'Destinatário). Only valid on an INBOUND invoice you received: the calling entity is the customer ' +
+      'recording their own decision on it. For an invoice you issued, the other side\'s response syncs ' +
+      'automatically once they act on their own side — there is nothing to call here for that direction. ' +
+      'FR/DE: approve, partially approve, dispute, suspend, refuse, or mark paid — rejectionDetail.reason is ' +
+      'required when status is DISPUTED, REFUSED, or SUSPENDED. Brazil: acknowledge receipt (CIENCIA), confirm ' +
+      'the operation occurred (CONFIRMACAO), or reject it — either the operation didn\'t occur ' +
+      '(OPERACAO_NAO_REALIZADA, rejectionDetail.message required, 15–255 characters) or you don\'t recognize the ' +
+      'transaction (DESCONHECIMENTO, rejectionDetail forbidden). PRESUMIDA (Brazil\'s day-90 deemed-acceptance ' +
+      'presumption) is never a valid target here — SEFAZ\'s own statutory silence writes it, not a customer ' +
+      'request. Only the status values belonging to the invoice\'s own country/regime are a valid transition for ' +
+      'it — check get_invoice\'s businessStatusActions first rather than guessing from this enum alone. Fails ' +
+      '409 if the transition isn\'t valid from the invoice\'s current status (also Brazil-specific: no ' +
+      'certificate on file, an expired certificate, homologação not yet complete, or SEFAZ itself rejected the ' +
+      'event), 422 (FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s ' +
+      'tax number, and 503 (Brazil only, RATE_LIMITED) if SEFAZ\'s own 20/hour rate limit was hit — none is ' +
+      'retryable by changing the request; the status was not changed either way.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         id: { type: 'string', description: 'Invoice id or referenceId of a received (inbound) invoice — as returned by get_invoice or list_invoices.' },
         status: {
           type: 'string',
-          enum: ['IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED'],
-          description: 'The new business-lifecycle status.',
+          enum: ['IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED', 'CIENCIA', 'CONFIRMACAO', 'OPERACAO_NAO_REALIZADA', 'DESCONHECIMENTO'],
+          description: 'The new business-lifecycle status. FR/DE: the first nine values. Brazil: CIENCIA/CONFIRMACAO/OPERACAO_NAO_REALIZADA/DESCONHECIMENTO only.',
         },
         rejectionDetail: {
           type: 'object' as const,
-          description: 'Required when status is DISPUTED, REFUSED, or SUSPENDED.',
+          description: 'Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), or OPERACAO_NAO_REALIZADA (Brazil — message required, 15–255 characters). Forbidden for Brazil\'s DESCONHECIMENTO.',
           properties: {
-            reason: { type: 'string', description: 'Short machine-usable reason code.' },
-            message: { type: 'string', description: 'Optional human-readable detail.' },
+            reason: { type: 'string', description: 'Short machine-usable reason code (FR/DE).' },
+            message: { type: 'string', description: 'Human-readable detail — optional for FR/DE, required for Brazil\'s OPERACAO_NAO_REALIZADA.' },
           },
         },
         entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.' },
@@ -947,6 +957,96 @@ const TOOLS = [
         entityId: { type: 'string', description: 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: [],
+    },
+  },
+  {
+    name: 'set_br_credentials',
+    description:
+      'Register or update the entity\'s Brazil e-CNPJ A1 certificate for NF-e receiving (Distribuição DFe). The ' +
+      'entity must already carry a REGISTERED Brazil tax registration (its CNPJ) — this only cross-checks the ' +
+      'certificate\'s own CNPJ root (first 8 characters, one e-CNPJ legitimately covers every filial under the ' +
+      'same root) against it; it never writes the CNPJ. Unlike Mexico, a sandbox API key is NOT refused — the ' +
+      'credential is stored with environment "test" and the poll/manifestation paths run against fixture SEFAZ ' +
+      'transport. Only A1 (file-based, PKCS#12) certificates are supported — an A3 (hardware-token) certificate ' +
+      'is refused outright, there is no headless path for it. autoCiencia (default true) controls whether ' +
+      'Clearvo automatically registers Ciência da Operação with SEFAZ as soon as an invoice is discovered — this ' +
+      'is what releases the full procNFe document and starts the statutory 90-day conclusive-response clock; it ' +
+      'never confirms, disputes, or pays an invoice on the entity\'s behalf, and can be changed later without ' +
+      're-uploading the certificate via update_br_settings.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        pfxBase64: { type: 'string', description: 'Base64-encoded certificate file (.pfx) — the e-CNPJ A1 export.' },
+        password: { type: 'string', description: 'The .pfx password. Never stored — used once to unlock the certificate for this save.' },
+        consent: { type: 'boolean', description: 'Must be true — confirms authorization for Clearvo to use this certificate to fetch invoices addressed to this CNPJ and to record this entity\'s own manifestation responses with SEFAZ on its behalf.' },
+        autoCiencia: { type: 'boolean', description: 'Defaults to true. See description above.' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['pfxBase64', 'password', 'consent'],
+    },
+  },
+  {
+    name: 'get_br_credentials',
+    description: 'Retrieve the entity\'s stored e-CNPJ certificate status (CNPJ, expiry, autoCiencia setting) — no key material returned.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'poll_br_inbound',
+    description:
+      'Manually trigger a Distribuição DFe poll cycle for this entity — Clearvo\'s hourly automated sweep already ' +
+      'does this; use this only when you need it sooner. Rate-limited to once per 60 minutes per entity (a ' +
+      'second manual call inside that window gets 429). Independently of that per-entity cooldown, the shared ' +
+      'SEFAZ rate budget for the certificate\'s own CNPJ root (20 queries/hour, shared across every entity on ' +
+      'that root) may already be parked (a recent "no new documents" response) or held (three consecutive ' +
+      'rate-limit responses — an administrator must release the hold) — either case also answers 429, before any ' +
+      'real SEFAZ call is attempted.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_br_sync_status',
+    description:
+      'Check the health of the Brazil Distribuição DFe poll job for an entity: when it last ran, when it last ' +
+      'succeeded, and any error. Pure DB read — never calls SEFAZ itself. status is "not_started" until a real ' +
+      'homologação (test-environment) run has verified this entity\'s credential end-to-end — before that, no ' +
+      'manifestation is registered and no document is collected, though the underlying statutory deadlines are ' +
+      'never paused by this state. A recent SEFAZ rate-limit park reads as "ok", never "stale"/"error" — it is a ' +
+      'normal, self-clearing condition, not a fault.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'update_br_settings',
+    description:
+      'Flip Brazil auto-Ciência on or off for an entity that already has a certificate on file — never requires ' +
+      'the e-CNPJ certificate or password to be re-submitted (set_br_credentials\'s own autoCiencia field only ' +
+      'sets the STARTING value, at upload time). Turning auto-Ciência off never stops the day-7 Ciência-due ' +
+      'reminder or the day-90 conclusive-deadline reminder — both keep firing regardless of this setting, since ' +
+      'the statutory deadline itself is never paused by it. When off, the entity must register Ciência directly ' +
+      '(their ERP, the SEFAZ portal, or update_business_status).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        autoCiencia: { type: 'boolean' },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['autoCiencia'],
     },
   },
   {
@@ -1188,7 +1288,7 @@ const TOOLS = [
         type: {
           type: 'string',
           enum: ['VAT', 'IOSS', 'UNION_OSS', 'NON_UNION_OSS', 'VOEC'],
-          description: 'Registration type. VAT=standard per-country, IOSS=EU Import One-Stop Shop, UNION_OSS=EU OSS for registered businesses, NON_UNION_OSS=EU OSS for non-EU sellers, VOEC=Norway digital goods',
+          description: 'Registration type. VAT=standard per-country, IOSS=EU Import One-Stop Shop, UNION_OSS=EU OSS — only valid when the entity itself is established in an EU member state, NON_UNION_OSS=EU OSS — only valid when the entity has no EU establishment at all, VOEC=Norway digital goods. Requesting the ineligible OSS type for this entity\'s own establishment returns error code SCHEME_NOT_ELIGIBLE.',
         },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Not required for IOSS (applies EU-wide).' },
         taxNumber: { type: 'string', description: 'The registration or VAT number issued by the authority. Optional — can be added later once received. Omit to self-certify that the registration exists without yet recording the number.' },
@@ -2317,6 +2417,31 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_mx_sync_status': {
       const { entityId } = args as { entityId?: string };
       return callApi('GET', '/mx/sync-status', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_br_credentials': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/br/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_br_credentials': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/br/credentials', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'poll_br_inbound': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('POST', '/br/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_br_sync_status': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/br/sync-status', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_br_settings': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', '/br/settings', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'invite_team_member':
