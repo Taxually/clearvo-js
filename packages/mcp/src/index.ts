@@ -1320,6 +1320,43 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_registration_field_definitions',
+    description:
+      'Discover which extra_fields keys are known/required for a given (country, region, scheme) tuple, before ' +
+      'calling add_registration/update_registration — the same lookup the dashboard\'s Add/Edit Registration form ' +
+      'uses. For a registry-backed country (Germany today), each field also carries legalBasis (the statute/ ' +
+      'rationale it comes from), requiredWhen (a machine-readable condition — present only when the field is ever ' +
+      'enforced as required) and requiredHint (a human sentence describing that same condition), so a caller can ' +
+      'tell "this field exists and can be set" apart from "this field is currently mandatory for this entity" ' +
+      'without guessing. For country=US, also returns usLocalityCodes (valid home-rule locality codes) when a ' +
+      'region is a home-rule state.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code, e.g. "DE".' },
+        region: { type: 'string', description: 'US state code (e.g. "TX"), when relevant. Ignored for non-US countries.' },
+        scheme: { type: 'string', description: 'Registration scheme, e.g. "STANDARD". Only affects the US flatRateElection field.' },
+      },
+      required: ['country'],
+    },
+  },
+  {
+    name: 'get_entity_fact_definitions',
+    description:
+      'Discover which entity-level fact keys exist (e.g. legalForm), before calling update_entity\'s entityFacts — ' +
+      'the same lookup the dashboard\'s Company Details/business-profile surface uses. The fact itself is entity-' +
+      'scoped, not (country/region/scheme)-scoped like get_registration_field_definitions — an entity has exactly ' +
+      'one legal form regardless of which countries it\'s registered in. A select-type fact\'s VALID VALUES are ' +
+      'not universal, though: options are resolved against THIS entity\'s own home/establishment country (never ' +
+      'an invoice\'s destination country) — e.g. legalForm returns Germany\'s GmbH/UG/AG/... codes for a German ' +
+      'entity, but free text (type: "string", no options) for a country with no curated list yet, never another ' +
+      'country\'s vocabulary. Each field carries legalBasis and, where closed-vocabulary, its options list.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
     name: 'list_tax_calculations',
     description:
       'List committed tax calculations (those created with commit=true). ' +
@@ -2485,6 +2522,17 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (extraFields !== undefined) body.extraFields = extraFields;
       return callApi('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, body);
     }
+
+    case 'get_registration_field_definitions': {
+      const { country, region, scheme } = args as { country: string; region?: string; scheme?: string };
+      const qs = new URLSearchParams({ country });
+      if (region !== undefined) qs.set('region', region);
+      if (scheme !== undefined) qs.set('scheme', scheme);
+      return callApi('GET', `/tax/registrations/field-definitions?${qs.toString()}`);
+    }
+
+    case 'get_entity_fact_definitions':
+      return callApi('GET', '/entities/fact-definitions');
 
     case 'list_tax_calculations': {
       const qs = new URLSearchParams();
