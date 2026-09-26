@@ -1284,8 +1284,9 @@ const TOOLS = [
       'Steuernummer, Handelsregisternummer, Registergericht, Sitz, managing-director names, or Kleinunternehmer ' +
       'flag) in place. Use this instead of deleting and re-adding a registration when only the number ' +
       'was wrong, missing, or a jurisdiction-specific secondary identifier needs to be added. ' +
-      'Country/type cannot be changed this way. extraFields is a MERGE, not a replace: only the keys you pass ' +
-      'are written; every other existing key is left untouched. ' +
+      'Country/type cannot be changed this way. extraFields is a MERGE, not a replace, per key: a string value ' +
+      'overwrites that key, an explicit null deletes it (e.g. clearing de_handelsregisternummer after changing ' +
+      'de_legal_form to one that no longer requires it), and an omitted key is left untouched. ' +
       'Germany (DE) accepts, in addition to de_steuernummer: de_legal_form (a DE legal-form code, e.g. GMBH/UG/AG/' +
       'SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/FOREIGN_BRANCH/OTHER), ' +
       'de_registered_seat (Sitz — the city the company is legally seated in), de_handelsregisternummer (e.g. ' +
@@ -1302,7 +1303,7 @@ const TOOLS = [
           description: 'The tax number ID or obligation ID of the registration (from list_registrations — use taxNumberId or obligationId field)',
         },
         taxNumber: { type: ['string', 'null'], description: 'New registration/VAT number. Pass null or an empty string to clear it. Omit entirely to leave it unchanged.' },
-        extraFields: { type: 'object', description: 'Secondary identifiers to merge in, e.g. { "fr_siret": "12345678901234" } or { "de_handelsregisternummer": "HRB 12345" }. Only the keys you pass are changed.' },
+        extraFields: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Secondary identifiers to merge in, e.g. { "fr_siret": "12345678901234" } or { "de_handelsregisternummer": "HRB 12345" }. A string value overwrites that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['registrationId'],
     },
@@ -2467,7 +2468,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'update_registration': {
-      const { registrationId, extraFields } = args as { registrationId: string; taxNumber?: string | null; extraFields?: Record<string, string> };
+      const { registrationId, extraFields } = args as { registrationId: string; taxNumber?: string | null; extraFields?: Record<string, string | null> };
       const body: Record<string, unknown> = {};
       if ('taxNumber' in args) body.taxNumber = args.taxNumber;
       if (extraFields !== undefined) body.extraFields = extraFields;

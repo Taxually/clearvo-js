@@ -1127,15 +1127,17 @@ export interface UpdateRegistrationInput {
   /** New registration/VAT number. Pass null or '' to clear it. Omit entirely to leave it unchanged. */
   taxNumber?: string | null;
   /**
-   * Secondary identifiers to merge in, e.g. { fr_siret: '12345678901234' } or
-   * { de_handelsregisternummer: 'HRB 12345' } — only the keys you pass are
-   * changed. Germany (DE) accepts, in addition to `de_steuernummer`:
-   * `de_legal_form`, `de_registered_seat`, `de_handelsregisternummer`,
-   * `de_registergericht`, `de_geschaeftsfuehrer`, and `de_kleinunternehmer`
-   * ('true'/'false') — see `SubmitInvoiceInput.countrySpecific`'s `de.*`
-   * doc comments for what each one means and when it's enforced.
+   * Secondary identifiers to merge in, per key: a string value overwrites
+   * that key, an explicit `null` deletes it, an omitted key is left
+   * unchanged — e.g. { fr_siret: '12345678901234' } or
+   * { de_handelsregisternummer: 'HRB 12345' }. Germany (DE) accepts, in
+   * addition to `de_steuernummer`: `de_legal_form`, `de_registered_seat`,
+   * `de_handelsregisternummer`, `de_registergericht`, `de_geschaeftsfuehrer`,
+   * and `de_kleinunternehmer` ('true'/'false') — see
+   * `SubmitInvoiceInput.countrySpecific`'s `de.*` doc comments for what each
+   * one means and when it's enforced.
    */
-  extraFields?: Record<string, string>;
+  extraFields?: Record<string, string | null>;
 }
 
 export interface UpdateRegistrationResponse {
