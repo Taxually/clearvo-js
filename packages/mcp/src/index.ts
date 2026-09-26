@@ -322,6 +322,20 @@ const TOOLS = [
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/taxRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
         },
         customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional customer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the customer\'s own country, which also exempts the customer from HU\'s mandatory street-address requirement.' },
+        payment: {
+          type: 'object',
+          description: 'Payment details.',
+          properties: {
+            method: { type: 'string', enum: ['bank_transfer', 'direct_debit', 'credit_card', 'cash', 'check', 'other'], description: '"direct_debit" renders SEPA payment means (UBL/CII PaymentMeansCode 59) and REQUIRES mandateReference (BT-89) — Germany also requires creditorId and debitedIban (BT-90/91). Omit for a plain credit-transfer invoice (bank_transfer, the default).' },
+            iban: { type: 'string', description: 'Seller\'s IBAN for a bank_transfer invoice.' },
+            bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the call fails with 422 DE_XRECHNUNG_BIC_FORBIDDEN.' },
+            reference: { type: 'string', description: 'Payment reference/remittance information.' },
+            prepaid: { type: 'boolean', description: 'True if the invoice has already been paid.' },
+            mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the call fails 422 MANDATE_REFERENCE_TOO_LONG.' },
+            creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
+            debitedIban: { type: 'string', description: 'The CUSTOMER\'s own IBAN the SEPA direct debit draws from (BT-91). Must be a real IBAN (checksum-validated) — malformed input fails 422 INVALID_DEBITED_IBAN. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-31). Distinct from `iban` above, which is the seller\'s own account for a bank_transfer payment.' },
+          },
+        },
         correctsInvoiceId: {
           type: 'string',
           description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; submit under a fresh idempotencyKey alongside this field.',
@@ -377,6 +391,20 @@ const TOOLS = [
                   type: 'boolean',
                   description: 'Default false. Set true to mark this as a self-billing document (the customer issues on the seller\'s behalf) — switches to a self-billing CustomizationID/ProfileID and UNTDID 1001 type codes (389 invoice / 261 credit note), and swaps supplier/customer semantics (see their own descriptions above). AU/NZ use their own PINT-AUNZ self-billing profile; every other Peppol country except SG/JP uses the generic EU BIS Self-Billing 3.0 profile; silently ignored (falls back to regular billing) for SG/JP.',
                 },
+              },
+            },
+            de: {
+              type: 'object',
+              description: 'Germany ZUGFeRD/XRechnung fields, plus per-invoice overrides of the invoice-content-field-registry company-law facts (each falls back to the matching de_* extra_fields value on the entity\'s own DE tax registration when omitted — see update_registration).',
+              properties: {
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD).' },
+                leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference when omitted. Missing both on a resolved-XRechnung invoice fails 422 MISSING_LEITWEG_ID.' },
+                legalForm: { type: 'string', description: 'DE legal-form select vocabulary (e.g. GMBH, UG, AG, SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER, FOREIGN_BRANCH, OTHER) — case-sensitive. Gates whether the register-identity and managing-directors disclosure tiers below apply at all.' },
+                handelsregisternummer: { type: 'string', description: 'BT-30. HGB § 37a commercial-register number (e.g. "HRB 12345"). Required once legalForm is a Handelsregister-registered form — missing this, registergericht, or registeredSeat never blocks the send, it returns a non-terminal errorCode MISSING_DE_COMPANY_REGISTER_DETAILS (WARNING severity).' },
+                registergericht: { type: 'string', description: 'HGB § 37a register court (e.g. "Amtsgericht München") — see handelsregisternummer above for the shared MISSING_DE_COMPANY_REGISTER_DETAILS gate.' },
+                registeredSeat: { type: 'string', description: 'HGB § 37a Sitz (registered seat city) — may differ from the invoice/delivery address. See handelsregisternummer above for the shared gate.' },
+                geschaeftsfuehrer: { type: 'string', description: 'GmbHG § 35a / AktG § 80 managing-director or board-member names, one per line, for a legal form owing the "names tier" disclosure. Missing this never blocks the send — errorCode MISSING_DE_MANAGING_DIRECTORS, WARNING severity.' },
+                kleinunternehmer: { type: 'boolean', description: '§ 19 UStG small-business exemption flag. When true, no invoice line may carry a positive tax rate — a line that does fails 422 DE_KLEINUNTERNEHMER_CHARGES_VAT (a real VAT-invoice defect, unlike the company-law WARNINGs above).' },
               },
             },
           },
@@ -640,7 +668,16 @@ const TOOLS = [
       'future threshold breach) — this satisfies the "add-registration" onboarding step without a ' +
       'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
       'Also handles notifyCustomerByDefault — see submit_invoice\'s notifyCustomer for what this controls. ' +
-      'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties.',
+      'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties. ' +
+      'entityFacts sets facts about the entity itself (not any one country registration) — e.g. legalForm, the ' +
+      'DE legal-form code (GMBH/UG/AG/SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/' +
+      'FOREIGN_BRANCH/OTHER — see get_entity_fact_definitions for the full option list), which gates whether ' +
+      'Germany\'s Handelsregister disclosures (Sitz/Handelsregisternummer/Registergericht/managing-director ' +
+      'names, set via update_registration\'s extraFields) are applicable. entityFacts is a MERGE, per key, same ' +
+      '3-state contract as update_registration\'s extraFields: a string sets that key, an explicit null deletes ' +
+      'it, an omitted key is left unchanged. Unlike a registration\'s extraFields, entityFacts applies to the ' +
+      'entity regardless of which country it\'s registered in — set legalForm here, not via ' +
+      'update_registration, even for a German entity.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -654,6 +691,7 @@ const TOOLS = [
         notifyCustomerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyCustomer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyCustomer override.' },
         mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
         mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
+        entityFacts: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Facts about the entity itself, e.g. { "legalForm": "GMBH" } — see get_entity_fact_definitions for the known keys. A string value sets that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['entityId'],
     },
@@ -1120,6 +1158,9 @@ const TOOLS = [
       'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
       'For a Spain VeriFactu or Portugal AT invoice, also returns verificationQr (dataUrl, legend) — ' +
       'the country-mandated verification QR, rendered server-side. Null for every other country. ' +
+      'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +
+      'when applicable) and supplierAdditionalLegalInfo (BT-33, the assembled company-law disclosure string) — ' +
+      'both null for every other country and for a DE seller with nothing to disclose. ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
       'or check whether a suggested action has been applied.',
     inputSchema: {
@@ -1350,10 +1391,21 @@ const TOOLS = [
     name: 'update_registration',
     description:
       'Edit an existing tax registration\'s number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s ' +
-      'Steuernummer) in place. Use this instead of deleting and re-adding a registration when only the number ' +
+      'Steuernummer, Handelsregisternummer, Registergericht, Sitz, managing-director names, or Kleinunternehmer ' +
+      'flag) in place. Use this instead of deleting and re-adding a registration when only the number ' +
       'was wrong, missing, or a jurisdiction-specific secondary identifier needs to be added. ' +
-      'Country/type cannot be changed this way. extraFields is a MERGE, not a replace: only the keys you pass ' +
-      'are written; every other existing key is left untouched.',
+      'Country/type cannot be changed this way. extraFields is a MERGE, not a replace, per key: a string value ' +
+      'overwrites that key, an explicit null deletes it (e.g. clearing de_handelsregisternummer after changing ' +
+      'the entity\'s legalForm — see update_entity\'s entityFacts — to one that no longer requires it), and an ' +
+      'omitted key is left untouched. Germany (DE) accepts, in addition to de_steuernummer: de_registered_seat ' +
+      '(Sitz — the city the company is legally seated in), de_handelsregisternummer (e.g. ' +
+      '"HRB 12345"), de_registergericht (e.g. "Amtsgericht München"), de_geschaeftsfuehrer (managing-director/' +
+      'board names, one per line), and de_kleinunternehmer ("true"/"false" — the §19 UStG small-business ' +
+      'exemption flag). None of these are required to save the registration — they become required only at ' +
+      'send/validate time, once the entity\'s legalForm (set via update_entity, NOT here — legal form is an ' +
+      'entity-level fact, not scoped to any one country registration) makes them applicable (e.g. ' +
+      'de_handelsregisternummer/de_registergericht/de_registered_seat once a Handelsregister-registered legal ' +
+      'form like GmbH is set).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1362,9 +1414,46 @@ const TOOLS = [
           description: 'The tax number ID or obligation ID of the registration (from list_registrations — use taxNumberId or obligationId field)',
         },
         taxNumber: { type: ['string', 'null'], description: 'New registration/VAT number. Pass null or an empty string to clear it. Omit entirely to leave it unchanged.' },
-        extraFields: { type: 'object', description: 'Secondary identifiers to merge in, e.g. { "fr_siret": "12345678901234" }. Only the keys you pass are changed.' },
+        extraFields: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Secondary identifiers to merge in, e.g. { "fr_siret": "12345678901234" } or { "de_handelsregisternummer": "HRB 12345" }. A string value overwrites that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['registrationId'],
+    },
+  },
+  {
+    name: 'get_registration_field_definitions',
+    description:
+      'Discover which extra_fields keys are known/required for a given (country, region, scheme) tuple, before ' +
+      'calling add_registration/update_registration — the same lookup the dashboard\'s Add/Edit Registration form ' +
+      'uses. For a registry-backed country (Germany today), each field also carries legalBasis (the statute/ ' +
+      'rationale it comes from), requiredWhen (a machine-readable condition — present only when the field is ever ' +
+      'enforced as required) and requiredHint (a human sentence describing that same condition), so a caller can ' +
+      'tell "this field exists and can be set" apart from "this field is currently mandatory for this entity" ' +
+      'without guessing. For country=US, also returns usLocalityCodes (valid home-rule locality codes) when a ' +
+      'region is a home-rule state.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code, e.g. "DE".' },
+        region: { type: 'string', description: 'US state code (e.g. "TX"), when relevant. Ignored for non-US countries.' },
+        scheme: { type: 'string', description: 'Registration scheme, e.g. "STANDARD". Only affects the US flatRateElection field.' },
+      },
+      required: ['country'],
+    },
+  },
+  {
+    name: 'get_entity_fact_definitions',
+    description:
+      'Discover which entity-level fact keys exist (e.g. legalForm), before calling update_entity\'s entityFacts — ' +
+      'the same lookup the dashboard\'s Company Details/business-profile surface uses. The fact itself is entity-' +
+      'scoped, not (country/region/scheme)-scoped like get_registration_field_definitions — an entity has exactly ' +
+      'one legal form regardless of which countries it\'s registered in. A select-type fact\'s VALID VALUES are ' +
+      'not universal, though: options are resolved against THIS entity\'s own home/establishment country (never ' +
+      'an invoice\'s destination country) — e.g. legalForm returns Germany\'s GmbH/UG/AG/... codes for a German ' +
+      'entity, but free text (type: "string", no options) for a country with no curated list yet, never another ' +
+      'country\'s vocabulary. Each field carries legalBasis and, where closed-vocabulary, its options list.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
     },
   },
   {
@@ -2552,12 +2641,23 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'update_registration': {
-      const { registrationId, extraFields } = args as { registrationId: string; taxNumber?: string | null; extraFields?: Record<string, string> };
+      const { registrationId, extraFields } = args as { registrationId: string; taxNumber?: string | null; extraFields?: Record<string, string | null> };
       const body: Record<string, unknown> = {};
       if ('taxNumber' in args) body.taxNumber = args.taxNumber;
       if (extraFields !== undefined) body.extraFields = extraFields;
       return callApi('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, body);
     }
+
+    case 'get_registration_field_definitions': {
+      const { country, region, scheme } = args as { country: string; region?: string; scheme?: string };
+      const qs = new URLSearchParams({ country });
+      if (region !== undefined) qs.set('region', region);
+      if (scheme !== undefined) qs.set('scheme', scheme);
+      return callApi('GET', `/tax/registrations/field-definitions?${qs.toString()}`);
+    }
+
+    case 'get_entity_fact_definitions':
+      return callApi('GET', '/entities/fact-definitions');
 
     case 'list_tax_calculations': {
       const qs = new URLSearchParams();
