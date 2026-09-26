@@ -227,6 +227,29 @@ export interface AllowanceChargeInput {
   taxTreatment?: TaxTreatment;
 }
 
+/**
+ * Payment details for a `SubmitInvoiceInput`. `method: 'direct_debit'`
+ * renders SEPA payment means (UBL/CII PaymentMeansCode 59, BG-19) and
+ * requires `mandateReference` (BT-89) — Germany's KoSIT XRechnung-CII
+ * overlay additionally requires `creditorId` and `debitedIban` (BT-90/91,
+ * BR-DE-30/31). Country-agnostic — not Germany-specific.
+ */
+export interface PaymentInput {
+  method?: 'bank_transfer' | 'direct_debit' | 'credit_card' | 'cash' | 'check' | 'other';
+  /** Seller's IBAN for a `bank_transfer` invoice. */
+  iban?: string;
+  /** BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit for DE or the call fails 422 `DE_XRECHNUNG_BIC_FORBIDDEN`. */
+  bic?: string;
+  reference?: string;
+  prepaid?: boolean;
+  /** BT-89. SEPA mandate reference identifier. Required whenever `method` is `'direct_debit'` — max 35 characters, or 422 `MANDATE_REFERENCE_TOO_LONG`. */
+  mandateReference?: string;
+  /** BT-90. SEPA bank-assigned creditor identifier (Gläubiger-ID) — the SELLER's own identifier, never the customer's. Germany additionally requires this whenever `method` is `'direct_debit'` (KoSIT BR-DE-30). */
+  creditorId?: string;
+  /** BT-91. The CUSTOMER's own IBAN the direct debit draws from — distinct from `iban` above (the seller's own account). Must be a real IBAN (checksum-validated) — malformed input fails 422 `INVALID_DEBITED_IBAN`. Germany additionally requires this whenever `method` is `'direct_debit'` (KoSIT BR-DE-31). */
+  debitedIban?: string;
+}
+
 export interface SubmitInvoiceInput {
   documentType?: 'invoice' | 'credit_note' | 'debit_note';
   invoiceNumber: string;
@@ -261,6 +284,7 @@ export interface SubmitInvoiceInput {
   allowances?: AllowanceChargeInput[];
   charges?: AllowanceChargeInput[];
   shipping?: ShippingInput;
+  payment?: PaymentInput;
   /**
    * RECOMMENDED. Header-level counterpart to lines[].clientTaxCode —
    * applied to every line that supplies neither its own taxTreatment/
@@ -301,6 +325,27 @@ export interface SubmitInvoiceInput {
    * - `de.invoiceFormat` — per-request override of ZUGFERD vs. XRECHNUNG.
    * - `de.leitwegId` — BT-10 German public-sector routing ID (XRechnung
    *   only); falls back to the top-level `buyerReference` when omitted.
+   * - `de.legalForm` — DE legal-form select vocabulary (e.g. GMBH, UG, AG,
+   *   SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER,
+   *   SOLE_TRADER, FOREIGN_BRANCH, OTHER; case-sensitive) — gates whether
+   *   the register-identity and managing-directors disclosure fields below
+   *   apply at all (invoice-content-field-registry).
+   * - `de.handelsregisternummer` — BT-30, HGB § 37a commercial-register
+   *   number (e.g. "HRB 12345"). Required once `legalForm` is a
+   *   Handelsregister-registered form; missing this/`registergericht`/
+   *   `registeredSeat` never blocks the send — returns non-terminal
+   *   `errorCode: MISSING_DE_COMPANY_REGISTER_DETAILS` (WARNING severity).
+   * - `de.registergericht` / `de.registeredSeat` — HGB § 37a register court
+   *   / Sitz. See `de.handelsregisternummer` for the shared gate.
+   * - `de.geschaeftsfuehrer` — GmbHG § 35a / AktG § 80 managing-director or
+   *   board-member names, one per line. Missing this when applicable
+   *   returns `errorCode: MISSING_DE_MANAGING_DIRECTORS` (WARNING).
+   * - `de.kleinunternehmer` — boolean, § 19 UStG small-business exemption
+   *   flag. `true` with any line carrying a positive tax rate fails 422
+   *   `DE_KLEINUNTERNEHMER_CHARGES_VAT` (a real VAT-invoice defect, unlike
+   *   the company-law WARNINGs above).
+   * - Each `de.*` field above falls back to the matching `de_*` extraFields
+   *   value on the entity's own DE tax registration when omitted.
    * - `peppol.selfBilling` (boolean, default false) — marks this as a
    *   self-billing document (the customer issues on the seller's behalf),
    *   switching to a self-billing CustomizationID/ProfileID and UNTDID
@@ -1081,7 +1126,15 @@ export interface AddRegistrationInput {
 export interface UpdateRegistrationInput {
   /** New registration/VAT number. Pass null or '' to clear it. Omit entirely to leave it unchanged. */
   taxNumber?: string | null;
-  /** Secondary identifiers to merge in, e.g. { fr_siret: '12345678901234' } — only the keys you pass are changed. */
+  /**
+   * Secondary identifiers to merge in, e.g. { fr_siret: '12345678901234' } or
+   * { de_handelsregisternummer: 'HRB 12345' } — only the keys you pass are
+   * changed. Germany (DE) accepts, in addition to `de_steuernummer`:
+   * `de_legal_form`, `de_registered_seat`, `de_handelsregisternummer`,
+   * `de_registergericht`, `de_geschaeftsfuehrer`, and `de_kleinunternehmer`
+   * ('true'/'false') — see `SubmitInvoiceInput.countrySpecific`'s `de.*`
+   * doc comments for what each one means and when it's enforced.
+   */
   extraFields?: Record<string, string>;
 }
 
