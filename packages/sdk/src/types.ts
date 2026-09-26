@@ -14,6 +14,8 @@ export interface Entity {
   mxIngestionMode?: 'sat_pull' | 'client_push';
   /** Mexico only. ISO date (YYYY-MM-DD), or null if unset. */
   mxIngestionStartDate?: string | null;
+  /** Facts about the entity itself (not any one country registration) — e.g. legalForm. See UpdateEntityInput.entityFacts. */
+  entityFacts?: Record<string, string>;
 }
 
 export interface CreateEntityInput {
@@ -44,6 +46,16 @@ export interface UpdateEntityInput {
   mxIngestionMode?: 'sat_pull' | 'client_push';
   /** Mexico only. ISO date (YYYY-MM-DD) or null — earliest CFDI issue date the SAT-pull poller's rolling lookback window considers. */
   mxIngestionStartDate?: string | null;
+  /**
+   * Facts about the entity itself (not any one country registration) — e.g.
+   * `{ legalForm: 'GMBH' }`. A MERGE, per key, same 3-state contract as
+   * UpdateRegistrationInput.extraFields: a string sets that key, an explicit
+   * null deletes it, an omitted key is left unchanged. legalForm gates
+   * whether Germany's Handelsregister disclosures (set via
+   * UpdateRegistrationInput.extraFields) are applicable — set it here, not
+   * on a registration, even for a German entity.
+   */
+  entityFacts?: Record<string, string | null>;
 }
 
 export interface InvoiceSubmitResponse {
@@ -325,11 +337,15 @@ export interface SubmitInvoiceInput {
    * - `de.invoiceFormat` — per-request override of ZUGFERD vs. XRECHNUNG.
    * - `de.leitwegId` — BT-10 German public-sector routing ID (XRechnung
    *   only); falls back to the top-level `buyerReference` when omitted.
-   * - `de.legalForm` — DE legal-form select vocabulary (e.g. GMBH, UG, AG,
-   *   SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER,
-   *   SOLE_TRADER, FOREIGN_BRANCH, OTHER; case-sensitive) — gates whether
-   *   the register-identity and managing-directors disclosure fields below
-   *   apply at all (invoice-content-field-registry).
+   * - `de.legalForm` — per-invoice override of the entity's own legal form
+   *   (DE legal-form select vocabulary, e.g. GMBH, UG, AG, SE, KGAA, EG,
+   *   GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER,
+   *   FOREIGN_BRANCH, OTHER; case-sensitive) — gates whether the
+   *   register-identity and managing-directors disclosure fields below
+   *   apply at all (invoice-content-field-registry). Defaults from the
+   *   entity's own stored `entityFacts.legalForm` (see
+   *   `UpdateEntityInput.entityFacts`) when omitted; rarely needed
+   *   per-invoice.
    * - `de.handelsregisternummer` — BT-30, HGB § 37a commercial-register
    *   number (e.g. "HRB 12345"). Required once `legalForm` is a
    *   Handelsregister-registered form; missing this/`registergericht`/
@@ -1131,11 +1147,13 @@ export interface UpdateRegistrationInput {
    * that key, an explicit `null` deletes it, an omitted key is left
    * unchanged — e.g. { fr_siret: '12345678901234' } or
    * { de_handelsregisternummer: 'HRB 12345' }. Germany (DE) accepts, in
-   * addition to `de_steuernummer`: `de_legal_form`, `de_registered_seat`,
+   * addition to `de_steuernummer`: `de_registered_seat`,
    * `de_handelsregisternummer`, `de_registergericht`, `de_geschaeftsfuehrer`,
    * and `de_kleinunternehmer` ('true'/'false') — see
    * `SubmitInvoiceInput.countrySpecific`'s `de.*` doc comments for what each
-   * one means and when it's enforced.
+   * one means and when it's enforced. Legal form is NOT here — it's an
+   * entity-level fact, not scoped to any one country registration; set it
+   * via `UpdateEntityInput.entityFacts.legalForm` instead.
    */
   extraFields?: Record<string, string | null>;
 }

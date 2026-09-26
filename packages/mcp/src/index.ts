@@ -668,7 +668,16 @@ const TOOLS = [
       'future threshold breach) — this satisfies the "add-registration" onboarding step without a ' +
       'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
       'Also handles notifyCustomerByDefault — see submit_invoice\'s notifyCustomer for what this controls. ' +
-      'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties.',
+      'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties. ' +
+      'entityFacts sets facts about the entity itself (not any one country registration) — e.g. legalForm, the ' +
+      'DE legal-form code (GMBH/UG/AG/SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/' +
+      'FOREIGN_BRANCH/OTHER — see get_entity_fact_definitions for the full option list), which gates whether ' +
+      'Germany\'s Handelsregister disclosures (Sitz/Handelsregisternummer/Registergericht/managing-director ' +
+      'names, set via update_registration\'s extraFields) are applicable. entityFacts is a MERGE, per key, same ' +
+      '3-state contract as update_registration\'s extraFields: a string sets that key, an explicit null deletes ' +
+      'it, an omitted key is left unchanged. Unlike a registration\'s extraFields, entityFacts applies to the ' +
+      'entity regardless of which country it\'s registered in — set legalForm here, not via ' +
+      'update_registration, even for a German entity.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -682,6 +691,7 @@ const TOOLS = [
         notifyCustomerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyCustomer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyCustomer override.' },
         mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
         mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
+        entityFacts: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Facts about the entity itself, e.g. { "legalForm": "GMBH" } — see get_entity_fact_definitions for the known keys. A string value sets that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['entityId'],
     },
@@ -1286,15 +1296,16 @@ const TOOLS = [
       'was wrong, missing, or a jurisdiction-specific secondary identifier needs to be added. ' +
       'Country/type cannot be changed this way. extraFields is a MERGE, not a replace, per key: a string value ' +
       'overwrites that key, an explicit null deletes it (e.g. clearing de_handelsregisternummer after changing ' +
-      'de_legal_form to one that no longer requires it), and an omitted key is left untouched. ' +
-      'Germany (DE) accepts, in addition to de_steuernummer: de_legal_form (a DE legal-form code, e.g. GMBH/UG/AG/' +
-      'SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/FOREIGN_BRANCH/OTHER), ' +
-      'de_registered_seat (Sitz — the city the company is legally seated in), de_handelsregisternummer (e.g. ' +
+      'the entity\'s legalForm — see update_entity\'s entityFacts — to one that no longer requires it), and an ' +
+      'omitted key is left untouched. Germany (DE) accepts, in addition to de_steuernummer: de_registered_seat ' +
+      '(Sitz — the city the company is legally seated in), de_handelsregisternummer (e.g. ' +
       '"HRB 12345"), de_registergericht (e.g. "Amtsgericht München"), de_geschaeftsfuehrer (managing-director/' +
       'board names, one per line), and de_kleinunternehmer ("true"/"false" — the §19 UStG small-business ' +
       'exemption flag). None of these are required to save the registration — they become required only at ' +
-      'send/validate time, once the legal form declared makes them applicable (e.g. de_handelsregisternummer/' +
-      'de_registergericht/de_registered_seat once a Handelsregister-registered legal form like GmbH is set).',
+      'send/validate time, once the entity\'s legalForm (set via update_entity, NOT here — legal form is an ' +
+      'entity-level fact, not scoped to any one country registration) makes them applicable (e.g. ' +
+      'de_handelsregisternummer/de_registergericht/de_registered_seat once a Handelsregister-registered legal ' +
+      'form like GmbH is set).',
     inputSchema: {
       type: 'object' as const,
       properties: {
