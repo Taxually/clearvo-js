@@ -366,7 +366,7 @@ const TOOLS = [
         },
         countrySpecific: {
           type: 'object',
-          description: 'Country-specific invoice fields.',
+          description: 'Country-specific invoice fields. A few country holds are not tied to a countrySpecific key at all: a Romanian documentType "debit_note" with no originalInvoiceRef fails with 422 RO_DEBIT_NOTE_MISSING_ORIGINAL_REF; a Jordanian documentType "credit_note" with no originalInvoiceRef.invoiceNumber fails with 422 MISSING_JO_CREDIT_NOTE_REFERENCE; Malaysia requires supplier.taxId (422 MY_SUPPLIER_TIN_REQUIRED if absent) and, for a B2B customer, customer.taxId (422 MY_CUSTOMER_TIN_REQUIRED if absent and not self-billing/B2C); an Egyptian line whose taxCategory can\'t resolve to a known ETA VAT subtype fails with 422 EG_TAX_SUBTYPE_UNRESOLVED naming lines[].taxCategory; Greece fails with 422 GR_LINE_TYPE_SUPPLY_TYPE_MISMATCH / GR_MIXED_LINE_TYPE / GR_EXEMPTION_CATEGORY_MISSING for internal goods/service and exemption-category inconsistencies; and every EN16931-shaped country (IT/PL/RO/GR/Peppol) shares a defense-in-depth 422 TAX_LINE_INCONSISTENT for an internally inconsistent (tax category, rate) pair.',
           properties: {
             es: {
               type: 'object',
@@ -395,7 +395,7 @@ const TOOLS = [
                 condicionIVAReceptorId: {
                   type: 'number',
                   enum: [1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16],
-                  description: 'ARCA\'s real customer VAT condition code (FEParamGetCondicionIvaReceptor, RG 5616/2024): 1=Responsable Inscripto, 4=IVA Sujeto Exento, 5=Consumidor Final (the default when omitted), 6=Responsable Monotributo, 7=Sujeto No Categorizado, 8=Proveedor del Exterior, 9=Cliente del Exterior, 10=IVA Liberado (Ley 19.640), 13=Monotributista Social, 15=IVA No Alcanzado, 16=Monotributo Trabajador Independiente Promovido. Falls back to this customer\'s stored default (set via create_customer/update_customer) when omitted, else 5. 8/9 (foreign recipient) fail with a hold error — this platform does not yet generate Factura E; pass countrySpecific.ar.cbteTipo explicitly to override.',
+                  description: 'ARCA\'s real customer VAT condition code (FEParamGetCondicionIvaReceptor, RG 5616/2024): 1=Responsable Inscripto, 4=IVA Sujeto Exento, 5=Consumidor Final (the default when omitted), 6=Responsable Monotributo, 7=Sujeto No Categorizado, 8=Proveedor del Exterior, 9=Cliente del Exterior, 10=IVA Liberado (Ley 19.640), 13=Monotributista Social, 15=IVA No Alcanzado, 16=Monotributo Trabajador Independiente Promovido. Falls back to this customer\'s stored default (set via create_customer/update_customer) when omitted, else 5. 8/9 (foreign recipient) with no countrySpecific.ar.cbteTipo override fail with 422 AR_FOREIGN_CUSTOMER_UNSUPPORTED — this platform does not yet generate Factura E (comprobante 19) automatically.',
                 },
                 cbteTipo: {
                   type: 'number',
@@ -426,7 +426,7 @@ const TOOLS = [
                 },
                 withholdingDetails: {
                   type: 'object',
-                  description: 'DatiRitenuta detail, required once withholding is true. Every line is marked Ritenuta=SI once this is set.',
+                  description: 'DatiRitenuta detail, required once withholding is true. Every line is marked Ritenuta=SI once this is set. A malformed type/rate/amount/paymentReason fails with 422 IT_WITHHOLDING_DETAILS_INVALID, naming the specific sub-field.',
                   properties: {
                     type: { type: 'string', enum: ['RT01', 'RT02', 'RT03', 'RT04', 'RT05', 'RT06'], description: 'TipoRitenuta — RT01 persone fisiche, RT02 persone giuridiche, RT03 INPS, RT04 ENASARCO, RT05 ENPAM, RT06 other.' },
                     rate: { type: 'number', description: 'AliquotaRitenuta — withholding rate percentage, e.g. 20.' },

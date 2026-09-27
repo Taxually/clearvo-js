@@ -343,13 +343,19 @@ export interface SubmitInvoiceInput {
    *   the API docs for the full code table. Falls back to the customer's
    *   stored default when omitted, else 5 (Consumidor Final).
    * - `ar.cbteTipo` (number) — override for the computed comprobante type;
-   *   normally derived from `ar.condicionIVAReceptorId`.
+   *   normally derived from `ar.condicionIVAReceptorId`. A foreign
+   *   `condicionIVAReceptorId` (8 Proveedor del Exterior / 9 Cliente del
+   *   Exterior) with no explicit `cbteTipo` override fails with 422
+   *   AR_FOREIGN_CUSTOMER_UNSUPPORTED (Factura E / comprobante 19 isn't
+   *   generated automatically yet).
    * - `it.esigibilitaIva` (`'I' | 'D' | 'S'`) — VAT exigibility
    *   (DatiRiepilogo/EsigibilitaIVA). Defaults to `'I'` (immediata).
    * - `it.withholding` (boolean) + `it.withholdingDetails` (`{ type:
    *   'RT01'..'RT06'; rate: number; amount: number; paymentReason: string
    *   }`) — DatiRitenuta. `withholding: true` with no `withholdingDetails`
-   *   fails with 422 IT_WITHHOLDING_DETAILS_MISSING.
+   *   fails with 422 IT_WITHHOLDING_DETAILS_MISSING; a supplied but
+   *   malformed type/rate/amount/paymentReason fails with 422
+   *   IT_WITHHOLDING_DETAILS_INVALID naming the specific sub-field.
    * - `it.stampDuty` (boolean) — emits DatiBollo (the flat marca da bollo
    *   for VAT-exempt invoices over €77.47).
    * - `it.cigCode` / `it.cupCode` (string) — DatiOrdineAcquisto CIG/CUP
@@ -378,6 +384,27 @@ export interface SubmitInvoiceInput {
    *   missing fails with 422 RO_BUCHAREST_SECTOR_REQUIRED. `supplierSector`
    *   falls back to the entity's stored RO registration profile field when
    *   omitted.
+   *
+   * A Romanian `documentType: 'debit_note'` with no `originalInvoiceRef`
+   * fails with 422 RO_DEBIT_NOTE_MISSING_ORIGINAL_REF. A Jordanian
+   * `documentType: 'credit_note'` with no `originalInvoiceRef.invoiceNumber`
+   * fails with 422 MISSING_JO_CREDIT_NOTE_REFERENCE. Malaysia requires
+   * `supplier.taxId` (422 MY_SUPPLIER_TIN_REQUIRED if absent) and, for a B2B
+   * customer, `customer.taxId` (422 MY_CUSTOMER_TIN_REQUIRED if absent and
+   * not self-billing/B2C). An Egyptian line whose taxCategory can't resolve
+   * to a known ETA VAT subtype fails with 422 EG_TAX_SUBTYPE_UNRESOLVED
+   * naming `lines[].taxCategory`. Greece additionally fails with 422
+   * GR_LINE_TYPE_SUPPLY_TYPE_MISMATCH when a line's own (optional,
+   * currently undocumented here) internal lineType classification
+   * genuinely disagrees with its resolved goods/service tax category, with
+   * 422 GR_MIXED_LINE_TYPE when a mixed-kind invoice has no single
+   * header-level invoiceType to describe it, or with 422
+   * GR_EXEMPTION_CATEGORY_MISSING when an exempt/zero-rated/reverse-charge
+   * line has no resolvable VAT exemption category. Across every
+   * EN16931-shaped country (IT/PL/RO/GR/Peppol), an internally
+   * inconsistent (tax category, rate) pair — not reachable via any
+   * documented field here, since tax-code resolution already holds this
+   * upstream — is the shared defense-in-depth 422 TAX_LINE_INCONSISTENT.
    */
   countrySpecific?: Record<string, unknown>;
   notifyCustomer?: boolean;
