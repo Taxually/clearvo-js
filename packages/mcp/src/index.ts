@@ -1477,7 +1477,8 @@ const TOOLS = [
       'physical-goods category that mistaxes an account whose catalogue is mostly one non-physical type ' +
       '(e.g. all SaaS). Ask what the account mostly sells and set it if there is a dominant type, before ' +
       'calling update_tax_settings with confirmed=true. Also returns confirmedAt — null means the user ' +
-      'has not yet explicitly reviewed these settings (a Getting Started step).',
+      'has not yet explicitly reviewed these settings (a Getting Started step). Also returns the AP ' +
+      '(purchase-side) settings apTolerance and apPoDisposition — see update_tax_settings for what each controls.',
     inputSchema: {
       type: 'object' as const,
       properties: {},
@@ -1500,6 +1501,12 @@ const TOOLS = [
         defaultPriceIncludesTax: { type: 'boolean', description: 'Whether prices sent to calculate_tax already include tax (true) or are tax-exclusive (false).' },
         defaultTaxCategorySlug: { type: ['string', 'null'], description: 'RECOMMENDED to set explicitly rather than leaving unset — the tax category applied when no product name/category is supplied on a line item. Unset silently falls back to a generic physical-goods category, which mistaxes a catalogue that is mostly one non-physical type (e.g. all SaaS). Pass null to clear it back to that fallback.' },
         usAddressPrecision: { type: 'string', enum: ['rooftop', 'zip'], description: "'rooftop' resolves the full street address for the most accurate US rate (recommended); 'zip' uses ZIP code only." },
+        apTolerance: {
+          type: ['object', 'null'],
+          description: 'Purchase-side (AP) vendor-charged-tax verification tolerance. Set to { absoluteAmount, percent } (both non-negative), or null to clear it back to the platform default (zero tolerance).',
+          properties: { absoluteAmount: { type: 'number' }, percent: { type: 'number' } },
+        },
+        apPoDisposition: { type: ['string', 'null'], enum: ['warn', 'hold', 'ignore', null], description: "How a purchase-order fact mismatch (poComparison) affects the AP decision outcome — 'warn' (default) surfaces it without blocking, 'hold' forces outcome HELD, 'ignore' skips PO comparison for outcome purposes. null clears it back to the platform default ('warn')." },
         confirmed: { type: 'boolean', description: 'Set true once the user has reviewed these settings — marks the onboarding step complete, independent of whether any value changed.' },
       },
     },
@@ -1905,6 +1912,12 @@ const TOOLS = [
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
+        trusted: { type: 'boolean', description: 'AP decision layer full override — every vendor-charged-tax verification for this supplier then resolves ACCEPTED_AS_CHARGED regardless of delta.' },
+        toleranceOverride: {
+          type: ['object', 'null'],
+          description: 'Per-supplier tolerance override for vendor-charged-tax verification, taking precedence over the entity\'s own default apTolerance. null clears it (falls through to the entity default again).',
+          properties: { absoluteAmount: { type: 'number' }, percent: { type: 'number' } },
+        },
         entityId: { type: 'string', description: 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['supplierId'],
@@ -2293,6 +2306,449 @@ const TOOLS = [
       },
     },
   },
+  // AP manual adjustments (lib/ap/manual-adjustments.ts on the backend) —
+  // propose/list/read-options only. There is no confirm/revert/reject tool,
+  // here or on the hosted connector: confirming is a dedicated, admin-only,
+  // dashboard-only action.
+  {
+    name: 'propose_manual_adjustment',
+    description:
+      'Propose a manual adjustment against an already-calculated transaction (lib/ap/manual-adjustments.ts) — always ' +
+      'creates a DRAFT; you can never confirm one (only a human dashboard admin can, via a separate, dedicated ' +
+      'permission — this tool has no confirm counterpart). Two modes: FORCED_INPUT (the default, preferred mode) ' +
+      're-runs the ORIGINAL calculation with one or more genuine input facts pinned — call ' +
+      'get_manual_adjustment_options first to see the exact closed set of pinnable properties for a header-level ' +
+      '(no targetLineId) vs. a line-level (targetLineId set) adjustment; anything outside that set (e.g. total_tax, ' +
+      'document_stage — a derived result or an identity/stage/direction column) is rejected 422. ' +
+      'POST_CALCULATION_OVERRIDE directly replaces one or more of the calculation\'s own result columns with a flat, ' +
+      'non-recalculated figure (e.g. an auditor\'s ruling) — narrower and requires documentUrl (upload one first via ' +
+      'the dashboard, or via a POST /tax-calculations/{id}/adjustment-documents call if you have one). ' +
+      'originalValue must capture what the engine actually computed for the field(s) you are changing, for audit ' +
+      'comparison. reason is mandatory. A target that already has legal effect (a terminal e-invoice, or a ' +
+      'Compliance Mandate resolution past PENDING/NEEDS_INFO/HELD_*) is refused 409 with availableActions pointing ' +
+      'at the corrections flow instead.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'The tax_calculations id this adjustment targets (or, with targetType set to a different value, still the id used to route the request — see targetId).' },
+        mode: { type: 'string', enum: ['FORCED_INPUT', 'POST_CALCULATION_OVERRIDE'] },
+        forcedInputs: { type: 'object', description: 'FORCED_INPUT only — {property: value}, keyed by catalog property name (e.g. taxCategory, customerType) — see get_manual_adjustment_options for the exact allowed set.' },
+        overrides: { type: 'object', description: 'POST_CALCULATION_OVERRIDE only — {column: value}, keyed by DB column name (e.g. total_tax, tax_code) — see get_manual_adjustment_options for the exact allowed set.' },
+        originalValue: { type: 'object', description: 'What the engine actually computed for the field(s) being changed — captured for audit comparison.' },
+        reason: { type: 'string', description: 'Mandatory — why this adjustment is being made.' },
+        documentUrl: { type: 'string', description: 'Supporting document URL — effectively required for POST_CALCULATION_OVERRIDE.' },
+        targetType: { type: 'string', enum: ['tax_calculation', 'tax_calculation_line', 'einvoicing_record'], description: 'Default tax_calculation.' },
+        targetId: { type: 'string', description: 'Overrides calculationId as the actual target id — only needed when targeting something other than the calculation named by calculationId.' },
+        targetLineId: { type: 'string', description: 'Set for a line-level FORCED_INPUT adjustment — the line\'s own wire id from the original calculate request.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['calculationId', 'mode', 'originalValue', 'reason'],
+    },
+  },
+  {
+    name: 'list_manual_adjustments',
+    description: 'List manual adjustments proposed against a tax calculation, newest first — optionally narrowed by status.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'The tax_calculations id to list adjustments for.' },
+        status: { type: 'string', enum: ['DRAFT', 'CONFIRMED', 'REJECTED', 'REVERTED'] },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['calculationId'],
+    },
+  },
+  {
+    name: 'get_manual_adjustment_options',
+    description: 'The backend-owned closed option lists for propose_manual_adjustment — modes, target types, and the exact set of catalog properties/columns a forcedInputs/overrides key may name. Call before propose_manual_adjustment rather than guessing a property name.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'Any tax_calculations id — the option lists are not target-specific today, but the endpoint is scoped under one for future narrowing.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['calculationId'],
+    },
+  },
+  // Rules engine (RE-4, docs/features/rules-engine/discovery.md) — MCP twins of
+  // GET /rules-engine/schema, GET/POST /rules-engine/rules, GET/PATCH
+  // /rules-engine/rules/{id}, POST .../activate, .../move, .../simulate,
+  // GET/POST /rules-engine/properties, GET /rules-engine/templates[/{id}], and
+  // POST /rules-engine/templates/{id}/instantiate. Every MCP-created rule
+  // starts DRAFT regardless (the route itself enforces this, not this tool
+  // layer) — an agent must always call activate_rule as a separate step.
+  {
+    name: 'get_rules_engine_schema',
+    description:
+      'Describe the rules-engine\'s own vocabulary: domains (ap/ar), recordTypes (calculation/purchase_order/invoice), ' +
+      'ruleKinds (NORMALIZATION/ENRICHMENT/ADJUSTMENT/WARNING/ERROR), statuses, operators, functions, and the closed ' +
+      'condition/action property catalog (each with its allowed operators, whether it is writable, and whether it is ' +
+      'tax-determinative). The `source` property is the platform-set transaction channel (which integration/UI produced ' +
+      'the record) — non-tax-determinative, read-only, and its own `coverage` map says which channel values are ' +
+      '"full" vs "partial" (a channel not yet populated everywhere). Call this before authoring any rule — a condition ' +
+      'or action naming a property/operator this schema does not list is rejected with a 422.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'list_rules',
+    description:
+      'List this key\'s own rules — an entity-scoped key sees its Entity-scope rules, an organisation-scoped key (no ' +
+      'x-entity-id) sees its Organisation-scope rules. Never the wider "effective set" a Global row would also ' +
+      'contribute at evaluation time — this is "rules I own/can edit", not a preview of what actually fires.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        domain: { type: 'string', enum: ['ap', 'ar'] },
+        recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'] },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'get_rule',
+    description: 'Read one rule by id, within this key\'s own scope. 404 if it does not exist or belongs to a different scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'list_rule_versions',
+    description: 'List a rule\'s own rules_versions history (newest first) — one snapshot per create/update. 404 if the rule does not exist or belongs to a different scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'create_rule',
+    description:
+      'Create a rule — always starts status=DRAFT (call activate_rule separately to make it fire). `code` is unique ' +
+      'per (domain, recordType, scope) — re-POSTing the same code+scope returns the EXISTING rule (200), not an error. ' +
+      'conditions is a flat, ANDed array of {property, operator, value?} (empty = always matches); actions is an array ' +
+      'of either {property, value} (a literal) or {property, fn, args?} (a closed function dispatch — call ' +
+      'get_rules_engine_schema first for the allowed property/operator/fn vocabulary). Simulate before activating: ' +
+      'call simulate_rule on the returned id to preview matchedCount/sample/conflicts over recent records.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        domain: { type: 'string', enum: ['ap', 'ar'] },
+        recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'], description: 'Default calculation.' },
+        ruleKind: { type: 'string', enum: ['NORMALIZATION', 'ENRICHMENT', 'ADJUSTMENT', 'WARNING', 'ERROR'] },
+        code: { type: 'string', description: 'Letters, numbers, underscore, dot, hyphen only.' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        legalBasisTag: { type: 'string', enum: ['LEGAL_MANDATE', 'BUSINESS_POLICY'], description: 'Default BUSINESS_POLICY.' },
+        sortOrder: { type: 'number' },
+        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+        actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
+        templateId: { type: 'string' },
+        effectiveFrom: { type: 'string', description: 'ISO datetime.' },
+        effectiveTo: { type: 'string', description: 'ISO datetime.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['domain', 'ruleKind', 'code', 'name'],
+    },
+  },
+  {
+    name: 'update_rule',
+    description:
+      'Edit a rule. `version` (optimistic concurrency — read it from get_rule/list_rules first) is REQUIRED; a stale ' +
+      'version returns 409 with the current version so you can reload and retry. status may only ever be set to ' +
+      '"ARCHIVED" here (a one-way, terminal retirement — there is no DELETE); reaching ACTIVE is only ever done via ' +
+      'activate_rule. `enabled` is the separate day-to-day on/off switch — an ACTIVE rule with enabled=false never fires.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string' },
+        version: { type: 'number' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        legalBasisTag: { type: 'string', enum: ['LEGAL_MANDATE', 'BUSINESS_POLICY'] },
+        sortOrder: { type: 'number' },
+        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+        actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
+        effectiveFrom: { type: 'string' },
+        effectiveTo: { type: 'string' },
+        enabled: { type: 'boolean' },
+        status: { type: 'string', enum: ['ARCHIVED'] },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'version'],
+    },
+  },
+  {
+    name: 'activate_rule',
+    description: 'Move a DRAFT rule to ACTIVE — the only path there. Idempotent if already ACTIVE; 409 if the rule is ARCHIVED.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'move_rule',
+    description: 'Reorder a rule within its own ruleKind by setting a new sortOrder (evaluation order is ruleKind, then sortOrder, then code).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string' }, sortOrder: { type: 'number' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id', 'sortOrder'],
+    },
+  },
+  {
+    name: 'simulate_rule',
+    description:
+      'Preview a rule over the last `sampleSize` of this key\'s own records (read-only, no write) BEFORE activating it — ' +
+      'returns { matchedCount, sample: [{recordId, before, after}] (up to 5), conflicts: [{ruleId, ruleCode, property}] } ' +
+      '(another ACTIVE rule that also fires on a sampled record and writes the same property — an ordering/overwrite ' +
+      'warning, not a hard error). Pass `id` to simulate an already-saved rule (optionally with `draft` to preview an ' +
+      'in-flight edit before saving it), or omit `id` and pass `draft` alone to preview a rule that does not exist yet.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'An existing rule id. Omit to simulate a draft that has never been saved (draft is then required).' },
+        sampleSize: { type: 'number', description: 'How many of the most recent records to sample against (1-500, default 50).' },
+        draft: {
+          type: 'object',
+          description: 'Required when id is omitted; optional override (of domain/recordType/ruleKind/conditions/actions) when id is present.',
+          properties: {
+            domain: { type: 'string', enum: ['ap', 'ar'] },
+            recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'] },
+            ruleKind: { type: 'string', enum: ['NORMALIZATION', 'ENRICHMENT', 'ADJUSTMENT', 'WARNING', 'ERROR'] },
+            conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+            actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
+          },
+        },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'get_rules_trace',
+    description:
+      'B6 — "What changed before calculation": the full rules-engine execution trace for one already-calculated record (a tax calculation, ' +
+      'purchase order, or send-path invoice), in firing order. Each entry carries a backend-composed plain-English sentence (e.g. "Tax category ' +
+      'changed from not set to Software services.") plus ruleKindLabel/scopeLabel — never a raw rule_kind/scope_level/property name. Never plan-gated: ' +
+      'readable regardless of which solutions this entity has enabled.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'] },
+        recordId: { type: 'string', description: 'The tax_calculations/einvoicing_records id (or purchase-order record id) to trace.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['recordType', 'recordId'],
+    },
+  },
+  {
+    name: 'list_platform_rule_changes',
+    description:
+      'B6 — recent Global (Clearvo default) or Tenant (this white-label platform\'s own default) rule changes that apply to this key\'s calculations ' +
+      '— never this key\'s OWN Entity/Organisation rules, which are its own edits, not a "platform" change. Visible even before a change\'s own ' +
+      'effectiveFrom date, so nothing about how your calculations work changes silently.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        limit: { type: 'number', description: 'Max rows to return (default 50, max 200).' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'list_rule_property_definitions',
+    description: 'List custom property definitions visible to this key — its own scope\'s definitions plus every platform (Global/system) one, e.g. the AP facts glAccount/costCenter/accountAssignment/intendedUse. A condition/action names one as "customProperties.<propertyKey>".',
+    inputSchema: { type: 'object' as const, properties: { entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } } },
+  },
+  {
+    name: 'create_rule_property_definition',
+    description: 'Define a new custom property (referenced by rules as "customProperties.<propertyKey>"). 409 if propertyKey already exists at this scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        propertyKey: { type: 'string', description: 'Must start with a letter; letters/numbers/underscore only.' },
+        label: { type: 'string' },
+        dataType: { type: 'string', enum: ['string', 'number', 'boolean'] },
+        appliesTo: { type: 'string', enum: ['line', 'header'], description: 'Default line.' },
+        isWritable: { type: 'boolean', description: 'Default true. false marks a derived-output fact no rule action may ever target.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['propertyKey', 'label', 'dataType'],
+    },
+  },
+  {
+    name: 'list_rule_templates',
+    description: 'List starter rule templates visible to this key (its own scope plus every platform template) — a template has a paramsSchema (get_rule_template for the detail) and is turned into a real rule via instantiate_rule_template.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        domain: { type: 'string', enum: ['ap', 'ar'] },
+        recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'] },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'get_rule_template',
+    description: 'Read one template\'s full detail, including its paramsSchema — the exact params instantiate_rule_template expects.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'instantiate_rule_template',
+    description: 'Turn a template into a real rule (always DRAFT) by supplying its params (validated against the template\'s own paramsSchema — call get_rule_template first). 422 with the failing params.<key> path on a missing/mistyped param.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The template id.' },
+        params: { type: 'object', description: 'Keyed by the template\'s own paramsSchema field names.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'params'],
+    },
+  },
+  // RE-8 (focus-eng-lead.md §K, §1.L.7; MH-SMB-4/5) — field-mapping config
+  // MCP twins. Requires an entity-scoped key or an explicit entityId
+  // (field mappings are inherently per-entity, §K.2 — there is no
+  // organisation-wide mapping set).
+  {
+    name: 'list_field_mappings',
+    description: 'List an entity\'s own field-mapping rows for one source system (e.g. "xero") — the mapping-config replacement for that integration\'s hand-written date/address/country normalization. Each row carries a backend-authored plain-English `sentence` and `isDefault` (false once a customer has edited it).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sourceSystem: { type: 'string', description: 'e.g. "xero".' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['sourceSystem'],
+    },
+  },
+  {
+    name: 'update_field_mapping',
+    description: 'Edit a field-mapping row\'s sourcePath/transform/enabled/sortOrder, or retire it (status: "ARCHIVED", the only status a PATCH may ever set). No optimistic-concurrency version on this resource.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string' },
+        sourcePath: { type: 'string' },
+        transform: { type: 'object', properties: { fn: { type: 'string' }, args: { type: 'object' } }, required: ['fn'] },
+        enabled: { type: 'boolean' },
+        sortOrder: { type: 'number' },
+        status: { type: 'string', enum: ['ARCHIVED'] },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'reset_field_mappings',
+    description: 'Discard every one of this entity\'s own edits for one source system and re-instantiate fresh copies of the current Global starter template ("Reset to defaults").',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sourceSystem: { type: 'string', description: 'e.g. "xero".' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['sourceSystem'],
+    },
+  },
+  // RE-5 (docs/features/rules-engine/discovery.md) — MCP twins of the
+  // reference-dataset ("vlookup") management routes. export is deliberately
+  // NOT exposed here: it returns text/csv, and callApi() (below) always
+  // parses the response as JSON — a raw CSV download is a poor fit for a
+  // JSON-RPC-shaped tool call anyway; use the SDK's exportRulesEngineDataset()
+  // or the public API directly for a file export.
+  {
+    name: 'list_rules_engine_datasets',
+    description: 'List this key\'s own scope tuple\'s reference datasets.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+    },
+  },
+  {
+    name: 'create_rules_engine_dataset',
+    description: 'Create a reference dataset (composite keys via keyColumns — e.g. ["glAccount","country"]).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        datasetKey: { type: 'string' },
+        name: { type: 'string' },
+        keyColumns: { type: 'array', items: { type: 'string' }, description: '1-10 column names forming this dataset\'s composite key.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['datasetKey', 'name', 'keyColumns'],
+    },
+  },
+  {
+    name: 'get_rules_engine_dataset',
+    description: 'One dataset\'s own metadata (key_columns, row_count).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'list_rules_engine_dataset_rows',
+    description: 'A page of a dataset\'s rows.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The dataset id.' },
+        page: { type: 'integer', description: 'Default 1.' },
+        limit: { type: 'integer', description: 'Default 50, max 500.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'upsert_rules_engine_dataset_row',
+    description: 'Upsert one row by the dataset\'s own key_columns (never a separate row id — the composite key IS the identity).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The dataset id.' },
+        rowData: { type: 'object', description: 'Must include a value for every one of the dataset\'s own key_columns.' },
+        source: { type: 'string', description: 'Citation — required for a Global row (focus-tax-sme.md §4.11).' },
+        verified: { type: 'boolean' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'rowData'],
+    },
+  },
+  {
+    name: 'delete_rules_engine_dataset_row',
+    description: 'Remove one row by its already-joined composite key string (the same value list_rules_engine_dataset_rows returns as each row\'s own rowKey).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The dataset id.' },
+        rowKey: { type: 'string' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'rowKey'],
+    },
+  },
+  {
+    name: 'import_rules_engine_dataset',
+    description: 'Two-phase CSV import. dryRun (default true) computes and returns {adds,changes,deletes} without writing anything; call again with dryRun:false to apply that same diff (recomputed fresh — never a stale snapshot).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The dataset id.' },
+        csv: { type: 'string', description: 'Raw CSV text — header row + data rows.' },
+        dryRun: { type: 'boolean', description: 'Default true.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'csv'],
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -2586,8 +3042,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/tax/settings');
 
     case 'update_tax_settings': {
-      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, confirmed } = args;
-      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, confirmed });
+      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, apTolerance, apPoDisposition, confirmed } = args;
+      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, apTolerance, apPoDisposition, confirmed });
     }
 
     case 'get_reporting_obligations':
@@ -2792,6 +3248,144 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (limit != null) qs.set('limit', String(limit));
       const q = qs.toString();
       return callApi('GET', `/send/bulk/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'propose_manual_adjustment': {
+      const { calculationId, entityId, ...body } = args as { calculationId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_manual_adjustments': {
+      const { calculationId, entityId, status } = args as { calculationId: string; entityId?: string; status?: string };
+      const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+      return callApi('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments${qs}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_manual_adjustment_options': {
+      const { calculationId, entityId } = args as { calculationId: string; entityId?: string };
+      return callApi('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustment-options`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_rules_engine_schema': {
+      return callApi('GET', '/rules-engine/schema');
+    }
+    case 'list_rules': {
+      const { entityId } = args as { entityId?: string };
+      const qs = new URLSearchParams();
+      for (const k of ['domain', 'recordType'] as const) {
+        if (args[k] !== undefined) qs.set(k, String(args[k]));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/rules-engine/rules${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_rule': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('GET', `/rules-engine/rules/${encodeURIComponent(id)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_rule_versions': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('GET', `/rules-engine/rules/${encodeURIComponent(id)}/versions`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'create_rule': {
+      const { entityId, ...body } = args as Record<string, unknown> & { entityId?: string };
+      return callApi('POST', '/rules-engine/rules', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'update_rule': {
+      const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
+      return callApi('PATCH', `/rules-engine/rules/${encodeURIComponent(id)}`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'activate_rule': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/activate`, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'move_rule': {
+      const { id, sortOrder, entityId } = args as { id: string; sortOrder: number; entityId?: string };
+      return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/move`, { sortOrder }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'simulate_rule': {
+      const { id, entityId, ...body } = args as Record<string, unknown> & { id?: string; entityId?: string };
+      const path = id ? `/rules-engine/rules/${encodeURIComponent(id)}/simulate` : '/rules-engine/rules/simulate';
+      return callApi('POST', path, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_rules_trace': {
+      const { recordType, recordId, entityId } = args as { recordType: string; recordId: string; entityId?: string };
+      const qs = new URLSearchParams({ recordType, recordId });
+      return callApi('GET', `/rules-engine/trace?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_platform_rule_changes': {
+      const { limit, entityId } = args as { limit?: number; entityId?: string };
+      const qs = limit ? `?${new URLSearchParams({ limit: String(limit) }).toString()}` : '';
+      return callApi('GET', `/rules-engine/platform-changes${qs}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_rule_property_definitions': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/rules-engine/properties', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'create_rule_property_definition': {
+      const { entityId, ...body } = args as Record<string, unknown> & { entityId?: string };
+      return callApi('POST', '/rules-engine/properties', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_rule_templates': {
+      const { entityId } = args as { entityId?: string };
+      const qs = new URLSearchParams();
+      for (const k of ['domain', 'recordType'] as const) {
+        if (args[k] !== undefined) qs.set(k, String(args[k]));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/rules-engine/templates${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_rule_template': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('GET', `/rules-engine/templates/${encodeURIComponent(id)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'instantiate_rule_template': {
+      const { id, params, entityId } = args as { id: string; params: Record<string, unknown>; entityId?: string };
+      return callApi('PUT', `/rules-engine/templates/${encodeURIComponent(id)}`, { params }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_field_mappings': {
+      const { sourceSystem, entityId } = args as { sourceSystem: string; entityId?: string };
+      const qs = new URLSearchParams({ sourceSystem });
+      return callApi('GET', `/rules-engine/mappings?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'update_field_mapping': {
+      const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
+      return callApi('PATCH', `/rules-engine/mappings/${encodeURIComponent(id)}`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'reset_field_mappings': {
+      const { sourceSystem, entityId } = args as { sourceSystem: string; entityId?: string };
+      const qs = new URLSearchParams({ sourceSystem });
+      return callApi('POST', `/rules-engine/mappings/reset?${qs.toString()}`, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_rules_engine_datasets': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/rules-engine/datasets', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'create_rules_engine_dataset': {
+      const { entityId, ...body } = args as Record<string, unknown> & { entityId?: string };
+      return callApi('POST', '/rules-engine/datasets', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_rules_engine_dataset': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('GET', `/rules-engine/datasets/${encodeURIComponent(id)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_rules_engine_dataset_rows': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      const qs = new URLSearchParams();
+      for (const k of ['page', 'limit'] as const) {
+        if (args[k] !== undefined) qs.set(k, String(args[k]));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/rules-engine/datasets/${encodeURIComponent(id)}/rows${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'upsert_rules_engine_dataset_row': {
+      const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
+      return callApi('POST', `/rules-engine/datasets/${encodeURIComponent(id)}/rows`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'delete_rules_engine_dataset_row': {
+      const { id, rowKey, entityId } = args as { id: string; rowKey: string; entityId?: string };
+      return callApi('DELETE', `/rules-engine/datasets/${encodeURIComponent(id)}/rows/${encodeURIComponent(rowKey)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'import_rules_engine_dataset': {
+      const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
+      return callApi('POST', `/rules-engine/datasets/${encodeURIComponent(id)}/import`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     default:

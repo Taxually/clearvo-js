@@ -1,6 +1,6 @@
 {
   "name": "@clearvo/mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "MCP server for Clearvo — submit invoices, calculate tax, validate tax numbers via Claude Code, Cursor, or any MCP-compatible AI tool",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,6 +16,7 @@
     "build:mcpb": "node scripts/build-mcpb.js",
     "test:mcpb": "node scripts/smoke-test-mcpb.js",
     "test:supplier-tools": "node scripts/verify-supplier-tools.js",
+    "test:rules-engine-tools": "node scripts/verify-rules-engine-tools.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch"
   },

@@ -621,9 +621,39 @@ export interface TaxCalculateRequest {
      * own `exemptionReason` field.
      */
     exemptionReason?: 'RESALE' | 'MANUFACTURING' | 'AGRICULTURAL' | 'ENERGY' | 'EXEMPT_ORG' | 'GOVERNMENT' | 'DIRECT_PAY' | 'BLANKET_OTHER';
+    /**
+     * Rules-engine (M.14/RE-6) — this line's own purchase-order header id,
+     * for `documentStage: 'invoice'` to link back against a previously
+     * calculated `documentStage: 'purchase_order'` line (see the response's
+     * `poLink`/`poComparison`). Ignored when `purchaseOrderId` is absent.
+     */
+    purchaseOrderId?: string;
+    /** Which PO line `poLink` resolves against, when the PO header may omit it. */
+    purchaseOrderLineNumber?: string;
+    /**
+     * Per-line custom facts a rules-engine condition/action can read/write
+     * as `customProperties.<key>` — e.g. glAccount, costCenter,
+     * commodityCode, accountAssignment, intendedUse (the AP buyer-side
+     * inputs). Call getRulePropertyDefinitions() for the closed set.
+     */
+    customProperties?: Record<string, string | number | boolean>;
   }>;
   vatValidation?: 'full' | 'format' | 'none';
   vatUnverifiableFallback?: 'conservative' | 'permissive';
+  /**
+   * Rules-engine (M.14/RE-6) — which stage of a purchase document this
+   * calculation represents. `'purchase_order'` binds `lineItems[].poLink`
+   * resolution and later invoice-stage `poComparison`; `'invoice'` is the
+   * ordinary default. Only meaningful on `transactionDirection: 'purchase'`.
+   */
+  documentStage?: 'purchase_order' | 'invoice';
+  /**
+   * Header-level custom facts a rules-engine condition/action can read/write
+   * as `customProperties.<key>` (call getRulePropertyDefinitions() for the
+   * closed set of keys visible to this key's own scope). Same contract as
+   * the per-line `customProperties` below.
+   */
+  customProperties?: Record<string, string | number | boolean>;
 }
 
 /**
@@ -768,7 +798,98 @@ export interface TaxCalculateResponse {
      * certificate match would instead attach to).
      */
     exemptionReason?: 'RESALE' | 'MANUFACTURING' | 'AGRICULTURAL' | 'ENERGY' | 'EXEMPT_ORG' | 'GOVERNMENT' | 'DIRECT_PAY' | 'BLANKET_OTHER';
+    /**
+     * `transactionDirection: 'purchase'` only — the vendor-charged-tax
+     * verification result for this line (AP decision layer, lib/ap/decision.ts
+     * on the backend). Always present alongside a supplied statedTaxAmount on
+     * a purchase line; absent for a 'sale' line and for a genuine
+     * border-paid-import line (see `reasonCode: 'IMPORT_TAX_PAID_AT_BORDER'`,
+     * served with `outcome: null`, for that distinction from "never checked").
+     */
+    taxVerification?: {
+      outcome: 'ACCEPTED_AS_CHARGED' | 'UNDERCHARGED' | 'OVERCHARGED' | 'HELD' | null;
+      reasonCode:
+        | 'WITHIN_TOLERANCE' | 'TRUSTED_SUPPLIER_OVERRIDE' | 'OVERCHARGE_EXCEEDS_TOLERANCE'
+        | 'UNDERCHARGE_EXCEEDS_TOLERANCE' | 'PO_DISPOSITION_HOLD' | 'REVERSE_CHARGE_VAT_WRONGLY_CHARGED'
+        | 'TAX_CHARGED_ON_ZERO_LIABILITY_LINE' | 'NO_TAX_DUE_NONE_CHARGED' | 'IMPORT_TAX_PAID_AT_BORDER';
+      /** statedTaxAmount - calculatedTaxAmount, rounded to 2dp. */
+      legalDelta: number;
+      /** 0 when outcome is ACCEPTED_AS_CHARGED; equal to legalDelta otherwise — the true remaining reportable exposure. */
+      appliedDelta: number;
+      /** Non-null only for a reverse-charge/PVA/exempt/zero-rated line. */
+      zeroLiabilityBasis: 'REVERSE_CHARGE' | 'PVA' | 'EXEMPT' | 'ZERO_RATED' | null;
+      /**
+       * The PO<->invoice fact-diff (M.14/RE-6) — present only when this
+       * line's `poLink` (below) resolved to `'LINKED'`. A plain fact-diff,
+       * never a tax-correctness verdict.
+       */
+      poComparison?: {
+        exceedsThreshold: boolean;
+        poTaxCode: string | null;
+        poRate: number | null;
+        poTaxAmount: number | null;
+        invoiceTaxCode: string;
+        invoiceRate: number;
+        invoiceTaxAmount: number;
+        taxAmountDelta: number | null;
+      };
+    };
+    /**
+     * `transactionDirection: 'purchase'` with `documentStage: 'invoice'`
+     * only — whether this line's own `purchaseOrderId`/`purchaseOrderLineNumber`
+     * resolved against a real, previously-calculated purchase_order-stage
+     * line. `'NONE'` when the line carried no `purchaseOrderId` at all.
+     */
+    poLink?: 'NONE' | 'NOT_FOUND' | 'LINKED';
+    /** This line's customProperties bag, post-rule (the effective values the engine actually used, echoing back any rule-authored writes). */
+    customProperties?: Record<string, string | number | boolean>;
   }>;
+  /**
+   * Rules-engine (docs/features/rules-engine/discovery.md's Resolved
+   * decisions #20/Q22) — every rule that fired on this calculation, in
+   * firing order, scope-reduced for the public API: a Global/Tenant
+   * (platform) row never carries its internal ruleId/code, only an
+   * Entity/Organisation row (your own rule) keeps `ruleCode`. Absent
+   * entirely (never an empty array) when no rule fired.
+   */
+  ruleLog?: Array<{
+    ruleKind: 'NORMALIZATION' | 'ENRICHMENT' | 'ADJUSTMENT' | 'WARNING' | 'ERROR';
+    /** Customer-facing group label, e.g. "Normalization". */
+    label: string;
+    /** Present only for an Entity-/Organisation-scoped rule (your own). */
+    ruleCode?: string;
+    property: string | null;
+    beforeValue: unknown;
+    afterValue: unknown;
+  }>;
+  /** true only when the full rule-log entry count exceeded the public-response cap (100) — absent (never false) otherwise. Call getRulesTrace() for the complete, uncapped trace. */
+  ruleLogTruncated?: true;
+  /**
+   * The actual header facts (post pre-calc-rules-pass) the engine resolved
+   * jurisdiction/rate/classification against — never your raw, pre-rules
+   * request. Lets you see what a NORMALIZATION/ENRICHMENT rule actually
+   * changed a header fact TO, complementing `ruleLog`'s "what changed".
+   */
+  effectiveInput?: {
+    country: string | null;
+    customerCountry: string | null;
+    supplierCountry: string | null;
+    customerType: string | null;
+    currency: string | null;
+  };
+  /**
+   * Every matched WARNING-kind rules-engine rule (pre- or post-calculation)
+   * — absent entirely (never an empty array) when none fired.
+   */
+  warnings?: Array<{ ruleCode: string; scopeLevel: string }>;
+  /**
+   * Present only on a calculation replayed by a CONFIRMED FORCED_INPUT
+   * manual adjustment (proposeManualAdjustment) — names the id of the
+   * superseding calculation; re-fetch/re-poll that id rather than trust this
+   * replayed figure. Absent on a fresh (non-replay) calculation and on a
+   * replay that hasn't been superseded.
+   */
+  supersededBy?: string;
   /**
    * Present when one or more inline `exempt: true` claims (with no matching
    * active ECM certificate) created new PENDING_CERTIFICATE
@@ -920,6 +1041,21 @@ export interface Supplier {
    * received inbound e-invoice's supplier details.
    */
   source?: SupplierSource;
+  /**
+   * AP decision layer full override (rules-engine B7) — when true, every
+   * vendor-charged-tax verification for this supplier resolves
+   * ACCEPTED_AS_CHARGED / TRUSTED_SUPPLIER_OVERRIDE regardless of delta,
+   * skipping tolerance comparison entirely. Set via updateSupplier(); never
+   * settable on createSupplier().
+   */
+  trusted?: boolean;
+  /**
+   * Per-supplier tolerance override for vendor-charged-tax verification —
+   * takes precedence over the entity's own default apTolerance (see
+   * getTaxSettings()/updateTaxSettings()). null means "no override, use the
+   * entity default".
+   */
+  toleranceOverride?: { absoluteAmount: number; percent: number } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -969,6 +1105,10 @@ export interface UpdateSupplierInput {
   city?: string | null;
   region?: string | null;
   postalCode?: string | null;
+  /** AP decision layer full override (lib/ap/decision.ts on the backend) — see Supplier.trusted. */
+  trusted?: boolean;
+  /** null clears it (falls through to the entity default again). See Supplier.toleranceOverride. */
+  toleranceOverride?: { absoluteAmount: number; percent: number } | null;
 }
 
 export interface ListSuppliersParams {
@@ -2204,6 +2344,634 @@ export interface FrInboundPollResponse {
   ok: boolean;
   results: FrInboundPollResult[];
   totalNewInvoices: number;
+}
+
+// ── Rules Engine (B7 propagation, docs/features/rules-engine/discovery.md) ──
+// SDK twins of every /v1/rules-engine/* operation (docs/openapi/rules-engine.yaml
+// on the backend) plus the AP manual-adjustments surface
+// (/v1/tax/calculate/{id}/adjustments, /adjustment-options). Scope (Entity vs
+// Organisation) is always derived server-side from the API key — never a
+// request field here.
+
+export type RuleDomain = 'ap' | 'ar';
+export type RuleRecordType = 'calculation' | 'purchase_order' | 'invoice';
+export type RuleKind = 'NORMALIZATION' | 'ENRICHMENT' | 'ADJUSTMENT' | 'WARNING' | 'ERROR';
+export type RuleStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
+export type RuleLegalBasisTag = 'LEGAL_MANDATE' | 'BUSINESS_POLICY';
+
+export interface RuleCondition {
+  property: string;
+  operator: string;
+  value?: unknown;
+}
+
+export interface RuleAction {
+  property: string;
+  /** A literal value to write. Mutually exclusive with `fn`. */
+  value?: unknown;
+  /** A closed function dispatch (see getRulesEngineSchema()'s `fns`). Mutually exclusive with `value`. */
+  fn?: string;
+  args?: Record<string, unknown>;
+}
+
+/** The one Rule shape returned by every rules-engine mutation/read — createRule/updateRule/activateRule/moveRule/getRule/each entry of listRules(). */
+export interface Rule {
+  id: string;
+  tenantId: string | null;
+  organisationId: string | null;
+  entityId: string | null;
+  domain: RuleDomain;
+  recordType: RuleRecordType;
+  ruleKind: RuleKind;
+  code: string;
+  name: string;
+  description: string | null;
+  status: RuleStatus;
+  enabled: boolean;
+  legalBasisTag: RuleLegalBasisTag;
+  sortOrder: number;
+  conditions: RuleCondition[];
+  actions: RuleAction[];
+  templateId: string | null;
+  isSystem: boolean;
+  version: number;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  /** A citation link (legal basis, internal policy doc, ticket) — never required. */
+  documentUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListRulesParams {
+  domain?: RuleDomain;
+  recordType?: RuleRecordType;
+  entityId?: string;
+}
+
+export interface ListRulesResponse {
+  ok: true;
+  rules: Rule[];
+}
+
+export interface GetRuleResponse {
+  ok: true;
+  rule: Rule;
+}
+
+export interface CreateRuleInput {
+  domain: RuleDomain;
+  /** Default 'calculation'. */
+  recordType?: RuleRecordType;
+  ruleKind: RuleKind;
+  /** Letters, numbers, underscore, dot, hyphen only. Unique per (domain, recordType, scope) — re-POSTing the same code+scope with a byte-identical body returns the EXISTING rule (200, created: false), not an error; a different body with the same code is a 409 RULE_CODE_EXISTS. */
+  code: string;
+  name: string;
+  description?: string;
+  /** Default 'BUSINESS_POLICY'. */
+  legalBasisTag?: RuleLegalBasisTag;
+  sortOrder?: number;
+  /** Flat, ANDed array — empty (or omitted) means "always matches". */
+  conditions?: RuleCondition[];
+  actions?: RuleAction[];
+  templateId?: string;
+  effectiveFrom?: string;
+  effectiveTo?: string;
+  entityId?: string;
+}
+
+export interface CreateRuleResponse {
+  ok: true;
+  rule: Rule;
+  /** false on the idempotent-replay 200 path (byte-identical re-POST of an existing code+scope). */
+  created?: boolean;
+}
+
+export interface UpdateRuleInput {
+  /** Optimistic concurrency — read from getRule()/listRules() first. A stale version returns a 409 ClearvoError naming the current version. */
+  version: number;
+  name?: string;
+  description?: string;
+  legalBasisTag?: RuleLegalBasisTag;
+  sortOrder?: number;
+  conditions?: RuleCondition[];
+  actions?: RuleAction[];
+  effectiveFrom?: string;
+  effectiveTo?: string;
+  enabled?: boolean;
+  /** The only status this may ever set — a one-way, terminal retirement. Reaching ACTIVE is only ever done via activateRule(). */
+  status?: 'ARCHIVED';
+  entityId?: string;
+}
+
+export interface RuleVersionSnapshot {
+  id: string;
+  ruleId: string;
+  version: number;
+  snapshot: Record<string, unknown>;
+  changedBy: string | null;
+  createdAt: string;
+}
+
+export interface ListRuleVersionsResponse {
+  ok: true;
+  versions: RuleVersionSnapshot[];
+}
+
+export interface SimulateSampleEntry {
+  recordId: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}
+
+export interface SimulateConflict {
+  ruleId: string;
+  ruleCode: string;
+  property: string;
+}
+
+export interface SimulateRuleDraft {
+  domain?: RuleDomain;
+  recordType?: RuleRecordType;
+  ruleKind?: RuleKind;
+  conditions?: RuleCondition[];
+  actions?: RuleAction[];
+}
+
+export interface SimulateRuleInput {
+  /** How many of the most recent records to sample against (1-500, default 50). */
+  sampleSize?: number;
+  /** Required when simulating a not-yet-saved rule (no ruleId in simulateRule's own argument); optional override when simulating an existing rule's in-flight edit. */
+  draft?: SimulateRuleDraft;
+  entityId?: string;
+}
+
+export interface SimulateRuleResponse {
+  ok: true;
+  matchedCount: number;
+  sampleSize: number;
+  sample: SimulateSampleEntry[];
+  conflicts: SimulateConflict[];
+}
+
+export interface RulePropertyDefinition {
+  id: string;
+  tenantId: string | null;
+  organisationId: string | null;
+  entityId: string | null;
+  /** The catalog path a condition/action actually names, e.g. "customProperties.glAccount". */
+  property: string;
+  propertyKey: string;
+  label: string;
+  dataType: 'string' | 'number' | 'boolean';
+  appliesTo: 'line' | 'header';
+  isWritable: boolean;
+  isSystem: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListRulePropertyDefinitionsResponse {
+  ok: true;
+  definitions: RulePropertyDefinition[];
+}
+
+export interface CreateRulePropertyDefinitionInput {
+  /** Must start with a letter; letters/numbers/underscore only. */
+  propertyKey: string;
+  label: string;
+  dataType: 'string' | 'number' | 'boolean';
+  /** Default 'line'. */
+  appliesTo?: 'line' | 'header';
+  /** Default true. false marks a derived-output fact no rule action may ever target. */
+  isWritable?: boolean;
+  entityId?: string;
+}
+
+export interface CreateRulePropertyDefinitionResponse {
+  ok: true;
+  definition: RulePropertyDefinition;
+}
+
+export type TemplateDisplayMode = 'settings_field' | 'add_row_table' | 'raw';
+export type TemplateCardinality = 'single' | 'many';
+
+export interface TemplateParamDto {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  options?: readonly string[];
+  helpText?: string;
+  suffix?: string;
+}
+
+export interface TemplateInstanceDto {
+  ruleId: string;
+  status: RuleStatus;
+  enabled: boolean;
+  params: Record<string, unknown>;
+  version: number;
+}
+
+export interface RuleTemplate {
+  id: string;
+  tenantId: string | null;
+  organisationId: string | null;
+  entityId: string | null;
+  domain: RuleDomain;
+  recordType: RuleRecordType;
+  templateKey: string;
+  name: string;
+  description: string | null;
+  displayMode: TemplateDisplayMode;
+  cardinality: TemplateCardinality;
+  surface: string | null;
+  params: TemplateParamDto[];
+  /** Only set for an 'add_row_table' template backed by a reference dataset (RE-5). */
+  dataset: { id: string; name: string; keyColumns: string[] } | null;
+  /** Every rule this scope already has for this template (0 for an unused 'many' template, 0 or 1 for 'single'). */
+  instances: TemplateInstanceDto[];
+  isSystem: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListRuleTemplatesParams {
+  domain?: RuleDomain;
+  recordType?: RuleRecordType;
+  entityId?: string;
+}
+
+export interface ListRuleTemplatesResponse {
+  ok: true;
+  templates: RuleTemplate[];
+}
+
+export interface GetRuleTemplateResponse {
+  ok: true;
+  template: RuleTemplate;
+}
+
+export interface InstantiateRuleTemplateInput {
+  /** Keyed by the template's own paramsSchema field names — call getRuleTemplate() first to discover them. */
+  params: Record<string, unknown>;
+  entityId?: string;
+}
+
+export interface InstantiateRuleTemplateResponse {
+  ok: true;
+  rule: Rule;
+  /** false when this call reused an existing 'single'-cardinality instance rather than creating a new rule. */
+  created: boolean;
+}
+
+export interface RulesEngineDataset {
+  id: string;
+  tenantId: string | null;
+  organisationId: string | null;
+  entityId: string | null;
+  datasetKey: string;
+  name: string;
+  keyColumns: string[];
+  rowCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListRulesEngineDatasetsResponse {
+  ok: true;
+  datasets: RulesEngineDataset[];
+}
+
+export interface CreateRulesEngineDatasetInput {
+  datasetKey: string;
+  name: string;
+  /** 1-10 column names forming this dataset's composite key. */
+  keyColumns: string[];
+  entityId?: string;
+}
+
+export interface CreateRulesEngineDatasetResponse {
+  ok: true;
+  dataset: RulesEngineDataset;
+  created: boolean;
+}
+
+export interface GetRulesEngineDatasetResponse {
+  ok: true;
+  dataset: RulesEngineDataset;
+}
+
+export interface DatasetRow {
+  id: string;
+  datasetId: string;
+  /** The already-joined composite key string — pass back to deleteRulesEngineDatasetRow(). */
+  rowKey: string;
+  rowData: Record<string, unknown>;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  /** Citation — required for a Global row. */
+  source: string | null;
+  verified: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListRulesEngineDatasetRowsParams {
+  /** Default 1. */
+  page?: number;
+  /** Default 50, max 500. */
+  limit?: number;
+  entityId?: string;
+}
+
+export interface ListRulesEngineDatasetRowsResponse {
+  ok: true;
+  rows: DatasetRow[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface UpsertRulesEngineDatasetRowInput {
+  /** Must include a value for every one of the dataset's own keyColumns. */
+  rowData: Record<string, unknown>;
+  source?: string;
+  verified?: boolean;
+  entityId?: string;
+}
+
+export interface UpsertRulesEngineDatasetRowResponse {
+  ok: true;
+  row: DatasetRow;
+  created: boolean;
+}
+
+export interface ImportRowDiff {
+  rowKey: string;
+  rowData: Record<string, unknown>;
+}
+
+export interface ImportRulesEngineDatasetInput {
+  /** Raw CSV text — header row + data rows. */
+  csv: string;
+  /** Default true — computes and returns the diff without writing anything. Call again with dryRun:false to apply that same diff (recomputed fresh, never a stale snapshot). */
+  dryRun?: boolean;
+  entityId?: string;
+}
+
+/** dryRun:true (or omitted) response — the computed diff, nothing written yet. */
+export interface ImportRulesEngineDatasetDryRunResponse {
+  ok: true;
+  dryRun: true;
+  adds: ImportRowDiff[];
+  changes: ImportRowDiff[];
+  deletes: ImportRowDiff[];
+}
+
+/** dryRun:false response — the diff has been applied. */
+export interface ImportRulesEngineDatasetAppliedResponse {
+  ok: true;
+  dryRun: false;
+  added: number;
+  changed: number;
+  deleted: number;
+}
+
+export type ImportRulesEngineDatasetResponse = ImportRulesEngineDatasetDryRunResponse | ImportRulesEngineDatasetAppliedResponse;
+
+export type MappingStatus = 'ACTIVE' | 'ARCHIVED';
+
+export interface FieldMappingTransform {
+  fn: string;
+  args?: Record<string, unknown>;
+}
+
+/** One field-mapping row — the mapping-config replacement for an integration's hand-written date/address/country normalization (e.g. source system "xero"). */
+export interface FieldMapping {
+  id: string;
+  tenantId: string | null;
+  organisationId: string | null;
+  entityId: string | null;
+  sourceSystem: string;
+  targetShape: string;
+  fieldPath: string;
+  sourcePath: string | null;
+  transform: FieldMappingTransform | null;
+  status: MappingStatus;
+  enabled: boolean;
+  /** false once a customer has edited it. */
+  isDefault: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Field mappings are inherently per-entity — entityId is required (either directly, or via an entity-scoped key). */
+export interface ListFieldMappingsParams {
+  /** e.g. "xero". */
+  sourceSystem: string;
+  entityId?: string;
+}
+
+export interface ListFieldMappingsResponse {
+  ok: true;
+  rules: FieldMapping[];
+}
+
+export interface UpdateFieldMappingInput {
+  sourcePath?: string;
+  transform?: FieldMappingTransform;
+  enabled?: boolean;
+  sortOrder?: number;
+  /** The only status a PATCH may ever set — retires the row. */
+  status?: 'ARCHIVED';
+  entityId?: string;
+}
+
+export interface GetFieldMappingResponse {
+  ok: true;
+  mapping: FieldMapping;
+}
+
+export interface UpdateFieldMappingResponse {
+  ok: true;
+  mapping: FieldMapping;
+}
+
+export interface ResetFieldMappingsResponse {
+  ok: true;
+  rules: FieldMapping[];
+}
+
+export interface RulesTraceEntry {
+  ruleId: string;
+  ruleCode: string;
+  ruleVersion: number;
+  ruleKind: RuleKind;
+  ruleKindLabel: string;
+  scopeLevel: string;
+  scopeLabel: string;
+  property: string | null;
+  propertyLabel: string | null;
+  beforeValue: unknown;
+  afterValue: unknown;
+  /** 'pre_calc' (this row shaped the calculation) or 'post_calc' (a read-only WARNING/ERROR observation). */
+  phase: string;
+  channel: string;
+  createdAt: string;
+  /** Backend-composed, customer-facing prose — never the raw property/kind names. */
+  sentence: string;
+  /** true when a more-specific same-code rule shadowed this one and its actions did NOT apply — the full trace still lists every shadowed row, explicitly marked. */
+  shadowed: boolean;
+}
+
+export interface GetRulesTraceParams {
+  recordType: RuleRecordType;
+  /** The tax_calculations/einvoicing_records id (or purchase-order record id) to trace. */
+  recordId: string;
+  entityId?: string;
+}
+
+export interface GetRulesTraceResponse {
+  ok: true;
+  recordType: string;
+  recordId: string;
+  entries: RulesTraceEntry[];
+}
+
+export interface PlatformRuleChange {
+  ruleId: string;
+  version: number;
+  code: string;
+  name: string;
+  domain: string;
+  recordType: RuleRecordType;
+  ruleKind: RuleKind;
+  ruleKindLabel: string;
+  /** Only 'global' or 'tenant' ever appears here. */
+  scopeLevel: 'global' | 'tenant';
+  scopeLabel: string;
+  effectiveFrom: string | null;
+  documentUrl: string | null;
+  changedAt: string;
+}
+
+export interface ListPlatformRuleChangesParams {
+  /** Default 50, max 200. */
+  limit?: number;
+  entityId?: string;
+}
+
+export interface ListPlatformRuleChangesResponse {
+  ok: true;
+  changes: PlatformRuleChange[];
+}
+
+/** getRulesEngineSchema()'s response — describe the rules-engine's own vocabulary. Call before authoring any rule. */
+export interface RulesEngineSchema {
+  ok: true;
+  schema: {
+    schemaVersion: string;
+    domains: readonly string[];
+    recordTypes: readonly string[];
+    evaluatedRecordTypesByDomain: Record<string, readonly string[]>;
+    ruleKinds: readonly string[];
+    statuses: readonly string[];
+    operators: readonly string[];
+    /** @deprecated use `fns` instead, which carries `simulatesOutcome` per entry. */
+    functions: readonly string[];
+    fns: Array<{ fn: string; simulatesOutcome: boolean; [key: string]: unknown }>;
+    properties: Array<{
+      property: string;
+      type: string;
+      operators: readonly string[];
+      writable: boolean;
+      taxDeterminative: boolean;
+      [key: string]: unknown;
+    }>;
+    source: {
+      values: readonly string[];
+      labels: Record<string, string>;
+      /** A channel not yet populated everywhere is 'partial'. */
+      coverage: Record<string, 'full' | 'partial'>;
+    };
+  };
+}
+
+// ── AP manual adjustments (lib/ap/manual-adjustments.ts on the backend) ────
+// Propose/list/read-options only — there is no SDK method (or MCP tool) to
+// confirm/revert/reject: confirming is a dedicated, admin-only, dashboard-
+// only action.
+
+export type ManualAdjustmentMode = 'FORCED_INPUT' | 'POST_CALCULATION_OVERRIDE';
+export type ManualAdjustmentTargetType = 'tax_calculation' | 'tax_calculation_line' | 'einvoicing_record';
+export type ManualAdjustmentStatus = 'DRAFT' | 'CONFIRMED' | 'REJECTED' | 'REVERTED';
+
+export interface ProposeManualAdjustmentInput {
+  /** FORCED_INPUT only — {property: value}, keyed by catalog property name (e.g. taxCategory, customerType). See getManualAdjustmentOptions() for the exact allowed set. */
+  forcedInputs?: Record<string, unknown>;
+  /** POST_CALCULATION_OVERRIDE only — {column: value}, keyed by DB column name (e.g. total_tax, tax_code). See getManualAdjustmentOptions() for the exact allowed set. */
+  overrides?: Record<string, unknown>;
+  mode: ManualAdjustmentMode;
+  /** What the engine actually computed for the field(s) being changed — captured for audit comparison. */
+  originalValue: Record<string, unknown>;
+  /** Mandatory — why this adjustment is being made. */
+  reason: string;
+  /** Effectively required for POST_CALCULATION_OVERRIDE. */
+  documentUrl?: string;
+  /** Default 'tax_calculation'. */
+  targetType?: ManualAdjustmentTargetType;
+  /** Overrides the calculationId path segment as the actual target id — only needed when targeting something other than the calculation itself. */
+  targetId?: string;
+  /** Set for a line-level FORCED_INPUT adjustment — the line's own wire id from the original calculateTax() request. */
+  targetLineId?: string;
+  entityId?: string;
+}
+
+export interface ProposeManualAdjustmentResponse {
+  ok: true;
+  adjustmentId: string;
+}
+
+export interface ManualAdjustment {
+  id: string;
+  entityId: string;
+  targetType: ManualAdjustmentTargetType;
+  targetId: string;
+  targetLineId: string | null;
+  mode: ManualAdjustmentMode;
+  forcedInputs: Record<string, unknown> | null;
+  overrides: Record<string, unknown> | null;
+  originalValue: Record<string, unknown>;
+  resultingRecordId: string | null;
+  status: ManualAdjustmentStatus;
+  reason: string | null;
+  documentUrl: string | null;
+  createdBy: string | null;
+  confirmedBy: string | null;
+  confirmedAt: string | null;
+  revertedBy: string | null;
+  revertedAt: string | null;
+  rejectedBy: string | null;
+  rejectedAt: string | null;
+}
+
+export interface ListManualAdjustmentsResponse {
+  ok?: true;
+  adjustments: ManualAdjustment[];
+}
+
+/** The backend-owned closed option lists for proposeManualAdjustment() — call before proposing rather than guessing a property name. */
+export interface ManualAdjustmentOptions {
+  modes: ManualAdjustmentMode[];
+  targetTypes: ManualAdjustmentTargetType[];
+  forcedInputProperties: {
+    header: string[];
+    line: string[];
+  };
+  overrideColumns: string[];
 }
 
 export class ClearvoError extends Error {

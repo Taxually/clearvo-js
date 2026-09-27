@@ -84,6 +84,49 @@ import type {
   GetBulkUploadStatusResponse,
   ListBulkUploadErrorsParams,
   ListBulkUploadErrorsResponse,
+  ListRulesParams,
+  ListRulesResponse,
+  GetRuleResponse,
+  CreateRuleInput,
+  CreateRuleResponse,
+  UpdateRuleInput,
+  ListRuleVersionsResponse,
+  SimulateRuleInput,
+  SimulateRuleResponse,
+  ListRulePropertyDefinitionsResponse,
+  CreateRulePropertyDefinitionInput,
+  CreateRulePropertyDefinitionResponse,
+  ListRuleTemplatesParams,
+  ListRuleTemplatesResponse,
+  GetRuleTemplateResponse,
+  InstantiateRuleTemplateInput,
+  InstantiateRuleTemplateResponse,
+  ListRulesEngineDatasetsResponse,
+  CreateRulesEngineDatasetInput,
+  CreateRulesEngineDatasetResponse,
+  GetRulesEngineDatasetResponse,
+  ListRulesEngineDatasetRowsParams,
+  ListRulesEngineDatasetRowsResponse,
+  UpsertRulesEngineDatasetRowInput,
+  UpsertRulesEngineDatasetRowResponse,
+  ImportRulesEngineDatasetInput,
+  ImportRulesEngineDatasetResponse,
+  ListFieldMappingsParams,
+  ListFieldMappingsResponse,
+  GetFieldMappingResponse,
+  UpdateFieldMappingInput,
+  UpdateFieldMappingResponse,
+  ResetFieldMappingsResponse,
+  GetRulesTraceParams,
+  GetRulesTraceResponse,
+  ListPlatformRuleChangesParams,
+  ListPlatformRuleChangesResponse,
+  RulesEngineSchema,
+  ProposeManualAdjustmentInput,
+  ProposeManualAdjustmentResponse,
+  ListManualAdjustmentsResponse,
+  ManualAdjustmentStatus,
+  ManualAdjustmentOptions,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -691,5 +734,212 @@ export class ClearvoClient {
 
   pollFrInbound(entityId?: string): Promise<FrInboundPollResponse> {
     return this.request('POST', '/fr/inbound/poll', {}, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Rules Engine (B7 propagation) ─────────────────────────────────────────
+  // SDK twins of every /v1/rules-engine/* operation. Scope (Entity vs
+  // Organisation) is always derived server-side from the API key.
+
+  /** Describe the rules-engine's own vocabulary — call before authoring any rule. */
+  getRulesEngineSchema(): Promise<RulesEngineSchema> {
+    return this.request('GET', '/rules-engine/schema');
+  }
+
+  /** This key's own rules — never the wider "effective set" a Global row would also contribute at evaluation time. */
+  listRules(params: ListRulesParams = {}): Promise<ListRulesResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/rules-engine/rules${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  getRule(ruleId: string, entityId?: string): Promise<GetRuleResponse> {
+    return this.request('GET', `/rules-engine/rules/${encodeURIComponent(ruleId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Always starts status=DRAFT — call activateRule() separately to make it fire. */
+  createRule(input: CreateRuleInput): Promise<CreateRuleResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/rules-engine/rules', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** `version` is required (optimistic concurrency) — read it from getRule()/listRules() first. */
+  updateRule(ruleId: string, input: UpdateRuleInput): Promise<GetRuleResponse> {
+    const { entityId, ...body } = input;
+    return this.request('PATCH', `/rules-engine/rules/${encodeURIComponent(ruleId)}`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Move a DRAFT rule to ACTIVE — the only path there. Idempotent if already ACTIVE. */
+  activateRule(ruleId: string, entityId?: string): Promise<GetRuleResponse> {
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/activate`, {}, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Reorder a rule within its own ruleKind by setting a new sortOrder. */
+  moveRule(ruleId: string, sortOrder: number, entityId?: string): Promise<GetRuleResponse> {
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/move`, { sortOrder }, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** A rule's own rules_versions history, newest first. */
+  listRuleVersions(ruleId: string, entityId?: string): Promise<ListRuleVersionsResponse> {
+    return this.request('GET', `/rules-engine/rules/${encodeURIComponent(ruleId)}/versions`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Preview an already-saved rule over its own key's recent records — read-only, no write. */
+  simulateRule(ruleId: string, input: SimulateRuleInput = {}): Promise<SimulateRuleResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/simulate`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Preview a rule that has never been saved — `draft` is required. */
+  simulateDraftRule(input: SimulateRuleInput & { draft: NonNullable<SimulateRuleInput['draft']> }): Promise<SimulateRuleResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/rules-engine/rules/simulate', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Custom property definitions visible to this key — its own scope plus every platform (Global/system) one. */
+  listRulePropertyDefinitions(entityId?: string): Promise<ListRulePropertyDefinitionsResponse> {
+    return this.request('GET', '/rules-engine/properties', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  createRulePropertyDefinition(input: CreateRulePropertyDefinitionInput): Promise<CreateRulePropertyDefinitionResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/rules-engine/properties', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Starter rule templates visible to this key. */
+  listRuleTemplates(params: ListRuleTemplatesParams = {}): Promise<ListRuleTemplatesResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/rules-engine/templates${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** One template's full detail, including its paramsSchema. */
+  getRuleTemplate(templateId: string, entityId?: string): Promise<GetRuleTemplateResponse> {
+    return this.request('GET', `/rules-engine/templates/${encodeURIComponent(templateId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn a template into a real rule (always DRAFT) — call getRuleTemplate() first to see the exact params expected. */
+  instantiateRuleTemplate(templateId: string, input: InstantiateRuleTemplateInput): Promise<InstantiateRuleTemplateResponse> {
+    const { entityId, params } = input;
+    return this.request('PUT', `/rules-engine/templates/${encodeURIComponent(templateId)}`, { params }, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** This key's own scope tuple's reference datasets. */
+  listRulesEngineDatasets(entityId?: string): Promise<ListRulesEngineDatasetsResponse> {
+    return this.request('GET', '/rules-engine/datasets', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Create a reference dataset — composite keys via keyColumns (e.g. ["glAccount", "country"]). */
+  createRulesEngineDataset(input: CreateRulesEngineDatasetInput): Promise<CreateRulesEngineDatasetResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/rules-engine/datasets', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  getRulesEngineDataset(datasetId: string, entityId?: string): Promise<GetRulesEngineDatasetResponse> {
+    return this.request('GET', `/rules-engine/datasets/${encodeURIComponent(datasetId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  listRulesEngineDatasetRows(datasetId: string, params: ListRulesEngineDatasetRowsParams = {}): Promise<ListRulesEngineDatasetRowsResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/rules-engine/datasets/${encodeURIComponent(datasetId)}/rows${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Upsert one row by the dataset's own key_columns — never a separate row id. */
+  upsertRulesEngineDatasetRow(datasetId: string, input: UpsertRulesEngineDatasetRowInput): Promise<UpsertRulesEngineDatasetRowResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', `/rules-engine/datasets/${encodeURIComponent(datasetId)}/rows`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Remove one row by its already-joined composite key string (each row's own `rowKey`). */
+  deleteRulesEngineDatasetRow(datasetId: string, rowKey: string, entityId?: string): Promise<{ ok: boolean }> {
+    return this.request('DELETE', `/rules-engine/datasets/${encodeURIComponent(datasetId)}/rows/${encodeURIComponent(rowKey)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Two-phase CSV import — dryRun (default true) computes and returns the diff without writing; call again with dryRun:false to apply that same diff. */
+  importRulesEngineDataset(datasetId: string, input: ImportRulesEngineDatasetInput): Promise<ImportRulesEngineDatasetResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', `/rules-engine/datasets/${encodeURIComponent(datasetId)}/import`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Raw CSV export of a dataset's rows — text/csv, not JSON. */
+  async exportRulesEngineDataset(datasetId: string, entityId?: string): Promise<string> {
+    const headers: Record<string, string> = { 'x-api-key': this.apiKey, ...(entityId ? { 'x-entity-id': entityId } : {}) };
+    const response = await fetch(`${this.baseUrl}/rules-engine/datasets/${encodeURIComponent(datasetId)}/export`, { method: 'GET', headers });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ClearvoError(response.status, String(data.error ?? `HTTP ${response.status}`));
+    }
+    return response.text();
+  }
+
+  /** An entity's own field-mapping rows for one source system (e.g. "xero") — the mapping-config replacement for that integration's hand-written normalization. */
+  listFieldMappings(params: ListFieldMappingsParams): Promise<ListFieldMappingsResponse> {
+    const { entityId, sourceSystem } = params;
+    const qs = new URLSearchParams({ sourceSystem });
+    return this.request('GET', `/rules-engine/mappings?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  getFieldMapping(mappingId: string, entityId?: string): Promise<GetFieldMappingResponse> {
+    return this.request('GET', `/rules-engine/mappings/${encodeURIComponent(mappingId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Edit a field-mapping row, or retire it (status: 'ARCHIVED', the only status a PATCH may ever set). */
+  updateFieldMapping(mappingId: string, input: UpdateFieldMappingInput): Promise<UpdateFieldMappingResponse> {
+    const { entityId, ...body } = input;
+    return this.request('PATCH', `/rules-engine/mappings/${encodeURIComponent(mappingId)}`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Discard every one of this entity's own edits for one source system and re-instantiate fresh copies of the current Global starter template. */
+  resetFieldMappings(sourceSystem: string, entityId?: string): Promise<ResetFieldMappingsResponse> {
+    const qs = new URLSearchParams({ sourceSystem });
+    return this.request('POST', `/rules-engine/mappings/reset?${qs.toString()}`, {}, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** B6 — the full rules-engine execution trace for one already-calculated record, in firing order. Never plan-gated. */
+  getRulesTrace(params: GetRulesTraceParams): Promise<GetRulesTraceResponse> {
+    const { entityId, recordType, recordId } = params;
+    const qs = new URLSearchParams({ recordType, recordId });
+    return this.request('GET', `/rules-engine/trace?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** B6 — recent Global/Tenant rule changes that apply to this key's calculations. Visible even before a change's own effectiveFrom date. */
+  listPlatformRuleChanges(params: ListPlatformRuleChangesParams = {}): Promise<ListPlatformRuleChangesResponse> {
+    const { entityId, limit } = params;
+    const qs = limit != null ? `?${new URLSearchParams({ limit: String(limit) }).toString()}` : '';
+    return this.request('GET', `/rules-engine/platform-changes${qs}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── AP manual adjustments ─────────────────────────────────────────────────
+  // Propose/list/read-options only — confirming is a dedicated, admin-only,
+  // dashboard-only action with no SDK method.
+
+  /** Propose a manual adjustment against an already-calculated transaction — always creates a DRAFT. Call getManualAdjustmentOptions() first for the exact allowed forcedInputs/overrides keys. */
+  proposeManualAdjustment(calculationId: string, input: ProposeManualAdjustmentInput): Promise<ProposeManualAdjustmentResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Manual adjustments proposed against a tax calculation, newest first. */
+  listManualAdjustments(calculationId: string, params: { status?: ManualAdjustmentStatus; entityId?: string } = {}): Promise<ListManualAdjustmentsResponse> {
+    const { entityId, status } = params;
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    return this.request('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments${qs}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** The backend-owned closed option lists for proposeManualAdjustment() — call before proposing rather than guessing a property name. */
+  getManualAdjustmentOptions(calculationId: string, entityId?: string): Promise<ManualAdjustmentOptions> {
+    return this.request('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustment-options`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 }

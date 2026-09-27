@@ -67,7 +67,7 @@ export function createProgram(): Command {
   const program = new Command()
     .name('clearvo')
     .description('Clearvo CLI — submit invoices, calculate tax, validate tax numbers')
-    .version('0.2.0');
+    .version('0.3.0');
   
   // ── clearvo send <file> ───────────────────────────────────────────────────────
   // Hard cut: there is no `taxCode` field anywhere in the request — not on a
@@ -532,6 +532,9 @@ export function createProgram(): Command {
     .option('--city <city>', 'Updated city')
     .option('--region <region>', 'Updated state/region/province')
     .option('--postal-code <code>', 'Updated postal code')
+    .option('--trusted', 'AP decision layer full override — every vendor-charged-tax verification for this supplier then resolves ACCEPTED_AS_CHARGED regardless of delta')
+    .option('--not-trusted', 'Clear the trusted override (set trusted=false)')
+    .option('--tolerance-override <json>', 'JSON {absoluteAmount, percent}, or the literal string "null" to clear it back to the entity default')
     .option('--entity <entityId>', 'Entity the supplier belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
@@ -545,10 +548,13 @@ export function createProgram(): Command {
       city?: string;
       region?: string;
       postalCode?: string;
+      trusted?: boolean;
+      notTrusted?: boolean;
+      toleranceOverride?: string;
       entity?: string;
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = {};
+      const body: Record<string, unknown> = {};
       if (opts.name) body.name = opts.name;
       if (opts.country) body.country = opts.country;
       if (opts.taxId) body.taxId = opts.taxId;
@@ -559,6 +565,11 @@ export function createProgram(): Command {
       if (opts.city) body.city = opts.city;
       if (opts.region) body.region = opts.region;
       if (opts.postalCode) body.postalCode = opts.postalCode;
+      if (opts.trusted) body.trusted = true;
+      if (opts.notTrusted) body.trusted = false;
+      if (opts.toleranceOverride !== undefined) {
+        body.toleranceOverride = opts.toleranceOverride === 'null' ? null : parseJsonOption('--tolerance-override', opts.toleranceOverride);
+      }
       const result = await api('PATCH', `/suppliers/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
@@ -1147,6 +1158,521 @@ export function createProgram(): Command {
       const result = await api('POST', '/query', body);
       print(result, !!opts.pretty);
     });
+
+  // ── clearvo rules (B7 propagation, docs/features/rules-engine/discovery.md) ──
+  // CLI twins of every /v1/rules-engine/* operation. Scope (Entity vs
+  // Organisation) is always derived server-side from the API key.
+
+  function parseJsonOption(flag: string, raw: string): unknown {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      console.error(`Error: ${flag} must be valid JSON`);
+      process.exit(1);
+    }
+  }
+
+  const rules = program.command('rules').description('Manage rules-engine rules — schema, CRUD, activate/move/simulate, versions, trace, platform changes');
+
+  rules
+    .command('schema')
+    .description('Describe the rules-engine\'s own vocabulary (domains, recordTypes, ruleKinds, operators, functions, the property catalog) — call before authoring any rule')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      const result = await api('GET', '/rules-engine/schema');
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('list')
+    .description('List this key\'s own rules — never the wider "effective set" a Global row would also contribute at evaluation time')
+    .option('--domain <domain>', 'ap or ar')
+    .option('--record-type <type>', 'calculation, purchase_order, or invoice')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { domain?: string; recordType?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.domain) qs.set('domain', opts.domain);
+      if (opts.recordType) qs.set('recordType', opts.recordType);
+      const q = qs.toString();
+      const result = await api('GET', `/rules-engine/rules${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('get <id>')
+    .description('Read one rule by id, within this key\'s own scope')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/rules-engine/rules/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('create')
+    .description('Create a rule — always starts DRAFT (call `rules activate` separately to make it fire). --conditions/--actions are JSON arrays — call `rules schema` first for the allowed property/operator/fn vocabulary')
+    .requiredOption('--domain <domain>', 'ap or ar')
+    .option('--record-type <type>', 'calculation, purchase_order, or invoice — default calculation')
+    .requiredOption('--rule-kind <kind>', 'NORMALIZATION, ENRICHMENT, ADJUSTMENT, WARNING, or ERROR')
+    .requiredOption('--code <code>', 'Letters, numbers, underscore, dot, hyphen only. Unique per (domain, recordType, scope) — re-creating the same code+scope with a byte-identical body returns the existing rule, not an error')
+    .requiredOption('--name <name>', 'Rule name')
+    .option('--description <text>', 'Rule description')
+    .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY — default BUSINESS_POLICY')
+    .option('--sort-order <n>', 'Evaluation order within this ruleKind')
+    .option('--conditions <json>', 'JSON array of {property, operator, value?} — flat, ANDed. Omit or [] to always match', '[]')
+    .option('--actions <json>', 'JSON array of {property, value} (literal) or {property, fn, args?} (function dispatch)', '[]')
+    .option('--template-id <id>', 'Originating template id, if any')
+    .option('--effective-from <iso>', 'ISO datetime')
+    .option('--effective-to <iso>', 'ISO datetime')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: {
+      domain: string; recordType?: string; ruleKind: string; code: string; name: string; description?: string;
+      legalBasisTag?: string; sortOrder?: string; conditions: string; actions: string; templateId?: string;
+      effectiveFrom?: string; effectiveTo?: string; entity?: string; pretty?: boolean;
+    }) => {
+      const body: Record<string, unknown> = {
+        domain: opts.domain, ruleKind: opts.ruleKind, code: opts.code, name: opts.name,
+        conditions: parseJsonOption('--conditions', opts.conditions),
+        actions: parseJsonOption('--actions', opts.actions),
+      };
+      if (opts.recordType) body.recordType = opts.recordType;
+      if (opts.description) body.description = opts.description;
+      if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
+      if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.templateId) body.templateId = opts.templateId;
+      if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
+      if (opts.effectiveTo) body.effectiveTo = opts.effectiveTo;
+      const result = await api('POST', '/rules-engine/rules', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('update <id>')
+    .description('Edit a rule. --version (optimistic concurrency — read it from `rules get`/`rules list` first) is REQUIRED')
+    .requiredOption('--version <n>', 'Current version — a stale version returns 409 with the current one so you can reload and retry')
+    .option('--name <name>')
+    .option('--description <text>')
+    .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY')
+    .option('--sort-order <n>')
+    .option('--conditions <json>', 'JSON array replacing the rule\'s own conditions')
+    .option('--actions <json>', 'JSON array replacing the rule\'s own actions')
+    .option('--effective-from <iso>')
+    .option('--effective-to <iso>')
+    .option('--enabled', 'Set enabled=true')
+    .option('--disabled', 'Set enabled=false')
+    .option('--archive', 'Set status=ARCHIVED — a one-way, terminal retirement; there is no DELETE. Reaching ACTIVE is only ever done via `rules activate`')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: {
+      version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string;
+      conditions?: string; actions?: string; effectiveFrom?: string; effectiveTo?: string;
+      enabled?: boolean; disabled?: boolean; archive?: boolean; entity?: string; pretty?: boolean;
+    }) => {
+      const body: Record<string, unknown> = { version: Number(opts.version) };
+      if (opts.name) body.name = opts.name;
+      if (opts.description) body.description = opts.description;
+      if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
+      if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.conditions) body.conditions = parseJsonOption('--conditions', opts.conditions);
+      if (opts.actions) body.actions = parseJsonOption('--actions', opts.actions);
+      if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
+      if (opts.effectiveTo) body.effectiveTo = opts.effectiveTo;
+      if (opts.enabled) body.enabled = true;
+      if (opts.disabled) body.enabled = false;
+      if (opts.archive) body.status = 'ARCHIVED';
+      const result = await api('PATCH', `/rules-engine/rules/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('activate <id>')
+    .description('Move a DRAFT rule to ACTIVE — the only path there. Idempotent if already ACTIVE; 409 if ARCHIVED')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('POST', `/rules-engine/rules/${encodeURIComponent(id)}/activate`, {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('move <id>')
+    .description('Reorder a rule within its own ruleKind by setting a new sortOrder')
+    .requiredOption('--sort-order <n>', 'New sort order')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { sortOrder: string; entity?: string; pretty?: boolean }) => {
+      const result = await api('POST', `/rules-engine/rules/${encodeURIComponent(id)}/move`, { sortOrder: Number(opts.sortOrder) }, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('versions <id>')
+    .description('List a rule\'s own rules_versions history, newest first')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/rules-engine/rules/${encodeURIComponent(id)}/versions`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('simulate [id]')
+    .description('Preview a rule over recent records (read-only, no write) BEFORE activating it. Pass an existing rule id, or omit it and pass --draft alone to preview a rule that does not exist yet')
+    .option('--sample-size <n>', 'How many of the most recent records to sample against (1-500, default 50)')
+    .option('--draft <json>', 'Required when id is omitted; optional override (domain/recordType/ruleKind/conditions/actions) when id is present')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string | undefined, opts: { sampleSize?: string; draft?: string; entity?: string; pretty?: boolean }) => {
+      if (!id && !opts.draft) {
+        console.error('Error: pass an existing rule id, or --draft when previewing a rule that does not exist yet');
+        process.exit(1);
+      }
+      const body: Record<string, unknown> = {};
+      if (opts.sampleSize) body.sampleSize = Number(opts.sampleSize);
+      if (opts.draft) body.draft = parseJsonOption('--draft', opts.draft);
+      const path = id ? `/rules-engine/rules/${encodeURIComponent(id)}/simulate` : '/rules-engine/rules/simulate';
+      const result = await api('POST', path, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('trace')
+    .description('B6 — the full rules-engine execution trace for one already-calculated record, in firing order. Never plan-gated')
+    .requiredOption('--record-type <type>', 'calculation, purchase_order, or invoice')
+    .requiredOption('--record-id <id>', 'The tax_calculations/einvoicing_records id (or purchase-order record id) to trace')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { recordType: string; recordId: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams({ recordType: opts.recordType, recordId: opts.recordId });
+      const result = await api('GET', `/rules-engine/trace?${qs.toString()}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('platform-changes')
+    .description('B6 — recent Global/Tenant rule changes that apply to this key\'s calculations. Visible even before a change\'s own effectiveFrom date')
+    .option('--limit <n>', 'Max rows to return (default 50, max 200)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { limit?: string; entity?: string; pretty?: boolean }) => {
+      const qs = opts.limit ? `?${new URLSearchParams({ limit: opts.limit }).toString()}` : '';
+      const result = await api('GET', `/rules-engine/platform-changes${qs}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo rules properties ──────────────────────────────────────────────
+  const ruleProperties = rules.command('properties').description('Custom rule-property definitions (customProperties.<key>)');
+
+  ruleProperties
+    .command('list')
+    .description('List custom property definitions visible to this key — its own scope plus every platform (Global/system) one')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/rules-engine/properties', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleProperties
+    .command('create')
+    .description('Define a new custom property, referenced by rules as "customProperties.<propertyKey>". 409 if propertyKey already exists at this scope')
+    .requiredOption('--property-key <key>', 'Must start with a letter; letters/numbers/underscore only')
+    .requiredOption('--label <label>')
+    .requiredOption('--data-type <type>', 'string, number, or boolean')
+    .option('--applies-to <target>', 'line or header — default line')
+    .option('--not-writable', 'Mark a derived-output fact no rule action may ever target (default writable)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { propertyKey: string; label: string; dataType: string; appliesTo?: string; notWritable?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { propertyKey: opts.propertyKey, label: opts.label, dataType: opts.dataType };
+      if (opts.appliesTo) body.appliesTo = opts.appliesTo;
+      if (opts.notWritable) body.isWritable = false;
+      const result = await api('POST', '/rules-engine/properties', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo rules templates ───────────────────────────────────────────────
+  const ruleTemplates = rules.command('templates').description('Starter rule templates');
+
+  ruleTemplates
+    .command('list')
+    .description('List starter rule templates visible to this key')
+    .option('--domain <domain>', 'ap or ar')
+    .option('--record-type <type>', 'calculation, purchase_order, or invoice')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { domain?: string; recordType?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.domain) qs.set('domain', opts.domain);
+      if (opts.recordType) qs.set('recordType', opts.recordType);
+      const q = qs.toString();
+      const result = await api('GET', `/rules-engine/templates${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleTemplates
+    .command('get <id>')
+    .description('Read one template\'s full detail, including its paramsSchema — the exact params `templates instantiate` expects')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/rules-engine/templates/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleTemplates
+    .command('instantiate <id>')
+    .description('Turn a template into a real rule (always DRAFT) — call `templates get` first to see the exact params expected')
+    .requiredOption('--params <json>', 'JSON object keyed by the template\'s own paramsSchema field names')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { params: string; entity?: string; pretty?: boolean }) => {
+      const result = await api('PUT', `/rules-engine/templates/${encodeURIComponent(id)}`, { params: parseJsonOption('--params', opts.params) }, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo rules datasets ────────────────────────────────────────────────
+  const ruleDatasets = rules.command('datasets').description('Reference datasets ("vlookups")');
+
+  ruleDatasets
+    .command('list')
+    .description('This key\'s own scope tuple\'s reference datasets')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/rules-engine/datasets', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleDatasets
+    .command('create')
+    .description('Create a reference dataset')
+    .requiredOption('--dataset-key <key>')
+    .requiredOption('--name <name>')
+    .requiredOption('--key-columns <csv>', 'Comma-separated column names forming this dataset\'s composite key (1-10), e.g. "glAccount,country"')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { datasetKey: string; name: string; keyColumns: string; entity?: string; pretty?: boolean }) => {
+      const body = { datasetKey: opts.datasetKey, name: opts.name, keyColumns: opts.keyColumns.split(',').map(s => s.trim()) };
+      const result = await api('POST', '/rules-engine/datasets', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleDatasets
+    .command('get <id>')
+    .description('One dataset\'s own metadata (keyColumns, rowCount)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/rules-engine/datasets/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleDatasets
+    .command('export <id>')
+    .description('Raw CSV export of a dataset\'s rows — printed as text, not JSON')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .action(async (id: string, opts: { entity?: string }) => {
+      // Not routed through api() — that helper always parses the response as JSON, and this
+      // route responds text/csv (same reason the hosted MCP connector never exposes an
+      // export_rules_engine_dataset tool at all — see this file's own `rules` header comment).
+      const res = await fetch(`${getBaseUrl()}/rules-engine/datasets/${encodeURIComponent(id)}/export`, {
+        method: 'GET',
+        headers: { 'x-api-key': getApiKey(), ...(opts.entity ? { 'x-entity-id': opts.entity } : {}) },
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        console.error(`HTTP ${res.status}: ${text}`);
+        process.exit(1);
+      }
+      console.log(text);
+    });
+
+  ruleDatasets
+    .command('import <id>')
+    .description('Two-phase CSV import from a file. dryRun (default) computes and returns {adds,changes,deletes} without writing anything; pass --apply to write that same diff (recomputed fresh, never a stale snapshot)')
+    .requiredOption('--file <path>', 'Path to a CSV file — header row + data rows')
+    .option('--apply', 'Actually write the diff (default: dry-run only)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { file: string; apply?: boolean; entity?: string; pretty?: boolean }) => {
+      const csv = readFileSync(opts.file, 'utf8');
+      const body = { csv, dryRun: !opts.apply };
+      const result = await api('POST', `/rules-engine/datasets/${encodeURIComponent(id)}/import`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  const ruleDatasetRows = ruleDatasets.command('rows').description('A dataset\'s own rows');
+
+  ruleDatasetRows
+    .command('list <id>')
+    .description('A page of a dataset\'s rows')
+    .option('--page <n>', 'Default 1')
+    .option('--limit <n>', 'Default 50, max 500')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { page?: string; limit?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.page) qs.set('page', opts.page);
+      if (opts.limit) qs.set('limit', opts.limit);
+      const q = qs.toString();
+      const result = await api('GET', `/rules-engine/datasets/${encodeURIComponent(id)}/rows${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleDatasetRows
+    .command('upsert <id>')
+    .description('Upsert one row by the dataset\'s own key_columns (never a separate row id — the composite key IS the identity)')
+    .requiredOption('--row-data <json>', 'JSON object — must include a value for every one of the dataset\'s own key_columns')
+    .option('--source <text>', 'Citation — required for a Global row')
+    .option('--verified', 'Mark this row verified')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { rowData: string; source?: string; verified?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { rowData: parseJsonOption('--row-data', opts.rowData) };
+      if (opts.source) body.source = opts.source;
+      if (opts.verified) body.verified = true;
+      const result = await api('POST', `/rules-engine/datasets/${encodeURIComponent(id)}/rows`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleDatasetRows
+    .command('delete <id> <rowKey>')
+    .description('Remove one row by its already-joined composite key string (each row\'s own rowKey, from `rows list`)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, rowKey: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('DELETE', `/rules-engine/datasets/${encodeURIComponent(id)}/rows/${encodeURIComponent(rowKey)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo rules mappings ────────────────────────────────────────────────
+  // Field mappings are inherently per-entity — entityId is required (directly, or via an entity-scoped key).
+  const ruleMappings = rules.command('mappings').description('Field mappings — the mapping-config replacement for an integration\'s hand-written normalization');
+
+  ruleMappings
+    .command('list')
+    .description('An entity\'s own field-mapping rows for one source system (e.g. "xero")')
+    .requiredOption('--source-system <system>', 'e.g. "xero"')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { sourceSystem: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams({ sourceSystem: opts.sourceSystem });
+      const result = await api('GET', `/rules-engine/mappings?${qs.toString()}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleMappings
+    .command('get <id>')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/rules-engine/mappings/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleMappings
+    .command('update <id>')
+    .description('Edit a field-mapping row, or retire it with --archive (the only status a PATCH may ever set). No optimistic-concurrency version on this resource')
+    .option('--source-path <path>')
+    .option('--transform <json>', 'JSON object {fn, args?}')
+    .option('--enabled', 'Set enabled=true')
+    .option('--disabled', 'Set enabled=false')
+    .option('--sort-order <n>')
+    .option('--archive', 'Set status=ARCHIVED')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { sourcePath?: string; transform?: string; enabled?: boolean; disabled?: boolean; sortOrder?: string; archive?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.sourcePath) body.sourcePath = opts.sourcePath;
+      if (opts.transform) body.transform = parseJsonOption('--transform', opts.transform);
+      if (opts.enabled) body.enabled = true;
+      if (opts.disabled) body.enabled = false;
+      if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.archive) body.status = 'ARCHIVED';
+      const result = await api('PATCH', `/rules-engine/mappings/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleMappings
+    .command('reset')
+    .description('Discard every one of this entity\'s own edits for one source system and re-instantiate fresh copies of the current Global starter template ("Reset to defaults")')
+    .requiredOption('--source-system <system>', 'e.g. "xero"')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { sourceSystem: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams({ sourceSystem: opts.sourceSystem });
+      const result = await api('POST', `/rules-engine/mappings/reset?${qs.toString()}`, {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo adjustments (AP manual adjustments, lib/ap/manual-adjustments.ts) ──
+  // Propose/list/read-options only — there is no `adjustments confirm/revert/
+  // reject` command: confirming is a dedicated, admin-only, dashboard-only action.
+  const adjustments = program.command('adjustments').description('Propose/list manual adjustments against an already-calculated transaction');
+
+  adjustments
+    .command('propose <calculationId>')
+    .description(
+      'Propose a manual adjustment — always creates a DRAFT; there is no way to confirm one here (dashboard-admin-only, ' +
+      'via a separate permission). FORCED_INPUT (default, preferred) re-runs the original calculation with genuine ' +
+      'input facts pinned; POST_CALCULATION_OVERRIDE directly replaces result columns (requires --document-url). ' +
+      'Run `adjustments options` first to see the exact allowed forcedInputs/overrides keys.'
+    )
+    .requiredOption('--mode <mode>', 'FORCED_INPUT or POST_CALCULATION_OVERRIDE')
+    .requiredOption('--original-value <json>', 'JSON object — what the engine actually computed for the field(s) being changed, for audit comparison')
+    .requiredOption('--reason <text>', 'Mandatory — why this adjustment is being made')
+    .option('--forced-inputs <json>', 'FORCED_INPUT only — JSON object {property: value}')
+    .option('--overrides <json>', 'POST_CALCULATION_OVERRIDE only — JSON object {column: value}')
+    .option('--document-url <url>', 'Supporting document URL — effectively required for POST_CALCULATION_OVERRIDE')
+    .option('--target-type <type>', 'tax_calculation, tax_calculation_line, or einvoicing_record — default tax_calculation')
+    .option('--target-id <id>', 'Overrides calculationId as the actual target id')
+    .option('--target-line-id <id>', 'Set for a line-level FORCED_INPUT adjustment')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (calculationId: string, opts: {
+      mode: string; originalValue: string; reason: string; forcedInputs?: string; overrides?: string;
+      documentUrl?: string; targetType?: string; targetId?: string; targetLineId?: string; entity?: string; pretty?: boolean;
+    }) => {
+      const body: Record<string, unknown> = {
+        mode: opts.mode,
+        originalValue: parseJsonOption('--original-value', opts.originalValue),
+        reason: opts.reason,
+      };
+      if (opts.forcedInputs) body.forcedInputs = parseJsonOption('--forced-inputs', opts.forcedInputs);
+      if (opts.overrides) body.overrides = parseJsonOption('--overrides', opts.overrides);
+      if (opts.documentUrl) body.documentUrl = opts.documentUrl;
+      if (opts.targetType) body.targetType = opts.targetType;
+      if (opts.targetId) body.targetId = opts.targetId;
+      if (opts.targetLineId) body.targetLineId = opts.targetLineId;
+      const result = await api('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  adjustments
+    .command('list <calculationId>')
+    .description('List manual adjustments proposed against a tax calculation, newest first')
+    .option('--status <status>', 'DRAFT, CONFIRMED, REJECTED, or REVERTED')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (calculationId: string, opts: { status?: string; entity?: string; pretty?: boolean }) => {
+      const qs = opts.status ? `?status=${encodeURIComponent(opts.status)}` : '';
+      const result = await api('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments${qs}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  adjustments
+    .command('options <calculationId>')
+    .description('The backend-owned closed option lists for `adjustments propose` — modes, target types, and the exact set of catalog properties/columns a --forced-inputs/--overrides key may name')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (calculationId: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustment-options`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   return program;
 }
 
