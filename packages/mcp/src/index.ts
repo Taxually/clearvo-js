@@ -1208,6 +1208,9 @@ const TOOLS = [
       'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
       'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
       '(the Spain SII reporting-batch reminder ladder for es_sii batch_auto/batch_review — payload carries batchId, book, recordCount, reportBy, daysOverdue; submissionId is the batch UUID), ' +
+      'ap.decision (rules-engine B7 — a purchase calculation\'s ACCEPTED_AS_CHARGED/OVERCHARGED/UNDERCHARGED/HELD outcome; filtered so a clean, in-tolerance ACCEPTED_AS_CHARGED with no warning never fires — payload carries outcome, reasonCode, legalDelta, appliedDelta), ' +
+      'manual_adjustment.proposed / manual_adjustment.confirmed / manual_adjustment.reverted / manual_adjustment.rejected ' +
+      '(rules-engine B7 — a FORCED_INPUT or POST_CALCULATION_OVERRIDE manual adjustment\'s lifecycle; see propose_manual_adjustment), ' +
       '* (all events).',
     inputSchema: {
       type: 'object' as const,
@@ -1216,7 +1219,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder',
+          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected',
         },
       },
       required: ['url'],
