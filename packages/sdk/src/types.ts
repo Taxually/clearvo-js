@@ -688,6 +688,8 @@ export interface ListInvoicesParams {
   status?: string;
   /** ISO 8601 timestamp — only invoices whose Clearvo-side created_at is strictly after this. A monotonic ingestion cursor, distinct from issueDate; most relevant for Mexico CFDIs given SAT's own multi-day publishing lag. */
   receivedAfter?: string;
+  /** Brazil only — filter by the national document-family discriminator: 'nfe' (goods, Distribuição DFe/SEFAZ) or 'nfse' (services, the national NFS-e/ADN environment). Matches nothing for a non-Brazil invoice (the field is always null there). An unrecognised value is rejected with 400. */
+  documentFamily?: 'nfe' | 'nfse';
 }
 
 /** `validation` block of a received document: what was checked and what was found. It never says a document is valid or approved. */
@@ -3113,7 +3115,15 @@ export type BusinessStatus =
   /** Brazil: "I don't recognize this transaction" — rejectionDetail is forbidden (SEFAZ's own event schema has no field for one). */
   | 'DESCONHECIMENTO'
   /** Brazil only, never a valid PATCH target: the day-90 deemed-acceptance presumption SEFAZ's own statutory silence writes, not a customer request. Readable on GET, listed here only so a caller checking `=== 'PRESUMIDA'` type-checks. */
-  | 'PRESUMIDA';
+  | 'PRESUMIDA'
+  /** Brazil NFS-e (services invoices, documentFamily 'nfse') only: confirm the service was received (Confirmação do Tomador). Genuinely distinct vocabulary from NF-e's own CIENCIA/CONFIRMACAO above — see documentFamily on the invoice. */
+  | 'CONFIRMACAO_TOMADOR'
+  /** Brazil NFS-e only: reject the invoice (Rejeição do Tomador) — rejectionDetail.reason is required, a closed six-code enum ('1'..'5','9'; '9' = "Other", requires rejectionDetail.message 15-255 characters). */
+  | 'REJEICAO_TOMADOR'
+  /** Brazil NFS-e only, never a valid PATCH target: the município de incidência's own tacit-confirmation event (Confirmação Tácita) — Clearvo never computes this on a timer, it is only ever synced from the ADN's own event stream. Readable on GET. */
+  | 'CONFIRMACAO_TACITA'
+  /** Brazil NFS-e only, never a valid PATCH target: the município de incidência annulling an existing REJEICAO_TOMADOR (Anulação da Rejeição), reopening the note to a fresh Confirmação/Rejeição. Readable on GET. */
+  | 'REJEICAO_ANULADA';
 
 /** The shared, regime-agnostic bucket every registered regime's native BusinessStatus value maps onto. */
 export type CanonicalBusinessStatus = 'RECEIVED' | 'ACKNOWLEDGED' | 'ACCEPTED' | 'DISPUTED';
@@ -3123,8 +3133,10 @@ export interface UpdateBusinessStatusInput {
   id: string;
   status: BusinessStatus;
   /** Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), or
-   *  OPERACAO_NAO_REALIZADA (Brazil — message required, 15–255 characters; reason accepted but never
-   *  required). Forbidden for Brazil's DESCONHECIMENTO. Also accepted as a bare string (treated as message). */
+   *  OPERACAO_NAO_REALIZADA (Brazil NF-e — message required, 15–255 characters; reason accepted but never
+   *  required). Forbidden for Brazil's DESCONHECIMENTO. For Brazil NFS-e's REJEICAO_TOMADOR, `reason` carries
+   *  the closed cMotivo code ('1'..'5','9') and `message` carries the optional (mandatory for '9', 15–255
+   *  characters) free-text xMotivo. Also accepted as a bare string (treated as message). */
   rejectionDetail?: { reason?: string; message?: string } | string;
   /** Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;

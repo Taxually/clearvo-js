@@ -319,10 +319,10 @@ export function createProgram(): Command {
   // side's response syncs automatically once they act on their own side.
   program
     .command('business-status <id>')
-    .description('Record a customer-lifecycle status decision on a received (inbound) invoice — FR/DE or Brazil (Manifestação do Destinatário)')
-    .requiredOption('--status <status>', 'FR/DE: IN_HAND | APPROVED | PARTIALLY_APPROVED | DISPUTED | SUSPENDED | REFUSED | COMPLETED | PAYMENT_SENT | PAYMENT_RECEIVED. Brazil: CIENCIA | CONFIRMACAO | OPERACAO_NAO_REALIZADA | DESCONHECIMENTO.')
-    .option('--reason <reason>', 'Short machine-usable reason code (FR/DE). Required when --status is DISPUTED, REFUSED, or SUSPENDED.')
-    .option('--message <message>', 'Human-readable detail — optional alongside --reason for FR/DE, required (15-255 characters) for Brazil\'s OPERACAO_NAO_REALIZADA, and forbidden for DESCONHECIMENTO. Can be passed without --reason.')
+    .description('Record a customer-lifecycle status decision on a received (inbound) invoice — FR/DE, or Brazil NF-e/NFS-e (Manifestação do Destinatário)')
+    .requiredOption('--status <status>', 'FR/DE: IN_HAND | APPROVED | PARTIALLY_APPROVED | DISPUTED | SUSPENDED | REFUSED | COMPLETED | PAYMENT_SENT | PAYMENT_RECEIVED. Brazil NF-e (goods): CIENCIA | CONFIRMACAO | OPERACAO_NAO_REALIZADA | DESCONHECIMENTO. Brazil NFS-e (services): CONFIRMACAO_TOMADOR | REJEICAO_TOMADOR.')
+    .option('--reason <reason>', 'Short machine-usable reason code (FR/DE), or Brazil NFS-e\'s closed cMotivo code (\'1\'..\'5\',\'9\') — required for REJEICAO_TOMADOR.')
+    .option('--message <message>', 'Human-readable detail — optional alongside --reason for FR/DE, required (15-255 characters) for Brazil NF-e\'s OPERACAO_NAO_REALIZADA and Brazil NFS-e\'s cMotivo=\'9\' ("Other"), and forbidden for Brazil NF-e\'s DESCONHECIMENTO. Can be passed without --reason.')
     .option('--entity <entityId>', 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { status: string; reason?: string; message?: string; entity?: string; pretty?: boolean }) => {
@@ -1054,7 +1054,7 @@ export function createProgram(): Command {
   // POST /v1/br/inbound/poll, GET /v1/br/sync-status, PATCH /v1/br/settings).
   // Mirrors the `fr` namespace's shape. Only A1 (PKCS#12) e-CNPJ certificates
   // are supported — A3 has no headless path and is refused server-side.
-  const br = program.command('br').description('Brazil NF-e receiving onboarding/status');
+  const br = program.command('br').description('Brazil e-invoice receiving onboarding/status — NF-e (goods) and NFS-e (services)');
   const brCredentials = br.command('credentials').description('Manage the entity\'s e-CNPJ A1 certificate for Distribuição DFe');
 
   brCredentials
@@ -1088,36 +1088,52 @@ export function createProgram(): Command {
   // already does this; the shared SEFAZ 20/hour-per-CNPJ-root budget and the
   // per-entity 60-minute cooldown both still apply and answer 429 before any
   // real SEFAZ call is attempted.
-  const brInbound = br.command('inbound').description('Brazil Distribuição DFe inbound polling');
+  // --document-family picks which of Brazil's two receiving surfaces to
+  // poll/check: "nfe" (goods, Distribuição DFe/SEFAZ — the default) or
+  // "nfse" (services, the national NFS-e/ADN environment) — each has its
+  // own cooldown/rate budget, never shared with the other.
+  const brInbound = br.command('inbound').description('Brazil inbound polling (NF-e goods and NFS-e services)');
   brInbound
     .command('poll')
-    .description('Manually trigger a Distribuição DFe poll cycle for this entity')
+    .description('Manually trigger a poll cycle for this entity')
     .option('--entity <entityId>', 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--document-family <family>', 'nfe (goods, default) or nfse (services, the national ADN)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { entity?: string; pretty?: boolean }) => {
-      const result = await api('POST', '/br/inbound/poll', {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    .action(async (opts: { entity?: string; documentFamily?: string; pretty?: boolean }) => {
+      const path = opts.documentFamily === 'nfse' ? '/br/nfse/inbound/poll' : '/br/inbound/poll';
+      const result = await api('POST', path, {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 
   br
     .command('sync-status')
-    .description('Check the health of the Brazil Distribuição DFe poll job for an entity — pure DB read, never calls SEFAZ')
+    .description('Check the health of the Brazil poll job for an entity — pure DB read, never calls the authority')
     .option('--entity <entityId>', 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--document-family <family>', 'nfe (goods, default) or nfse (services, the national ADN). Omit to also receive `collection` (both families\' own status lines).')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { entity?: string; pretty?: boolean }) => {
-      const result = await api('GET', '/br/sync-status', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    .action(async (opts: { entity?: string; documentFamily?: string; pretty?: boolean }) => {
+      const qs = opts.documentFamily ? `?documentFamily=${encodeURIComponent(opts.documentFamily)}` : '';
+      const result = await api('GET', `/br/sync-status${qs}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 
   const brSettings = br.command('settings').description('Configure Brazil-specific entity settings');
   brSettings
     .command('update')
-    .description('Flip Brazil auto-Ciência on or off for an entity that already has a certificate on file — never re-requires the certificate')
-    .requiredOption('--auto-ciencia <bool>', 'true | false')
+    .description('Flip Brazil auto-Ciência (goods invoices only) on or off, and/or acknowledge an updated consent statement — never re-requires the certificate')
+    .option('--auto-ciencia <bool>', 'true | false')
+    .option('--acknowledge-consent', 'Acknowledge the CURRENT consent statement without re-uploading the certificate')
     .option('--entity <entityId>', 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { autoCiencia: string; entity?: string; pretty?: boolean }) => {
-      const result = await api('PATCH', '/br/settings', { autoCiencia: opts.autoCiencia !== 'false' }, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    .action(async (opts: { autoCiencia?: string; acknowledgeConsent?: boolean; entity?: string; pretty?: boolean }) => {
+      if (opts.autoCiencia === undefined && !opts.acknowledgeConsent) {
+        console.error('Error: supply --auto-ciencia and/or --acknowledge-consent.');
+        process.exit(1);
+      }
+      const body: Record<string, unknown> = {};
+      if (opts.autoCiencia !== undefined) body.autoCiencia = opts.autoCiencia !== 'false';
+      if (opts.acknowledgeConsent) body.acknowledgeConsent = true;
+      const result = await api('PATCH', '/br/settings', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 
