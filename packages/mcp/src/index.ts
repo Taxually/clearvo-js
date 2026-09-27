@@ -236,6 +236,7 @@ const TOOLS = [
           properties: {
             name: { type: 'string' },
             taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH. Does not apply on a self-billed invoice, where this is the real seller\'s own tax ID, taken as supplied.' },
+            taxRegistered: { type: 'boolean', description: 'Romania (RO) only today. Whether this party genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF). Omit to default to whether the taxId you sent carried the "RO" prefix; an unresolved supplier fails with 422 RO_SUPPLIER_TAX_REGISTRATION_STATUS_UNKNOWN.' },
             address: {
               type: 'object',
               properties: {
@@ -243,6 +244,7 @@ const TOOLS = [
                 city: { type: 'string' },
                 country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
                 postalCode: { type: 'string' },
+                countyCode: { type: 'string', description: 'Romania (RO) only today. ISO 3166-2:RO county code, e.g. "RO-CJ", or "RO-B" for Bucharest. REQUIRED for a Romanian supplier address — missing it fails with 422 naming supplier.address.countyCode. A Bucharest ("RO-B") supplier additionally needs countrySpecific.ro.supplierSector.' },
               },
               required: ['city', 'country'],
             },
@@ -259,6 +261,7 @@ const TOOLS = [
           properties: {
             name: { type: 'string' },
             taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment' },
+            taxRegistered: { type: 'boolean', description: 'Romania (RO) only today. Whether this customer genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF, no registration) — decides whether RO emits cac:PartyTaxScheme or cac:PartyLegalEntity only. Omit to default to whether taxId carried the "RO" prefix; a bare id with no override on a B2B (or untyped) customer fails with 422 RO_CUSTOMER_TAX_REGISTRATION_STATUS_UNKNOWN. A customerType "B2C" customer safely defaults to unregistered instead.' },
             address: {
               type: 'object',
               properties: {
@@ -266,6 +269,7 @@ const TOOLS = [
                 city: { type: 'string' },
                 country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
                 postalCode: { type: 'string' },
+                countyCode: { type: 'string', description: 'Romania (RO) only today. ISO 3166-2:RO county code, e.g. "RO-CJ", or "RO-B" for Bucharest. REQUIRED for a Romanian customer address — missing it fails with 422 naming customer.address.countyCode. A Bucharest ("RO-B") customer additionally needs countrySpecific.ro.customerSector.' },
               },
               required: ['city', 'country'],
             },
@@ -310,6 +314,11 @@ const TOOLS = [
               discountAmount: { type: 'number', description: 'Line discount as an absolute amount in the invoice currency, always positive. Mutually exclusive with discountPercent — set at most one.' },
               unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
               sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
+              gtuCode: {
+                type: 'string',
+                enum: ['GTU_01', 'GTU_02', 'GTU_03', 'GTU_04', 'GTU_05', 'GTU_06', 'GTU_07', 'GTU_08', 'GTU_09', 'GTU_10', 'GTU_11', 'GTU_12', 'GTU_13'],
+                description: 'Poland (PL) FA(3)/KSeF only — this line\'s GTU goods/service classification. At most one code per line (the FA(3) schema\'s GTU element is single-valued). countrySpecific.pl.gtuCodes (invoice-level) is a fallback ONLY when it carries exactly one code and no line sets its own gtuCode; several invoice-level codes with no line assignment fails with 422 PL_GTU_LINE_ASSIGNMENT_REQUIRED.',
+              },
             },
             required: ['description', 'quantity', 'unitPrice', 'taxRate'],
           },
@@ -376,6 +385,119 @@ const TOOLS = [
                 selfBilling: {
                   type: 'boolean',
                   description: 'Default false. Set true to mark this as a self-billing document (the customer issues on the seller\'s behalf) — switches to a self-billing CustomizationID/ProfileID and UNTDID 1001 type codes (389 invoice / 261 credit note), and swaps supplier/customer semantics (see their own descriptions above). AU/NZ use their own PINT-AUNZ self-billing profile; every other Peppol country except SG/JP uses the generic EU BIS Self-Billing 3.0 profile; silently ignored (falls back to regular billing) for SG/JP.',
+                },
+              },
+            },
+            ar: {
+              type: 'object',
+              description: 'Argentina AFIP/ARCA fields.',
+              properties: {
+                condicionIVAReceptorId: {
+                  type: 'number',
+                  enum: [1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16],
+                  description: 'ARCA\'s real customer VAT condition code (FEParamGetCondicionIvaReceptor, RG 5616/2024): 1=Responsable Inscripto, 4=IVA Sujeto Exento, 5=Consumidor Final (the default when omitted), 6=Responsable Monotributo, 7=Sujeto No Categorizado, 8=Proveedor del Exterior, 9=Cliente del Exterior, 10=IVA Liberado (Ley 19.640), 13=Monotributista Social, 15=IVA No Alcanzado, 16=Monotributo Trabajador Independiente Promovido. Falls back to this customer\'s stored default (set via create_customer/update_customer) when omitted, else 5. 8/9 (foreign recipient) fail with a hold error — this platform does not yet generate Factura E; pass countrySpecific.ar.cbteTipo explicitly to override.',
+                },
+                cbteTipo: {
+                  type: 'number',
+                  description: 'Override for the computed comprobante type (1=Factura A, 6=Factura B, 11=Factura C, 3=Nota de Crédito A, 8=Nota de Crédito B, 13=Nota de Crédito C). Normally derived from condicionIVAReceptorId — only set this to bypass that derivation.',
+                },
+              },
+            },
+            it: {
+              type: 'object',
+              description: 'Italy FatturaPA fields.',
+              properties: {
+                cigCode: {
+                  type: 'string',
+                  description: 'CodiceCIG (public-tender tracking code, DatiOrdineAcquisto). Requires the top-level orderReference to also be set — CodiceCIG is a child of DatiOrdineAcquisto, whose IdDocumento (orderReference) is mandatory whenever the block is emitted. cigCode with no orderReference fails with 422 IT_CIG_CUP_MISSING_ORDER_REFERENCE.',
+                },
+                cupCode: {
+                  type: 'string',
+                  description: 'CodiceCUP (public-investment project code, DatiOrdineAcquisto). Same orderReference requirement as cigCode — fails with 422 IT_CIG_CUP_MISSING_ORDER_REFERENCE without it.',
+                },
+                esigibilitaIva: {
+                  type: 'string',
+                  enum: ['I', 'D', 'S'],
+                  description: 'VAT exigibility (DatiRiepilogo/EsigibilitaIVA): I = immediata (default), D = differita (deferred, art.6 c.5 DPR 633/72), S = scissione dei pagamenti (split payment, PA customers).',
+                },
+                withholding: {
+                  type: 'boolean',
+                  description: 'Declares this invoice carries a withholding tax deduction (DatiRitenuta). Requires withholdingDetails to also be set — withholding: true alone fails with 422 IT_WITHHOLDING_DETAILS_MISSING (the platform has no default withholding rate/type to assume).',
+                },
+                withholdingDetails: {
+                  type: 'object',
+                  description: 'DatiRitenuta detail, required once withholding is true. Every line is marked Ritenuta=SI once this is set.',
+                  properties: {
+                    type: { type: 'string', enum: ['RT01', 'RT02', 'RT03', 'RT04', 'RT05', 'RT06'], description: 'TipoRitenuta — RT01 persone fisiche, RT02 persone giuridiche, RT03 INPS, RT04 ENASARCO, RT05 ENPAM, RT06 other.' },
+                    rate: { type: 'number', description: 'AliquotaRitenuta — withholding rate percentage, e.g. 20.' },
+                    amount: { type: 'number', description: 'ImportoRitenuta — the withheld amount.' },
+                    paymentReason: { type: 'string', description: 'CausalePagamento — the withholding causale code (e.g. "A").' },
+                  },
+                },
+                stampDuty: {
+                  type: 'boolean',
+                  description: 'Emits DatiBollo (BolloVirtuale=SI, ImportoBollo=2.00) — the flat marca da bollo for VAT-exempt invoices over €77.47 (DPR 642/1972).',
+                },
+              },
+            },
+            hu: {
+              type: 'object',
+              description: 'Hungary NAV fields (a subset — see get_requirements for the full list).',
+              properties: {
+                invoiceCategory: {
+                  type: 'string',
+                  enum: ['NORMAL', 'SIMPLIFIED', 'AGGREGATE'],
+                  description: 'NAV invoiceCategory. Only NORMAL is supported today — SIMPLIFIED/AGGREGATE summary structures are not yet implemented, and any other value fails with 422 UNSUPPORTED_VALUE. Omit to use the default (NORMAL).',
+                },
+                cashAccountingIndicator: {
+                  type: 'boolean',
+                  description: 'Pénzforgalmi (cash-basis VAT) flag — omitted from the NAV XML entirely unless explicitly true.',
+                },
+              },
+            },
+            pl: {
+              type: 'object',
+              description: 'Poland FA(3)/KSeF fields.',
+              properties: {
+                gtuCodes: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Invoice-level GTU code fallback — prefer lines[].gtuCode instead. Only applied when it holds exactly one code AND no line sets its own gtuCode; two or more codes with no line codes fails with 422 PL_GTU_LINE_ASSIGNMENT_REQUIRED (KSeF requires GTU per line, not per invoice).',
+                },
+                cashAccountingIndicator: {
+                  type: 'boolean',
+                  description: 'Adnotacje P_16 ("metoda kasowa" / cash-accounting scheme) — same field name as countrySpecific.hu.cashAccountingIndicator. A taxpayer status: falls back to this entity\'s stored PL registration profile when omitted, else defaults to false (P_16=2) — never a hold.',
+                },
+                exemptionLegalBasisType: {
+                  type: 'string',
+                  enum: ['national_act', 'eu_directive', 'other'],
+                  description: 'Which of Adnotacje/Zwolnienie\'s P_19A (national_act — a Polish VAT Act article), P_19B (eu_directive — Directive 2006/112/WE), or P_19C (other) an exempt (ZW/E) line\'s own resolved exemption wording is cited under. Required whenever any line is exempt — missing (or an unrecognized value) fails with 422 PL_EXEMPTION_LEGAL_BASIS_MISSING, naming this field.',
+                },
+              },
+            },
+            pt: {
+              type: 'object',
+              description: 'Portugal AT fields.',
+              properties: {
+                stampDutyAmount: {
+                  type: 'number',
+                  description: 'Imposto do Selo (stamp duty) amount — a caller-supplied fact, never derived (which Tabela Geral verba applies is out of scope). Emits AT QR code field M only when supplied, and folds into field N (totals.taxTotal + stampDutyAmount, the same value SAF-T\'s own TaxPayable uses). Does not flow into the SAF-T XML itself in this pass.',
+                },
+              },
+            },
+            ro: {
+              type: 'object',
+              description: 'Romania e-Factura fields.',
+              properties: {
+                customerSector: {
+                  type: 'string',
+                  enum: ['SECTOR1', 'SECTOR2', 'SECTOR3', 'SECTOR4', 'SECTOR5', 'SECTOR6'],
+                  description: 'CIUS-RO (BR-RO-100/101): when customer.address.countyCode resolves to "RO-B" (Bucharest), cbc:CityName must be a sector, not the plain city name. Missing this while the customer resolves to RO-B fails with 422 RO_BUCHAREST_SECTOR_REQUIRED, naming countrySpecific.ro.customerSector.',
+                },
+                supplierSector: {
+                  type: 'string',
+                  enum: ['SECTOR1', 'SECTOR2', 'SECTOR3', 'SECTOR4', 'SECTOR5', 'SECTOR6'],
+                  description: 'CIUS-RO (BR-RO-100/101): same requirement as customerSector, for a Bucharest ("RO-B") supplier. Defaults from the entity\'s stored ro_supplier_sector profile field (set once on the RO registration) when omitted here. Missing this while the supplier resolves to RO-B, with no profile default either, fails with 422 RO_BUCHAREST_SECTOR_REQUIRED, naming countrySpecific.ro.supplierSector.',
                 },
               },
             },
@@ -1700,9 +1822,9 @@ const TOOLS = [
           properties: {
             ar: {
               type: 'object',
-              description: 'Argentina AFIP buyer VAT condition.',
+              description: 'Argentina AFIP/ARCA buyer VAT condition.',
               properties: {
-                condicionIVAReceptorId: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign. Backfilled onto AR invoices submitted via customerRef whenever the send request omits its own value.' },
+                condicionIVAReceptorId: { type: 'integer', enum: [1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16], description: 'ARCA\'s real buyer VAT condition code (FEParamGetCondicionIvaReceptor, RG (ARCA) 5616/2024) — 1=Responsable Inscripto, 4=IVA Sujeto Exento, 5=Consumidor Final, 6=Responsable Monotributo, 7=Sujeto No Categorizado, 8=Proveedor del Exterior, 9=Cliente del Exterior, 10=IVA Liberado (Ley 19.640), 13=Monotributista Social, 15=IVA No Alcanzado, 16=Monotributo Trabajador Independiente Promovido. The obsolete codes 2 (Responsable no Inscripto) and 3 (No Responsable) are no longer valid and are not in this list. Backfilled onto AR invoices submitted via customerRef whenever the send request omits its own value.' },
               },
             },
           },
@@ -1747,9 +1869,9 @@ const TOOLS = [
           properties: {
             ar: {
               type: 'object',
-              description: 'Argentina AFIP buyer VAT condition.',
+              description: 'Argentina AFIP/ARCA buyer VAT condition.',
               properties: {
-                condicionIVAReceptorId: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign. Pass null to clear the stored value.' },
+                condicionIVAReceptorId: { type: 'integer', enum: [1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16], description: 'ARCA\'s real buyer VAT condition code (FEParamGetCondicionIvaReceptor, RG (ARCA) 5616/2024) — see create_customer\'s countrySpecific.ar.condicionIVAReceptorId for the full code list. Pass null to clear the stored value.' },
               },
             },
           },
@@ -1798,9 +1920,9 @@ const TOOLS = [
           properties: {
             ar: {
               type: 'object',
-              description: 'Argentina AFIP buyer VAT condition.',
+              description: 'Argentina AFIP/ARCA buyer VAT condition.',
               properties: {
-                condicionIVAReceptorId: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign.' },
+                condicionIVAReceptorId: { type: 'integer', enum: [1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16], description: 'ARCA\'s real buyer VAT condition code (FEParamGetCondicionIvaReceptor, RG (ARCA) 5616/2024) — see create_customer\'s countrySpecific.ar.condicionIVAReceptorId for the full code list.' },
               },
             },
           },
