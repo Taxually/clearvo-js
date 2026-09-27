@@ -2,6 +2,28 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the generator-bugfixes backend PR has merged and deployed
+
+Backend PR: Taxually-Einvoicing #16442 (`claude/generator-bugfixes`) — a corrective pass over 12 e-invoicing country generators (RO, GR, PL, IT, DE, EG, ES, HU, JO, MY, PT, AR). Until it is live in production, several of the fields below are accepted by the schema but ignored by the API (the old behavior stays in effect), and the corrected AR `condicionIVAReceptorId` codes below do not yet match what the API actually accepts.
+
+### @clearvo/sdk 0.2.1 (additive, non-breaking)
+
+- `PartyInput` gains `taxRegistered?: boolean` (supplier/customer) and `address.countyCode?: string` — Romania only today. `countyCode` already existed on the type but was undocumented; it is now REQUIRED for a Romanian party address (missing it fails with 422). `taxRegistered` decides whether RO emits `cac:PartyTaxScheme` (VAT-registered) or `cac:PartyLegalEntity` only, and defaults from whether `taxId` carries the "RO" prefix when omitted.
+- `LineItemInput` gains `gtuCode?: string` (Poland FA(3)/KSeF GTU classification, `GTU_01`..`GTU_13`, at most one per line).
+- `SubmitInvoiceInput.countrySpecific`'s documented key list grows: `ar.condicionIVAReceptorId` (**corrected** — see breaking note below) + `ar.cbteTipo`, `it.esigibilitaIva` / `it.withholding` + `it.withholdingDetails` / `it.stampDuty` / `it.cigCode` / `it.cupCode`, `hu.invoiceCategory` / `hu.cashAccountingIndicator`, `pl.gtuCodes` / `pl.cashAccountingIndicator` / `pl.exemptionLegalBasisType`, `pt.stampDutyAmount`, `ro.customerSector` / `ro.supplierSector`. All optional and additive — no existing field removed or renamed.
+- Doc-only follow-up (no schema change): the JSDoc/tool-description text now also names 11 error codes that were previously undocumented anywhere in this package — `IT_WITHHOLDING_DETAILS_INVALID`, `AR_FOREIGN_CUSTOMER_UNSUPPORTED`, `RO_DEBIT_NOTE_MISSING_ORIGINAL_REF`, `MISSING_JO_CREDIT_NOTE_REFERENCE`, `MY_SUPPLIER_TIN_REQUIRED`, `MY_CUSTOMER_TIN_REQUIRED`, `EG_TAX_SUBTYPE_UNRESOLVED`, `GR_LINE_TYPE_SUPPLY_TYPE_MISMATCH`, `GR_MIXED_LINE_TYPE`, `GR_EXEMPTION_CATEGORY_MISSING`, `TAX_LINE_INCONSISTENT` — matching the equivalent pass on `clearvo-marketing`'s `public/openapi.json`.
+- **Correction, not a breaking change in shape (same field name, corrected value set)**: `ar.condicionIVAReceptorId`'s valid codes were previously undocumented in this SDK; ARCA's real `FEParamGetCondicionIvaReceptor` (RG 5616/2024) code set is `1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16` — there is no `2` or `3`. The backend's own prior default of `4` ("Consumidor Final") was a bug (the real code for Consumidor Final is `5`; `4` is IVA Sujeto Exento) — fixed in the paired backend PR. A caller relying on the old default should pass the code explicitly rather than omitting it, until confirming the backend fix is live.
+
+### @clearvo/mcp 0.3.1 (additive, non-breaking)
+
+- `submit_invoice`'s `inputSchema` gains the same fields as the SDK above: `supplier.taxRegistered` / `customer.taxRegistered`, `supplier.address.countyCode` / `customer.address.countyCode`, `lines[].gtuCode`, and new `countrySpecific.ar` / `.it` / `.hu` (partial — see note) / `.pl` / `.pt` / `.ro` objects.
+- `create_customer` / `update_customer` / `upsert_customer_by_ref`'s `countrySpecific.ar.condicionIVAReceptorId` enum corrected from the old, wrong `[1, 2, 3, 4, 5]` (with stale labels) to ARCA's real code set `[1, 4, 5, 6, 7, 8, 9, 10, 13, 15, 16]`, matching `submit_invoice`.
+- Note: `submit_invoice`'s new `countrySpecific.hu` object documents only `invoiceCategory` and `cashAccountingIndicator` (the two fields this pass wired through) — NAV's other real fields (`exchangeRate`, `invoiceAppearance`, `smallBusinessIndicator`) are accepted by the live API today but still undocumented in this MCP schema, a pre-existing gap from before this pass, not introduced by it. Full HU/DE/RO/IT/PL/PT/AR `countrySpecific` parity between this package and the backend's own `lib/mcp/tools.ts` is tracked as a separate follow-up (see clearvo-todo.md) rather than expanded here.
+
+### @clearvo/cli — no changes
+
+Nothing in this pass is exposed as a CLI flag today (there is no `submit-invoice`/`create-customer` CLI command in this package yet), so there is nothing to propagate here.
+
 ## Unreleased — publish only AFTER the FR credentials backend PR has merged and deployed
 
 Backend PR: Taxually-Einvoicing #16203 (`claude/fr-credentials-api`), `POST`/`GET /v1/fr/credentials`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored by this endpoint — it registers/reads back the entity's own French VAT number and reports honest per-capability onboarding status (`active` / `pending_activation` / `sandbox`) instead of a blind "saved", mirroring the pattern Poland's `set_pl_credentials`/`get_pl_credentials` already established.
