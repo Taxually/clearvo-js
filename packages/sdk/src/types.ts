@@ -2201,12 +2201,50 @@ export interface FrCredentialsResponse {
   updatedAt: string | null;
 }
 
+// ── Italy profile field (Regime Fiscale) ────────────────────────────────────
+// Not a credential — Clearvo (Blue Arrow Solutions) is the accredited SDI
+// intermediary, so Italy has no per-entity credential to register at all.
+// Regime Fiscale is a required PROFILE field the FatturaPA generator reads
+// at send time; this is the SDK's way to set it ahead of time instead of
+// discovering the gap as a failed send.
+
+export interface ItRegimeFiscaleOption {
+  value: string;
+  label: string;
+}
+
+export interface SetItProfileInput {
+  /** Regime Fiscale code, e.g. 'RF01'. Call getItProfile first to see the full option list. */
+  regimeFiscale: string;
+  /** Entity to configure. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface ItProfileResponse {
+  entityId: string;
+  /** False when the entity has no current Italy tax registration on file at all — setItProfile
+   *  is guaranteed to reject with 422 MISSING_IT_REGISTRATION in that state; register one via
+   *  the Tax Registrations API first. */
+  hasItRegistration: boolean;
+  /** True once regimeFiscale is set. */
+  configured: boolean;
+  /** null until a value has been set. */
+  regimeFiscale: string | null;
+  /** The full set of valid Regime Fiscale codes with labels. */
+  options: ItRegimeFiscaleOption[];
+}
+
 // ── Business (customer-lifecycle) status ────────────────────────────────────
-// Mirrors PATCH /v1/invoices/{id}/business-status. Only valid for an INBOUND
-// (received) invoice — the calling entity is the customer recording their
-// own decision on it. FR is the only country with a wired-up partner push
-// today (via the Marosa/PPF bridge); DE records the same state machine as a
-// platform-only decision with no partner push.
+// Mirrors PATCH /v1/invoices/{id}/business-status — the one shared route
+// every registered regime goes through: France (partner push via the
+// Marosa/PPF bridge), Germany (platform-only decision, no partner push),
+// and Brazil (Manifestação do Destinatário, committed synchronously through
+// a signed SEFAZ event registration). Only valid for an INBOUND (received)
+// invoice — the calling entity is the customer recording their own
+// decision on it. Only the values belonging to the invoice's own
+// country/regime are ever a valid transition for it — check
+// businessStatusActions on the invoice itself before guessing from this
+// union alone.
 
 export type BusinessStatus =
   | 'IN_HAND'
@@ -2217,21 +2255,40 @@ export type BusinessStatus =
   | 'REFUSED'
   | 'COMPLETED'
   | 'PAYMENT_SENT'
-  | 'PAYMENT_RECEIVED';
+  | 'PAYMENT_RECEIVED'
+  /** Brazil: acknowledge receipt (Ciência da Operação). Auto-registered by Clearvo when autoCiencia is on. */
+  | 'CIENCIA'
+  /** Brazil: confirm the operation occurred (Confirmação da Operação). */
+  | 'CONFIRMACAO'
+  /** Brazil: the operation did not occur — rejectionDetail.message required (15–255 characters). */
+  | 'OPERACAO_NAO_REALIZADA'
+  /** Brazil: "I don't recognize this transaction" — rejectionDetail is forbidden (SEFAZ's own event schema has no field for one). */
+  | 'DESCONHECIMENTO'
+  /** Brazil only, never a valid PATCH target: the day-90 deemed-acceptance presumption SEFAZ's own statutory silence writes, not a customer request. Readable on GET, listed here only so a caller checking `=== 'PRESUMIDA'` type-checks. */
+  | 'PRESUMIDA';
+
+/** The shared, regime-agnostic bucket every registered regime's native BusinessStatus value maps onto. */
+export type CanonicalBusinessStatus = 'RECEIVED' | 'ACKNOWLEDGED' | 'ACCEPTED' | 'DISPUTED';
 
 export interface UpdateBusinessStatusInput {
   /** Invoice id or referenceId of a received (inbound) invoice. */
   id: string;
   status: BusinessStatus;
-  /** Required when status is DISPUTED, REFUSED, or SUSPENDED. */
-  rejectionDetail?: { reason: string; message?: string };
+  /** Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), or
+   *  OPERACAO_NAO_REALIZADA (Brazil — message required, 15–255 characters; reason accepted but never
+   *  required). Forbidden for Brazil's DESCONHECIMENTO. Also accepted as a bare string (treated as message). */
+  rejectionDetail?: { reason?: string; message?: string } | string;
   /** Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;
 }
 
 export interface UpdateBusinessStatusResponse {
   ok: boolean;
+  /** The invoice's new native status value. */
   businessStatus: BusinessStatus;
+  /** The shared, regime-agnostic bucket this new value maps onto. Brazil: CIENCIA→ACKNOWLEDGED,
+   *  CONFIRMACAO/PRESUMIDA→ACCEPTED, OPERACAO_NAO_REALIZADA/DESCONHECIMENTO→DISPUTED. */
+  canonicalBusinessStatus?: CanonicalBusinessStatus;
   updatedAt: string;
 }
 
