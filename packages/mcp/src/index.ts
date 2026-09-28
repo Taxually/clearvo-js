@@ -696,6 +696,39 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_it_profile',
+    description:
+      "Set the entity's Italy Regime Fiscale (tax regime code) — a required profile field, not a credential: " +
+      'Clearvo is the accredited SDI intermediary, so there is no per-entity Italy credential to register. ' +
+      'Required before submitting invoices to Italy; a send with no Regime Fiscale on file fails. Requires a ' +
+      "current Italy tax registration to already exist for this entity (set via Tax Registrations) — 422 " +
+      "MISSING_IT_REGISTRATION if none is found. Common values: RF01 (ordinary regime, the default for most " +
+      "companies), RF02/RF04/RF05/RF10/RF19 for specific special regimes — call get_it_profile first to see the " +
+      "full option list with labels.",
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        regimeFiscale: { type: 'string', description: "Regime Fiscale code, e.g. 'RF01'. See get_it_profile for the full list." },
+        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['regimeFiscale'],
+    },
+  },
+  {
+    name: 'get_it_profile',
+    description:
+      "Read back the entity's Italy Regime Fiscale and whether it's configured, plus the full list of valid " +
+      'codes with labels (options). Always returns 200 — configured: false and regimeFiscale: null when nothing ' +
+      "is set yet, hasItRegistration: false when the entity has no current Italy tax registration at all (set " +
+      'regimeFiscale is guaranteed to 422 in that state — check hasItRegistration before calling set_it_profile).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to read. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'set_pt_credentials',
     description:
       'Register Portugal AT (Autoridade Tributária) e-invoicing credentials for an entity: the NIF, plus EITHER the ' +
@@ -2362,6 +2395,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'set_pl_credentials': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/pl/credentials', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_it_profile': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('PUT', '/it/profile', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_it_profile': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/it/profile', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'set_hu_credentials': {
