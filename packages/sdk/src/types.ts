@@ -2128,6 +2128,39 @@ export interface FrCredentialsResponse {
   updatedAt: string | null;
 }
 
+// ── Italy profile field (Regime Fiscale) ────────────────────────────────────
+// Not a credential — Clearvo (Blue Arrow Solutions) is the accredited SDI
+// intermediary, so Italy has no per-entity credential to register at all.
+// Regime Fiscale is a required PROFILE field the FatturaPA generator reads
+// at send time; this is the SDK's way to set it ahead of time instead of
+// discovering the gap as a failed send.
+
+export interface ItRegimeFiscaleOption {
+  value: string;
+  label: string;
+}
+
+export interface SetItProfileInput {
+  /** Regime Fiscale code, e.g. 'RF01'. Call getItProfile first to see the full option list. */
+  regimeFiscale: string;
+  /** Entity to configure. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface ItProfileResponse {
+  entityId: string;
+  /** False when the entity has no current Italy tax registration on file at all — setItProfile
+   *  is guaranteed to reject with 422 MISSING_IT_REGISTRATION in that state; register one via
+   *  the Tax Registrations API first. */
+  hasItRegistration: boolean;
+  /** True once regimeFiscale is set. */
+  configured: boolean;
+  /** null until a value has been set. */
+  regimeFiscale: string | null;
+  /** The full set of valid Regime Fiscale codes with labels. */
+  options: ItRegimeFiscaleOption[];
+}
+
 // ── Business (customer-lifecycle) status ────────────────────────────────────
 // Mirrors PATCH /v1/invoices/{id}/business-status — the one shared route
 // every registered regime goes through: France (partner push via the
