@@ -677,9 +677,9 @@ export function createProgram(): Command {
   
   registrations
     .command('update <id>')
-    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET) in place')
+    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s Handelsregisternummer/Kleinunternehmer flag) in place')
     .option('--number <taxNumber>', 'New registration/VAT number (pass an empty string to clear it)')
-    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\'')
+    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\' or \'{"de_handelsregisternummer":"HRB 12345","de_kleinunternehmer":"true"}\' — see docs for the full de_* key list')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { number?: string; extra?: string; pretty?: boolean }) => {
       if (opts.number === undefined && opts.extra === undefined) {
