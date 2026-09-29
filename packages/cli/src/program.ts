@@ -688,9 +688,9 @@ export function createProgram(): Command {
   
   registrations
     .command('update <id>')
-    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET) in place')
+    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s Handelsregisternummer/Kleinunternehmer flag) in place')
     .option('--number <taxNumber>', 'New registration/VAT number (pass an empty string to clear it)')
-    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\'')
+    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\' or \'{"de_handelsregisternummer":"HRB 12345","de_kleinunternehmer":"true"}\' — see docs for the full de_* key list')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { number?: string; extra?: string; pretty?: boolean }) => {
       if (opts.number === undefined && opts.extra === undefined) {
@@ -770,6 +770,35 @@ export function createProgram(): Command {
       const result = await api('POST', '/fr/inbound/poll', {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
+
+  // ── clearvo it profile ────────────────────────────────────────────────────
+  // Italy's required Regime Fiscale profile field (GET/PUT /v1/it/profile).
+  // Not a credential — Clearvo (Blue Arrow Solutions) is the accredited SDI
+  // intermediary, so there's no per-entity Italy credential to register.
+  const it = program.command('it').description('Italy profile field (Regime Fiscale)');
+  const itProfile = it.command('profile').description('Manage the entity\'s Regime Fiscale');
+
+  itProfile
+    .command('set')
+    .description('Set the entity\'s Italy Regime Fiscale — requires a current Italy tax registration to already exist')
+    .requiredOption('--regime-fiscale <code>', "Regime Fiscale code, e.g. 'RF01'. Run 'clearvo it profile get' to see the full option list.")
+    .option('--entity <entityId>', 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { regimeFiscale: string; entity?: string; pretty?: boolean }) => {
+      const result = await api('PUT', '/it/profile', { regimeFiscale: opts.regimeFiscale }, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  itProfile
+    .command('get')
+    .description('Read back the entity\'s Italy Regime Fiscale, whether it\'s configured, and the full option list')
+    .option('--entity <entityId>', 'Entity to read. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/it/profile', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
 
   // Brazil NF-e receiving onboarding/status (POST/GET /v1/br/credentials,
   // POST /v1/br/inbound/poll, GET /v1/br/sync-status, PATCH /v1/br/settings).

@@ -74,6 +74,8 @@ import type {
   ListMandateTransactionsResponse,
   SetFrCredentialsInput,
   FrCredentialsResponse,
+  SetItProfileInput,
+  ItProfileResponse,
   UpdateBusinessStatusInput,
   UpdateBusinessStatusResponse,
   FrInboundPollResponse,
@@ -714,6 +716,19 @@ export class ClearvoClient {
 
   getFrCredentials(entityId?: string): Promise<FrCredentialsResponse> {
     return this.request('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Italy profile field (Regime Fiscale) ─────────────────────────────────
+  // No credential to store — Clearvo is the accredited SDI intermediary.
+  // Sets/reads the entity's required Regime Fiscale profile field.
+
+  setItProfile(input: SetItProfileInput): Promise<ItProfileResponse> {
+    const { entityId, ...body } = input;
+    return this.request('PUT', '/it/profile', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  getItProfile(entityId?: string): Promise<ItProfileResponse> {
+    return this.request('GET', '/it/profile', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Business (customer-lifecycle) status ─────────────────────────────────

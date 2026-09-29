@@ -2,6 +2,23 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the IT/ES profile-field backend PR has merged and deployed
+
+Backend PR: Taxually-Einvoicing `claude/it-es-profile-fields`, `GET`/`PUT /v1/it/profile`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored — Clearvo is the accredited SDI intermediary, so Italy has no per-entity credential at all. This registers/reads back the entity's required Regime Fiscale profile field, which previously had no way to be set ahead of time (only inline on `/v1/send` via `countrySpecific.it.regimeFiscale`, by a caller who already knew to). Also fixes a separate, unrelated data-quality issue: Spain's `es_nif` profile field was removed from the manifest entirely (no SDK/MCP/CLI change — it was never wired up on this side) since it duplicated the entity's own ES VAT registration number with no reconciliation between the two.
+
+### @clearvo/sdk 0.3.0 (additive, non-breaking)
+
+- New `setItProfile(input: SetItProfileInput): Promise<ItProfileResponse>` and `getItProfile(entityId?: string): Promise<ItProfileResponse>`. `SetItProfileInput` accepts only `regimeFiscale` plus the usual optional `entityId` for account-scoped keys.
+- `ItProfileResponse` always returns `200`: `hasItRegistration` (false means `setItProfile` will 422 MISSING_IT_REGISTRATION — register an Italy tax number first), `configured`, `regimeFiscale` (null until set), and the full `options` list (code + label) so a caller can build a picker without hardcoding the RF01–RF19 enum.
+
+### @clearvo/mcp 0.4.0 (additive, non-breaking)
+
+- New `set_it_profile` / `get_it_profile` tools, matching the SDK methods above one-for-one.
+
+### @clearvo/cli 0.3.0 (additive, non-breaking)
+
+- New `clearvo it profile set --regime-fiscale <code> [--entity <entityId>]` and `clearvo it profile get [--entity <entityId>]`.
+
 ## Unreleased — publish only AFTER the FR credentials backend PR has merged and deployed
 
 Backend PR: Taxually-Einvoicing #16203 (`claude/fr-credentials-api`), `POST`/`GET /v1/fr/credentials`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored by this endpoint — it registers/reads back the entity's own French VAT number and reports honest per-capability onboarding status (`active` / `pending_activation` / `sandbox`) instead of a blind "saved", mirroring the pattern Poland's `set_pl_credentials`/`get_pl_credentials` already established.
