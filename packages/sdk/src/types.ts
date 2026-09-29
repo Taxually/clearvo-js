@@ -2655,6 +2655,116 @@ export interface ListBulkUploadErrorsResponse {
   errors: BulkUploadStructuralErrorRow[];
 }
 
+// ── Tax Calculation CSV bulk import (POST /v1/tax/calculate/import) ────────
+// A dedicated, calc-only ingestion path — deliberately separate from
+// submitInvoicesBulk*/getBulkUploadStatus above, which are e-invoicing
+// methods. Always async, two-phase: importTaxCalculations lands the file and
+// previews it (commit:false); confirmTaxCalculationImport commits the clean
+// transactions (commit:true). Poll getTaxCalculationImportStatus between the
+// two.
+
+export type TaxCalcImportBatchStatus = 'UPLOADED' | 'PREVIEWING' | 'READY_FOR_REVIEW' | 'CONFIRMING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type TaxCalcImportPreviewStatus = 'PENDING' | 'CLEAN' | 'ERROR';
+export type TaxCalcImportConfirmStatus = 'PENDING' | 'COMMITTED' | 'SKIPPED' | 'FAILED';
+
+export interface ImportTaxCalculationsInput {
+  /** The raw CSV text (not base64) — required columns transactionRef, transactionDate, currency, customerCountry, productName. One or more adjacent rows sharing the same transactionRef become one multi-line transaction. */
+  csvContent: string;
+  /** Optional filename to record against the batch. */
+  filename?: string;
+  entityId?: string;
+}
+
+/** Returned immediately — this call only lands the file and queues a preview; it never calculates anything in-request. */
+export interface ImportTaxCalculationsResponse {
+  ok: boolean;
+  batchId: string;
+  status: 'UPLOADED';
+}
+
+export interface TaxCalcImportBatch {
+  id: string;
+  entityId: string;
+  accountId: string;
+  uploadedBy: string | null;
+  filename: string | null;
+  status: TaxCalcImportBatchStatus;
+  /** Ready-to-render label for `status`. */
+  statusLabel: string;
+  blobPath: string | null;
+  contentHash: string | null;
+  total: number;
+  cleanCount: number;
+  errorCount: number;
+  committedCount: number;
+  skippedCount: number;
+  structuralError: string | null;
+  createdAt: string;
+  previewedAt: string | null;
+  confirmedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface TaxCalcImportTransaction {
+  id: string;
+  batchId: string;
+  entityId: string;
+  transactionRef: string;
+  rowStart: number;
+  rowEnd: number;
+  requestJson: unknown;
+  previewStatus: TaxCalcImportPreviewStatus;
+  /** Ready-to-render label for `previewStatus`. */
+  previewStatusLabel: string;
+  previewResponseJson: unknown;
+  previewErrorCode: string | null;
+  previewErrorMessage: string | null;
+  confirmStatus: TaxCalcImportConfirmStatus;
+  /** Ready-to-render label for `confirmStatus`. */
+  confirmStatusLabel: string;
+  calculationId: string | null;
+  confirmErrorCode: string | null;
+  confirmErrorMessage: string | null;
+  createdAt: string;
+}
+
+export interface GetTaxCalculationImportStatusParams {
+  /** Page number for the transactions list, 1-based (default 1). */
+  page?: number;
+  /** Transactions per page (default 25, max 100). */
+  limit?: number;
+  /** Filter the transactions page to only this preview outcome. */
+  status?: 'CLEAN' | 'ERROR';
+  entityId?: string;
+}
+
+export interface GetTaxCalculationImportStatusResponse {
+  ok: boolean;
+  batch: TaxCalcImportBatch;
+  transactions: TaxCalcImportTransaction[];
+  pagination: { total: number; page: number; limit: number; pages: number };
+}
+
+/** Returned immediately — async, poll getTaxCalculationImportStatus for the final COMPLETED status. */
+export interface ConfirmTaxCalculationImportResponse {
+  ok: boolean;
+  batchId: string;
+  status: 'CONFIRMING';
+}
+
+export interface TaxCalcImportErrorRow {
+  transactionRef: string;
+  rowStart: number;
+  rowEnd: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface ListTaxCalculationImportErrorsResponse {
+  ok: boolean;
+  errors: TaxCalcImportErrorRow[];
+}
+
 // ── France platform credentials (POST/GET /v1/fr/credentials) ──────────────
 // No secret is stored here — this is a status-visibility endpoint for the
 // entity's own French VAT number (numéro de TVA intracommunautaire), not a

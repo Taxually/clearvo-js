@@ -192,6 +192,29 @@ Backend PR: Taxually-Einvoicing `claude/entity-bank-accounts`, `GET`/`POST /v1/b
 - New `clearvo bank-accounts list|create|update|get|delete`, mirroring the `clearvo suppliers` command shape.
 
 ## IT/ES profile fields
+## Unreleased — publish only AFTER the Tax Calculation CSV bulk import backend PR has merged and deployed
+
+Backend PR: Taxually-Einvoicing `claude/tax-calc-csv-import`, `POST /v1/tax/calculate/import` + its `{batchId}`/`{batchId}/confirm`/`{batchId}/errors` siblings. Until it is live in production, these SDK/MCP/CLI calls 404. A dedicated, calc-only CSV bulk import path — deliberately separate from the existing e-invoicing bulk-send methods (`submitInvoicesBulk`/`submit_invoices_bulk`/`send-bulk`, which submit real invoices/reports) — for recording historical/backdated transactions or loading a batch of current data into the tax calculation audit trail. Always async and two-phase: upload queues a preview (`commit:false`, nothing persisted), then a separate confirm call commits only the transactions that came back clean.
+
+### @clearvo/sdk 0.4.0 (additive, non-breaking)
+
+- New `importTaxCalculations(input: ImportTaxCalculationsInput): Promise<ImportTaxCalculationsResponse>` — uploads a CSV (raw text, not base64) and returns `{ batchId, status: 'UPLOADED' }` immediately.
+- New `getTaxCalculationImportStatus(batchId: string, params?: GetTaxCalculationImportStatusParams): Promise<GetTaxCalculationImportStatusResponse>` — polls the batch plus a paginated page of its transaction groups (`TaxCalcImportBatch`/`TaxCalcImportTransaction`), each carrying a backend-supplied `statusLabel`/`previewStatusLabel`/`confirmStatusLabel` alongside its enum.
+- New `confirmTaxCalculationImport(batchId: string, entityId?: string): Promise<ConfirmTaxCalculationImportResponse>` — commits every CLEAN transaction group; only valid from `READY_FOR_REVIEW`.
+- New `listTaxCalculationImportErrors(batchId: string, entityId?: string): Promise<ListTaxCalculationImportErrorsResponse>` — every ERROR-preview transaction group, for fixing and re-uploading just the affected rows.
+
+### @clearvo/mcp 0.5.0 (additive, non-breaking)
+
+- New `import_tax_calculations` / `get_tax_calculation_import_status` / `confirm_tax_calculation_import` / `list_tax_calculation_import_errors` tools, matching the SDK methods above one-for-one.
+
+### @clearvo/cli 0.4.0 (additive, non-breaking)
+
+- New `clearvo import-tax-calculations <file> [--entity <entityId>]`.
+- New `clearvo tax-calculation-import-status <batchId> [--page <n>] [--limit <n>] [--status CLEAN|ERROR] [--entity <entityId>]`.
+- New `clearvo tax-calculation-import-confirm <batchId> [--entity <entityId>]`.
+- New `clearvo tax-calculation-import-errors <batchId> [--entity <entityId>]`.
+
+## Unreleased — publish only AFTER the IT/ES profile-field backend PR has merged and deployed
 
 Backend PR: Taxually-Einvoicing `claude/it-es-profile-fields`, `GET`/`PUT /v1/it/profile`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored — Clearvo is the accredited SDI intermediary, so Italy has no per-entity credential at all. This registers/reads back the entity's required Regime Fiscale profile field, which previously had no way to be set ahead of time (only inline on `/v1/send` via `countrySpecific.it.regimeFiscale`, by a caller who already knew to). Also fixes a separate, unrelated data-quality issue: Spain's `es_nif` profile field was removed from the manifest entirely (no SDK/MCP/CLI change — it was never wired up on this side) since it duplicated the entity's own ES VAT registration number with no reconciliation between the two.
 

@@ -2787,6 +2787,88 @@ const TOOLS = [
       required: ['batchId'],
     },
   },
+  // Tax Calculation CSV bulk import (a dedicated, calc-only ingestion path —
+  // deliberately separate from submit_invoices_bulk*/get_bulk_upload_status
+  // above, which are e-invoicing tools). Always async, two-phase:
+  // import_tax_calculations lands the file and previews it (commit:false);
+  // confirm_tax_calculation_import commits the clean transactions
+  // (commit:true). Poll get_tax_calculation_import_status between the two.
+  {
+    name: 'import_tax_calculations',
+    description:
+      'Uploads a CSV of transactions to be tax-calculated in bulk — for recording historical/backdated transactions, or ' +
+      'loading a batch of current data, into the tax calculation audit trail. This never sends an invoice or reports to ' +
+      'any tax authority — it only produces committed tax_calculations rows, the same as calling calculate_tax ' +
+      'many times. csvContent is the raw CSV text (not base64): required columns transactionRef, transactionDate, ' +
+      'currency, customerCountry, productName; one or more adjacent rows sharing the same transactionRef become one ' +
+      'multi-line transaction. Always async — this call only lands the file and queues a preview; it never calculates ' +
+      'anything in this request. Returns { batchId, status: \'UPLOADED\' } immediately. Poll ' +
+      'get_tax_calculation_import_status with that batchId until status is READY_FOR_REVIEW (each transaction group has ' +
+      'been calculated with commit:false and its outcome recorded, nothing persisted yet), then call ' +
+      'confirm_tax_calculation_import to actually commit the clean ones.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — see this tool\'s own description for the required columns.' },
+        filename: { type: 'string', description: 'Optional filename to record against the batch.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['csvContent'],
+    },
+  },
+  {
+    name: 'get_tax_calculation_import_status',
+    description:
+      'Poll one tax calculation import batch, created via import_tax_calculations. Returns the batch (status: ' +
+      'UPLOADED/PREVIEWING/READY_FOR_REVIEW/CONFIRMING/COMPLETED/FAILED/CANCELLED, plus total/cleanCount/errorCount/' +
+      'committedCount/skippedCount) and a paginated page of its transaction groups, each with its preview outcome ' +
+      '(CLEAN or ERROR with a reason) once READY_FOR_REVIEW, and its confirm outcome (COMMITTED/SKIPPED/FAILED with a ' +
+      'real calculationId once committed) once CONFIRMING/COMPLETED. Call list_tax_calculation_import_errors afterward ' +
+      'when errorCount is greater than zero.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by import_tax_calculations.' },
+        page: { type: 'number', description: 'Page number for the transactions list, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Transactions per page (default 25, max 100)' },
+        status: { type: 'string', enum: ['CLEAN', 'ERROR'], description: 'Filter the transactions page to only this preview outcome.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'confirm_tax_calculation_import',
+    description:
+      'Commits every CLEAN transaction group from a previewed tax calculation import batch — each is re-run with ' +
+      'commit:true (never a promotion of the cached preview result, so registration/exemption state is re-checked at ' +
+      'the moment of commit). Transaction groups that errored in preview are skipped, never re-attempted — the batch ' +
+      'never fails as a whole for a partially-clean file. Only valid from status READY_FOR_REVIEW. Async: returns ' +
+      'immediately with status CONFIRMING — poll get_tax_calculation_import_status for the final COMPLETED status and ' +
+      'per-transaction confirm outcome.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by import_tax_calculations.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'list_tax_calculation_import_errors',
+    description:
+      'Every ERROR-preview transaction group for a tax calculation import batch — row range, transaction ref, error ' +
+      'code, and message — so the source file can be fixed and re-uploaded for just the affected transactions.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by import_tax_calculations.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
   // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Only ever requests a
   // JSON shape (format=summary by default, or format=status): callApi() parses every response as
   // JSON, so the raw XML file body itself is never a fit shape for this transport — a caller who
@@ -3870,6 +3952,31 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (limit != null) qs.set('limit', String(limit));
       const q = qs.toString();
       return callApi('GET', `/send/bulk/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'import_tax_calculations': {
+      const { csvContent, filename, entityId } = args as { csvContent: string; filename?: string; entityId?: string };
+      return callApi('POST', '/tax/calculate/import', csvFormData(csvContent, filename || 'tax-calculations.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'get_tax_calculation_import_status': {
+      const { batchId, page, limit, status, entityId } = args as { batchId: string; page?: number; limit?: number; status?: string; entityId?: string };
+      const qs = new URLSearchParams();
+      if (page != null) qs.set('page', String(page));
+      if (limit != null) qs.set('limit', String(limit));
+      if (status) qs.set('status', status);
+      const q = qs.toString();
+      return callApi('GET', `/tax/calculate/import/${encodeURIComponent(batchId)}${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'confirm_tax_calculation_import': {
+      const { batchId, entityId } = args as { batchId: string; entityId?: string };
+      return callApi('POST', `/tax/calculate/import/${encodeURIComponent(batchId)}/confirm`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'list_tax_calculation_import_errors': {
+      const { batchId, entityId } = args as { batchId: string; entityId?: string };
+      return callApi('GET', `/tax/calculate/import/${encodeURIComponent(batchId)}/errors?format=json`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
     }
 
     case 'propose_manual_adjustment': {

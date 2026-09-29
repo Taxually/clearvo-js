@@ -218,6 +218,63 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo import-tax-calculations <file> ───────────────────────────────
+  // MCP twin: import_tax_calculations. A dedicated, calc-only ingestion path —
+  // deliberately separate from send-bulk*/bulk-upload-* above, which are
+  // e-invoicing commands. Always async, two-phase: this command lands the
+  // file and queues a preview (commit:false); tax-calculation-import-confirm
+  // commits the clean transactions (commit:true).
+
+  program
+    .command('import-tax-calculations <file>')
+    .description('Upload a CSV of historical or current transactions to be tax-calculated in bulk and recorded as real tax calculations — always async, queues a preview only; see `clearvo tax-calculation-import-status`')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
+      const csvContent = readFileSync(file, 'utf8');
+      const filename = file.split('/').pop() || 'tax-calculations.csv';
+      const result = await api('POST', '/tax/calculate/import', csvFormData(csvContent, filename), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('tax-calculation-import-status <batchId>')
+    .description('Poll one tax calculation import batch, created via `import-tax-calculations`')
+    .option('--page <page>', 'Page number for the transactions list, 1-based')
+    .option('--limit <limit>', 'Transactions per page (default 25, max 100)')
+    .option('--status <status>', 'Filter the transactions page to CLEAN or ERROR')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { page?: string; limit?: string; status?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.page) qs.set('page', opts.page);
+      if (opts.limit) qs.set('limit', opts.limit);
+      if (opts.status) qs.set('status', opts.status);
+      const q = qs.toString();
+      const result = await api('GET', `/tax/calculate/import/${encodeURIComponent(batchId)}${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('tax-calculation-import-confirm <batchId>')
+    .description('Commit every CLEAN transaction group from a previewed tax calculation import batch — only valid from status READY_FOR_REVIEW, async')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('POST', `/tax/calculate/import/${encodeURIComponent(batchId)}/confirm`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('tax-calculation-import-errors <batchId>')
+    .description('Every ERROR-preview transaction group for a tax calculation import batch — row range, transaction ref, error code, and message')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/tax/calculate/import/${encodeURIComponent(batchId)}/errors?format=json`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo amend-report <id> <file> ─────────────────────────────────────────
   // ES SII block 3. Files an AEAT "A1" amendment against an already-registered SII
   // invoice — <file> is the FULL corrected invoice, same JSON shape `send` takes
