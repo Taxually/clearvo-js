@@ -1186,14 +1186,25 @@ export function createProgram(): Command {
   rules
     .command('list')
     .description('List this key\'s own rules — never the wider "effective set" a Global row would also contribute at evaluation time')
-    .option('--domain <domain>', 'ap or ar')
-    .option('--record-type <type>', 'calculation, purchase_order, or invoice')
+    .option('--domain <domain>', 'Deprecated — prefer --direction. ap or ar')
+    .option('--record-type <type>', 'Deprecated. calculation, purchase_order, or invoice')
+    .option('--direction <direction>', 'purchase or sale — inclusive of direction-less rows, which apply to both')
+    .option('--condition-property <property>', 'Only rules with a condition on this catalog property')
+    .option('--condition-value <value>', 'Combined with --condition-property — narrows to a condition whose value equals this')
+    .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing)')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { domain?: string; recordType?: string; entity?: string; pretty?: boolean }) => {
+    .action(async (opts: {
+      domain?: string; recordType?: string; direction?: string; conditionProperty?: string; conditionValue?: string;
+      includeDefaults?: boolean; entity?: string; pretty?: boolean;
+    }) => {
       const qs = new URLSearchParams();
       if (opts.domain) qs.set('domain', opts.domain);
       if (opts.recordType) qs.set('recordType', opts.recordType);
+      if (opts.direction) qs.set('direction', opts.direction);
+      if (opts.conditionProperty) qs.set('conditionProperty', opts.conditionProperty);
+      if (opts.conditionValue) qs.set('conditionValue', opts.conditionValue);
+      if (opts.includeDefaults) qs.set('includeDefaults', '1');
       const q = qs.toString();
       const result = await api('GET', `/rules-engine/rules${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
@@ -1304,6 +1315,29 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { sortOrder: string; entity?: string; pretty?: boolean }) => {
       const result = await api('POST', `/rules-engine/rules/${encodeURIComponent(id)}/move`, { sortOrder: Number(opts.sortOrder) }, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('suppress <id>')
+    .description('Opt this key\'s own scope out of a wider-scope platform-default (is_system) rule — the default keeps firing for every other scope. Find the id via `rules list --include-defaults`')
+    .option('--reason <text>', 'Optional free-text note on why this scope opted out (1-2000 chars)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { reason?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.reason) body.reason = opts.reason;
+      const result = await api('POST', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('unsuppress <id>')
+    .description('Remove this key\'s own scope\'s suppression of a platform-default rule, if one exists — the default resumes firing for this scope. 404 if no active suppression exists')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 

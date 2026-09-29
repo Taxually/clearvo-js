@@ -2404,14 +2404,53 @@ export interface Rule {
 }
 
 export interface ListRulesParams {
+  /** Deprecated — prefer direction. */
   domain?: RuleDomain;
+  /** Deprecated. */
   recordType?: RuleRecordType;
+  /** Inclusive — returns a row explicitly conditioned on this transactionDirection PLUS every direction-less row (which applies to both). */
+  direction?: 'purchase' | 'sale';
+  /** Only rules with a condition on this catalog property. */
+  conditionProperty?: string;
+  /** Combined with conditionProperty — narrows to a condition whose value equals this. */
+  conditionValue?: string;
+  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). */
+  includeDefaults?: boolean;
   entityId?: string;
 }
 
 export interface ListRulesResponse {
   ok: true;
   rules: Rule[];
+  /** Only present when `includeDefaults: true` was passed. */
+  defaults?: DefaultRuleItem[];
+  /** Only present when `includeDefaults: true` was passed. */
+  defaultsCount?: number;
+}
+
+/** One row of a GET listRules({ includeDefaults: true }) `defaults[]` projection — a Global platform-default the caller's scope can see and, in some cases, opt out of. */
+export interface DefaultRuleItem {
+  id: string;
+  code: string;
+  name: string;
+  /** Which system authored this default — a client renders the two sources identically (same DTO shape) but never conflates their write paths: a rules_engine row can be suppressed via suppressRule(); a validation_rules row never can (readOnly is always true for it). */
+  source: 'rules_engine' | 'validation_rules';
+  ruleKind: string;
+  /** A rules_engine default's legalBasisTag can be 'PLATFORM_INVARIANT' (never settable via createRule()/updateRule(), only ever system-authored) in addition to the two caller-settable values. */
+  legalBasisTag: RuleLegalBasisTag | 'PLATFORM_INVARIANT';
+  scopeLabel: string;
+  /** Always true for a validation_rules row (a separate, older system with no suppression/edit path from here at all); true for a rules_engine row only when its legalBasisTag is LEGAL_MANDATE or PLATFORM_INVARIANT (nothing here can ever weaken either). */
+  readOnly: boolean;
+  canSuppress: boolean;
+  /** Effectively suppressed for the caller RIGHT NOW (ancestor-inclusive — matches evaluator behaviour), not just "did this exact scope suppress it". */
+  suppressed: boolean;
+  /** True when `suppressed` is true but NOT via the caller's own exact scope — a wider scope (this entity's organisation, or its tenant) suppressed it instead. The caller cannot toggle this off directly (canSuppress is also false whenever this is true); they'd need to act from that wider scope. */
+  suppressedByAncestor: boolean;
+  cannotDisableReason: string | null;
+  /** Rule-list-item-shaped fields so a default row can render exactly like any other rule row. A validation_rules row has no rules-engine status/enabled/conditions concept at all — it's a standing legal-mandate check, always ACTIVE/enabled, never scoped by transactionDirection, so those three are fixed rather than derived. */
+  status: RuleStatus;
+  enabled: boolean;
+  appliesTo: { directions: ('sale' | 'purchase')[]; label: string };
 }
 
 export interface GetRuleResponse {
@@ -2462,6 +2501,22 @@ export interface UpdateRuleInput {
   /** The only status this may ever set — a one-way, terminal retirement. Reaching ACTIVE is only ever done via activateRule(). */
   status?: 'ARCHIVED';
   entityId?: string;
+}
+
+export interface SuppressRuleParams {
+  /** Optional free-text note on why this scope opted out (1-2000 chars if present). */
+  reason?: string;
+  entityId?: string;
+}
+
+export interface SuppressRuleResponse {
+  ok: true;
+  suppressed: true;
+}
+
+export interface UnsuppressRuleResponse {
+  ok: true;
+  suppressed: false;
 }
 
 export interface RuleVersionSnapshot {

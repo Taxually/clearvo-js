@@ -2375,11 +2375,14 @@ const TOOLS = [
   },
   // Rules engine (RE-4, docs/features/rules-engine/discovery.md) — MCP twins of
   // GET /rules-engine/schema, GET/POST /rules-engine/rules, GET/PATCH
-  // /rules-engine/rules/{id}, POST .../activate, .../move, .../simulate,
-  // GET/POST /rules-engine/properties, GET /rules-engine/templates[/{id}], and
-  // POST /rules-engine/templates/{id}/instantiate. Every MCP-created rule
-  // starts DRAFT regardless (the route itself enforces this, not this tool
-  // layer) — an agent must always call activate_rule as a separate step.
+  // /rules-engine/rules/{id}, POST .../activate, .../move, POST/DELETE
+  // .../suppress, .../simulate, GET/POST /rules-engine/properties, GET
+  // /rules-engine/templates[/{id}], and POST /rules-engine/templates/{id}/
+  // instantiate. Every MCP-created rule starts DRAFT regardless (the route
+  // itself enforces this, not this tool layer) — an agent must always call
+  // activate_rule as a separate step. RE-9 (domain unification): list_rules'
+  // `direction`/`includeDefaults` and suppress_rule/unsuppress_rule propagate
+  // the domain-unified rules-engine surface into this stdio server.
   {
     name: 'get_rules_engine_schema',
     description:
@@ -2397,12 +2400,18 @@ const TOOLS = [
     description:
       'List this key\'s own rules — an entity-scoped key sees its Entity-scope rules, an organisation-scoped key (no ' +
       'x-entity-id) sees its Organisation-scope rules. Never the wider "effective set" a Global row would also ' +
-      'contribute at evaluation time — this is "rules I own/can edit", not a preview of what actually fires.',
+      'contribute at evaluation time — this is "rules I own/can edit", not a preview of what actually fires. ' +
+      '`direction` is INCLUSIVE — it returns a row explicitly conditioned on that transactionDirection PLUS every ' +
+      'direction-less row (which applies to both).',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        domain: { type: 'string', enum: ['ap', 'ar'] },
-        recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'] },
+        domain: { type: 'string', enum: ['ap', 'ar'], description: 'Deprecated — prefer direction.' },
+        recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'], description: 'Deprecated.' },
+        direction: { type: 'string', enum: ['purchase', 'sale'], description: 'Inclusive of direction-less rows — see description.' },
+        conditionProperty: { type: 'string', description: 'Only rules with a condition on this catalog property.' },
+        conditionValue: { type: 'string', description: 'Combined with conditionProperty — narrows to a condition whose value equals this.' },
+        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing).' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
     },
@@ -2498,6 +2507,28 @@ const TOOLS = [
       type: 'object' as const,
       properties: { id: { type: 'string' }, sortOrder: { type: 'number' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
       required: ['id', 'sortOrder'],
+    },
+  },
+  {
+    name: 'suppress_rule',
+    description: 'Opt this key\'s own scope out of a wider-scope platform-default (is_system) rule — the default keeps firing for every other scope. Find the id via list_rules with includeDefaults.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string' },
+        reason: { type: 'string', description: 'Optional free-text note on why this scope opted out.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'unsuppress_rule',
+    description: 'Remove this key\'s own scope\'s suppression of a platform-default rule, if one exists — the default resumes firing for this scope. 404 if no active suppression exists.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
     },
   },
   {
@@ -3271,11 +3302,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/rules-engine/schema');
     }
     case 'list_rules': {
-      const { entityId } = args as { entityId?: string };
+      const { entityId, includeDefaults } = args as { entityId?: string; includeDefaults?: boolean };
       const qs = new URLSearchParams();
-      for (const k of ['domain', 'recordType'] as const) {
+      for (const k of ['domain', 'recordType', 'direction', 'conditionProperty', 'conditionValue'] as const) {
         if (args[k] !== undefined) qs.set(k, String(args[k]));
       }
+      if (includeDefaults) qs.set('includeDefaults', '1');
       const q = qs.toString();
       return callApi('GET', `/rules-engine/rules${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
@@ -3302,6 +3334,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'move_rule': {
       const { id, sortOrder, entityId } = args as { id: string; sortOrder: number; entityId?: string };
       return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/move`, { sortOrder }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'suppress_rule': {
+      const { id, reason, entityId } = args as { id: string; reason?: string; entityId?: string };
+      return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, { reason }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'unsuppress_rule': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
     case 'simulate_rule': {
       const { id, entityId, ...body } = args as Record<string, unknown> & { id?: string; entityId?: string };

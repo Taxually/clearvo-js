@@ -90,6 +90,9 @@ import type {
   CreateRuleInput,
   CreateRuleResponse,
   UpdateRuleInput,
+  SuppressRuleParams,
+  SuppressRuleResponse,
+  UnsuppressRuleResponse,
   ListRuleVersionsResponse,
   SimulateRuleInput,
   SimulateRuleResponse,
@@ -745,13 +748,15 @@ export class ClearvoClient {
     return this.request('GET', '/rules-engine/schema');
   }
 
-  /** This key's own rules — never the wider "effective set" a Global row would also contribute at evaluation time. */
+  /** This key's own rules — never the wider "effective set" a Global row would also contribute at evaluation time. `direction` is inclusive of direction-less rows. Pass `includeDefaults: true` to also get this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). */
   listRules(params: ListRulesParams = {}): Promise<ListRulesResponse> {
-    const { entityId, ...query } = params;
+    const { entityId, includeDefaults, ...query } = params;
     const qs = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) qs.set(key, String(value));
     }
+    // The API only recognizes the literal string '1' here, not 'true'.
+    if (includeDefaults) qs.set('includeDefaults', '1');
     const q = qs.toString();
     return this.request('GET', `/rules-engine/rules${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
@@ -780,6 +785,17 @@ export class ClearvoClient {
   /** Reorder a rule within its own ruleKind by setting a new sortOrder. */
   moveRule(ruleId: string, sortOrder: number, entityId?: string): Promise<GetRuleResponse> {
     return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/move`, { sortOrder }, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Opt this key's own scope out of a wider-scope platform-default (is_system) rule — the default keeps firing for every other scope. Find the id via listRules({ includeDefaults: true }). */
+  suppressRule(ruleId: string, params: SuppressRuleParams = {}): Promise<SuppressRuleResponse> {
+    const { entityId, ...body } = params;
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/suppress`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Remove this key's own scope's suppression of a platform-default rule, if one exists — the default resumes firing for this scope. 404 if no active suppression exists. */
+  unsuppressRule(ruleId: string, entityId?: string): Promise<UnsuppressRuleResponse> {
+    return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/suppress`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   /** A rule's own rules_versions history, newest first. */

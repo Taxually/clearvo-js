@@ -65,6 +65,21 @@ describe('clearvo rules / adjustments CLI', () => {
     expect(opts.headers['x-entity-id']).toBe('ent-1');
   });
 
+  it('"rules list --direction sale --condition-property customerCountry --condition-value DE --include-defaults" GETs with all four new query params', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, rules: [], defaults: [], defaultsCount: 0 }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findCommand(createProgram(), ['rules', 'list']).parseAsync(
+      ['--direction', 'sale', '--condition-property', 'customerCountry', '--condition-value', 'DE', '--include-defaults'],
+      { from: 'user' },
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      'http://x/v1/rules-engine/rules?direction=sale&conditionProperty=customerCountry&conditionValue=DE&includeDefaults=1',
+    );
+  });
+
   it('"rules create" POSTs /rules-engine/rules with parsed --conditions/--actions JSON', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, rule: { id: 'r1' }, created: true }) });
     global.fetch = fetchMock as unknown as typeof fetch;
@@ -132,6 +147,43 @@ describe('clearvo rules / adjustments CLI', () => {
     expect(url).toBe('http://x/v1/rules-engine/rules/r1/activate');
     expect(opts.method).toBe('POST');
     expect(JSON.parse(opts.body as string)).toEqual({});
+  });
+
+  it('"rules suppress <id> --reason ..." POSTs /rules-engine/rules/{id}/suppress with the reason', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, suppressed: true }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findCommand(createProgram(), ['rules', 'suppress']).parseAsync(
+      ['r1', '--reason', 'Not applicable to our supply chain'],
+      { from: 'user' },
+    );
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/suppress');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body as string)).toEqual({ reason: 'Not applicable to our supply chain' });
+  });
+
+  it('"rules suppress <id>" POSTs an empty body when --reason is omitted', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, suppressed: true }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findCommand(createProgram(), ['rules', 'suppress']).parseAsync(['r1'], { from: 'user' });
+
+    const [, opts] = fetchMock.mock.calls[0];
+    expect(JSON.parse(opts.body as string)).toEqual({});
+  });
+
+  it('"rules unsuppress <id>" DELETEs /rules-engine/rules/{id}/suppress', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, suppressed: false }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findCommand(createProgram(), ['rules', 'unsuppress']).parseAsync(['r1', '--entity', 'ent-1'], { from: 'user' });
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/suppress');
+    expect(opts.method).toBe('DELETE');
+    expect(opts.headers['x-entity-id']).toBe('ent-1');
   });
 
   it('"rules simulate" without an id and without --draft exits without calling the API', async () => {

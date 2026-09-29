@@ -55,6 +55,31 @@ describe('ClearvoClient rules engine', () => {
     expect(opts.headers['x-entity-id']).toBeUndefined();
   });
 
+  it('listRules GETs with direction/conditionProperty/conditionValue query params', async () => {
+    const fetchMock = mockFetch({ ok: true, rules: [] });
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    await client.listRules({ direction: 'sale', conditionProperty: 'customerCountry', conditionValue: 'DE' });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules?direction=sale&conditionProperty=customerCountry&conditionValue=DE');
+  });
+
+  it('listRules sends includeDefaults as the literal string "1", not "true", and passes defaults/defaultsCount through', async () => {
+    const fetchMock = mockFetch({ ok: true, rules: [], defaults: [{ id: 'd1' }], defaultsCount: 1 });
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    const result = await client.listRules({ includeDefaults: true });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules?includeDefaults=1');
+    expect(result.defaultsCount).toBe(1);
+  });
+
+  it('listRules omits includeDefaults from the query string when false', async () => {
+    const fetchMock = mockFetch({ ok: true, rules: [] });
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    await client.listRules({ includeDefaults: false });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules');
+  });
+
   it('getRule GETs /rules-engine/rules/{id}, URL-encoding the id', async () => {
     const fetchMock = mockFetch({ ok: true, rule: { id: 'r/1' } });
     const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
@@ -108,6 +133,40 @@ describe('ClearvoClient rules engine', () => {
     expect(url).toBe('http://x/v1/rules-engine/rules/r1/move');
     expect(opts.method).toBe('POST');
     expect(JSON.parse(opts.body as string)).toEqual({ sortOrder: 5 });
+  });
+
+  it('suppressRule POSTs /rules-engine/rules/{id}/suppress with a reason, forwarding entityId as a header not a body field', async () => {
+    const fetchMock = mockFetch({ ok: true, suppressed: true });
+    const client = new ClearvoClient({ apiKey: 'csk_live_acct_x', baseUrl: 'http://x/v1' });
+    const result = await client.suppressRule('r1', { reason: 'Not applicable to our supply chain', entityId: 'ent-1' });
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/suppress');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['x-entity-id']).toBe('ent-1');
+    const body = JSON.parse(opts.body as string);
+    expect(body).toEqual({ reason: 'Not applicable to our supply chain' });
+    expect(body).not.toHaveProperty('entityId');
+    expect(result.suppressed).toBe(true);
+  });
+
+  it('suppressRule POSTs an empty body when no reason is given', async () => {
+    const fetchMock = mockFetch({ ok: true, suppressed: true });
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    await client.suppressRule('r1');
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/suppress');
+    expect(JSON.parse(opts.body as string)).toEqual({});
+  });
+
+  it('unsuppressRule DELETEs /rules-engine/rules/{id}/suppress', async () => {
+    const fetchMock = mockFetch({ ok: true, suppressed: false });
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    const result = await client.unsuppressRule('r1', 'ent-1');
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/suppress');
+    expect(opts.method).toBe('DELETE');
+    expect(opts.headers['x-entity-id']).toBe('ent-1');
+    expect(result.suppressed).toBe(false);
   });
 
   it('listRuleVersions GETs /rules-engine/rules/{id}/versions', async () => {
