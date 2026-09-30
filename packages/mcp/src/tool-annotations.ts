@@ -31,7 +31,7 @@ export interface McpToolAnnotations {
 }
 
 const READ_ONLY = new Set<string>([
-  'poll_status', 'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
+  'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
   'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_entities',
   'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements',
   'list_invoices', 'get_invoice', 'list_products', 'list_webhooks', 'list_registrations',
@@ -51,6 +51,11 @@ const DESTRUCTIVE = new Set<string>([
   'delete_bank_account', 'unsuppress_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
   'cancel_sii_report', 'amend_sii_report', 'reset_field_mappings', 'exclude_reporting_batch_item',
   'confirm_reporting_batch',
+  // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
+  'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi',
+  'update_business_status', 'update_invoice_business_status',
+  // Grant access / open an outbound data channel.
+  'invite_team_member', 'create_webhook',
   // Overwrites previously stored authority credentials.
   'set_ar_credentials', 'set_pl_credentials', 'set_fr_credentials', 'set_hu_credentials', 'set_pt_credentials',
   'set_eg_credentials', 'set_jo_credentials', 'set_mx_credentials', 'set_br_credentials',
@@ -64,13 +69,18 @@ const NON_IDEMPOTENT = new Set<string>([
   'receive_invoice_document', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
   'move_rule', 'amend_sii_report',
+  // Second call fails (409: batch no longer awaiting confirmation).
+  'confirm_tax_calculation_import', 'confirm_reporting_batch',
 ]);
 
 const OPEN_WORLD = new Set<string>([
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
   'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
-  'amend_sii_report', 'cancel_sii_report', 'run_reporting_batch_sweep', 'update_business_status',
-  'update_invoice_business_status', 'get_sii_reconciliation',
+  'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
+  // poll_status is a GET that live-polls KSeF/NAV and writes the result back: NOT read-only.
+  'poll_status',
+  // These verify the credential against the authority live before saving.
+  'set_hu_credentials', 'set_eg_credentials', 'set_pl_credentials',
 ]);
 
 const ACRONYMS: Record<string, string> = {

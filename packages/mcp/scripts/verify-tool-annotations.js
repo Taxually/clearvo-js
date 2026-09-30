@@ -24,6 +24,9 @@ const SOURCE = path.join(ROOT, 'src', 'index.ts');
 // POST-verb tools that never write (verified against their routes).
 const READ_ONLY_POST_EXCEPTIONS = new Set(['query_data', 'simulate_rule']);
 
+// GET-dispatched tools whose route nevertheless writes (poll_status updates einvoicing_records and live-polls authorities).
+const GET_THAT_WRITES = new Set(['poll_status']);
+
 function fail(msg) {
   console.error(`FAIL — ${msg}`);
   process.exit(1);
@@ -97,7 +100,9 @@ const timeout = setTimeout(() => fail('Timed out waiting for a tools/list respon
       continue;
     }
     const writes = [...v].some(x => x !== 'GET');
-    if (!writes && !a.readOnlyHint) problems.push(`${t.name}: GET-only tool must be readOnlyHint=true`);
+    if (GET_THAT_WRITES.has(t.name)) {
+      if (a.readOnlyHint) problems.push(`${t.name}: GET route that mutates state must not be readOnlyHint=true`);
+    } else if (!writes && !a.readOnlyHint) problems.push(`${t.name}: GET-only tool must be readOnlyHint=true`);
     if (writes && a.readOnlyHint && !READ_ONLY_POST_EXCEPTIONS.has(t.name)) {
       problems.push(`${t.name}: dispatches ${[...v].join('/')} so it cannot be readOnlyHint=true`);
     }
