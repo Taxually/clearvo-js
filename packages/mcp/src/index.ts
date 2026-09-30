@@ -1219,7 +1219,9 @@ const TOOLS = [
       'action, csv, codigoErrorRegistro, descripcionErrorRegistro, answeredAt) — AEAT\'s own answer to the real-time ' +
       'submission, null until AEAT answers (and always in sandbox, which never calls AEAT). clearanceStatus stays ACCEPTED ' +
       'for a generated record, so for an estadoRegistro of AceptadoConErrores or Incorrecto show verifactuDetail.statusLabel ' +
-      'and action verbatim, never "Accepted". ' +
+      'and action verbatim, never "Accepted". When AEAT never gave a record-level answer, verifactuDetail is null and ' +
+      'verifactuSubmission (outcome UNKNOWN or SOAP_FAULT, statusLabel, action, attempts, at) says so — show its statusLabel ' +
+      'and action, never plain "Accepted". ' +
       'For a Spain VeriFactu or Portugal AT invoice, also returns verificationQr (dataUrl, legend) — ' +
       'the country-mandated verification QR, rendered server-side. Null for every other country. ' +
       'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +
