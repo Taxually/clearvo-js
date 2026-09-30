@@ -2,6 +2,23 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the entity bank-accounts backend PR has merged and deployed
+
+Backend PR: Taxually-Einvoicing `claude/entity-bank-accounts`, `GET`/`POST /v1/bank-accounts` + `GET`/`PATCH`/`DELETE /v1/bank-accounts/{id}`. Until it is live in production, these SDK/MCP/CLI calls 404. Lets an entity store its own IBAN/BIC once per currency (plus one entity-wide DEFAULT, currency omitted) instead of resending it on every invoice — closes the gap noted on `payment.iban`'s own doc comment ("API-only per-invoice for now; no entity-level default"). Resolution order when an invoice's own `payment.iban` is omitted: the entity's account for the invoice's currency, then the entity's DEFAULT account, then nothing (today's pre-existing behaviour). A `payment.iban` given directly on the invoice always wins outright — this master data is a fallback, never an override.
+
+### @clearvo/sdk 0.4.0 (additive, non-breaking)
+
+- New `BankAccount`, `CreateBankAccountInput`, `UpdateBankAccountInput`, `ListBankAccountsResponse` types.
+- New `listBankAccounts(entityId?)`, `createBankAccount(input)`, `getBankAccount(bankAccountId, entityId?)`, `updateBankAccount(bankAccountId, updates, entityId?)`, `deleteBankAccount(bankAccountId, entityId?)`.
+
+### @clearvo/mcp 0.5.0 (additive, non-breaking)
+
+- New `list_bank_accounts` / `create_bank_account` / `update_bank_account` / `delete_bank_account` tools, matching the SDK methods above one-for-one.
+
+### @clearvo/cli 0.4.0 (additive, non-breaking)
+
+- New `clearvo bank-accounts list|create|update|get|delete`, mirroring the `clearvo suppliers` command shape.
+
 ## Unreleased — publish only AFTER the IT/ES profile-field backend PR has merged and deployed
 
 Backend PR: Taxually-Einvoicing `claude/it-es-profile-fields`, `GET`/`PUT /v1/it/profile`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored — Clearvo is the accredited SDI intermediary, so Italy has no per-entity credential at all. This registers/reads back the entity's required Regime Fiscale profile field, which previously had no way to be set ahead of time (only inline on `/v1/send` via `countrySpecific.it.regimeFiscale`, by a caller who already knew to). Also fixes a separate, unrelated data-quality issue: Spain's `es_nif` profile field was removed from the manifest entirely (no SDK/MCP/CLI change — it was never wired up on this side) since it duplicated the entity's own ES VAT registration number with no reconciliation between the two.

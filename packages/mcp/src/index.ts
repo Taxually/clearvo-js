@@ -2061,6 +2061,66 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_bank_accounts',
+    description:
+      'List an entity\'s stored bank-account master data (IBAN/BIC), one per currency plus an optional ' +
+      'entity-wide DEFAULT (no currency). When a call to submit_invoice/send_invoice omits payment.iban, this ' +
+      'master data is used as a fallback: the account matching the invoice\'s own currency first, then the ' +
+      'DEFAULT account, in that order. A payment.iban given directly on the invoice always wins outright.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to list bank accounts for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'create_bank_account',
+    description:
+      'Store a bank account (IBAN/BIC) as entity master data, so it does not need to be resent on every ' +
+      'invoice. At most one account per currency, and at most one DEFAULT (currency omitted) account, per ' +
+      'entity — a duplicate is rejected.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        currency: { type: 'string', description: 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.' },
+        iban: { type: 'string', description: 'IBAN — format/checksum-validated before storing.' },
+        bic: { type: 'string' },
+        accountHolderName: { type: 'string', description: 'Dashboard display only — never rendered onto an invoice.' },
+        entityId: { type: 'string', description: 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['iban'],
+    },
+  },
+  {
+    name: 'update_bank_account',
+    description: 'Update a stored bank account. Passing currency: null moves it back to the entity-wide DEFAULT slot.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        bankAccountId: { type: 'string', description: 'The bank account ID to update (from list_bank_accounts or create_bank_account)' },
+        currency: { type: ['string', 'null'], description: 'null sets this back to the entity-wide DEFAULT (no-currency) slot.' },
+        iban: { type: 'string', description: 'Re-validated (format/checksum) if provided.' },
+        bic: { type: ['string', 'null'] },
+        accountHolderName: { type: ['string', 'null'] },
+        entityId: { type: 'string', description: 'Entity the bank account belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['bankAccountId'],
+    },
+  },
+  {
+    name: 'delete_bank_account',
+    description: 'Soft-delete a stored bank account.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        bankAccountId: { type: 'string', description: 'The bank account ID to delete (from list_bank_accounts)' },
+        entityId: { type: 'string', description: 'Entity the bank account belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['bankAccountId'],
+    },
+  },
+  {
     name: 'list_check_families',
     description:
       'List the optional (BUSINESS_POLICY) validation check families this entity can turn on or off — e.g. ' +
@@ -3260,6 +3320,26 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'delete_supplier': {
       const { supplierId, entityId } = args as { supplierId: string; entityId?: string };
       return callApi('DELETE', `/suppliers/${encodeURIComponent(supplierId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_bank_accounts': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/bank-accounts', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'create_bank_account': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/bank-accounts', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_bank_account': {
+      const { bankAccountId, entityId, ...updates } = args as { bankAccountId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/bank-accounts/${encodeURIComponent(bankAccountId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'delete_bank_account': {
+      const { bankAccountId, entityId } = args as { bankAccountId: string; entityId?: string };
+      return callApi('DELETE', `/bank-accounts/${encodeURIComponent(bankAccountId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'list_check_families': {
