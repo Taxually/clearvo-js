@@ -2093,44 +2093,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'get_skip_transactions',
-    description:
-      'Get this entity\'s Skip Transactions configuration: whether it is active, and the configured lists of ' +
-      'buyer tax IDs, customer refs, and buyer names. Any invoice whose buyer matches any configured list value ' +
-      'is excluded from e-invoicing entirely — never submitted to any authority.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: { entityId: { type: 'string', description: 'Entity ID to query. Required for account-scoped keys; omit for entity-scoped keys.' } },
-    },
-  },
-  {
-    name: 'set_skip_transactions',
-    description:
-      'Enable, or fully replace, this entity\'s Skip Transactions lists. Each call replaces all three lists ' +
-      '(not a merge) — send the complete desired set every time. At least one non-blank value across all three ' +
-      'lists combined is required; a request that normalizes to all three empty is rejected (an empty set would ' +
-      'match nothing, never everything).',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        taxIds: { type: 'array', items: { type: 'string' }, description: 'Buyer tax IDs to skip' },
-        customerRefs: { type: 'array', items: { type: 'string' }, description: 'Buyer customerRef values to skip' },
-        names: { type: 'array', items: { type: 'string' }, description: 'Buyer names to skip' },
-        entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
-      },
-    },
-  },
-  {
-    name: 'disable_skip_transactions',
-    description:
-      'Disable this entity\'s Skip Transactions entirely. The configured lists are preserved, not cleared — a ' +
-      'later set_skip_transactions call with the same lists re-activates them unchanged.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: { entityId: { type: 'string', description: 'Entity to disable. Required for account-scoped keys; omit for entity-scoped keys.' } },
-    },
-  },
-  {
     name: 'list_client_tax_codes',
     description:
       'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
@@ -3308,21 +3270,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'toggle_check_family': {
       const { checkFamily, entityId, ...rest } = args as { checkFamily: string; entityId?: string } & Record<string, unknown>;
       return callApi('PATCH', `/rules/families/${encodeURIComponent(checkFamily)}`, rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
-    }
-
-    case 'get_skip_transactions': {
-      const { entityId } = args as { entityId?: string };
-      return callApi('GET', '/skip-transactions', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
-    }
-
-    case 'set_skip_transactions': {
-      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
-      return callApi('PUT', '/skip-transactions', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
-    }
-
-    case 'disable_skip_transactions': {
-      const { entityId } = args as { entityId?: string };
-      return callApi('DELETE', '/skip-transactions', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'list_client_tax_codes': {
