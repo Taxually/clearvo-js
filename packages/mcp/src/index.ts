@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createHash } from 'crypto';
+import { getToolAnnotations } from './tool-annotations.js';
 
 // White-label tenants get their own branded env var names instead of CLEARVO_*.
 // CLEARVO_API_KEY always wins if set; otherwise the first matching tenant alias is used.
@@ -3612,11 +3613,17 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS.map(t => ({
-    name: t.name,
-    description: t.description,
-    inputSchema: t.inputSchema,
-  })),
+  // `title` + `annotations` are required by Anthropic's directory (see tool-annotations.ts).
+  tools: TOOLS.map(t => {
+    const { title, ...hints } = getToolAnnotations(t.name);
+    return {
+      name: t.name,
+      title,
+      description: t.description,
+      inputSchema: t.inputSchema,
+      annotations: { title, ...hints },
+    };
+  }),
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
