@@ -24,6 +24,10 @@ import type {
   UpdateSupplierInput,
   ListSuppliersParams,
   ListSuppliersResponse,
+  BankAccount,
+  CreateBankAccountInput,
+  UpdateBankAccountInput,
+  ListBankAccountsResponse,
   Webhook,
   CreateWebhookInput,
   CreateWebhookResponse,
@@ -329,6 +333,40 @@ export class ClearvoClient {
   /** GET /suppliers/by-ref/{ref} — look up a saved supplier by your own supplierRef instead of Clearvo's internal id. */
   getSupplierByRef(ref: string, entityId?: string): Promise<Supplier> {
     return this.request('GET', `/suppliers/by-ref/${encodeURIComponent(ref)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Bank Account Master Data ─────────────────────────────────────────────────
+  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
+  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
+  // see BankAccount's own doc comment (types.ts) for the fallback precedence.
+
+  /** GET /bank-accounts responds 200 with `{ bankAccounts }`. */
+  listBankAccounts(entityId?: string): Promise<ListBankAccountsResponse> {
+    return this.request('GET', '/bank-accounts', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** POST /bank-accounts responds 201 with `{ bankAccount }`, unlike get/update below which return the BankAccount bare. */
+  async createBankAccount(input: CreateBankAccountInput): Promise<BankAccount> {
+    const { entityId, ...body } = input;
+    const { bankAccount } = await this.request<{ bankAccount: BankAccount }>(
+      'POST', '/bank-accounts', body, entityId ? { 'x-entity-id': entityId } : undefined
+    );
+    return bankAccount;
+  }
+
+  /** GET /bank-accounts/{id} responds 200 with the BankAccount bare — no envelope. */
+  getBankAccount(bankAccountId: string, entityId?: string): Promise<BankAccount> {
+    return this.request('GET', `/bank-accounts/${encodeURIComponent(bankAccountId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** PATCH /bank-accounts/{id} responds 200 with the BankAccount bare — no envelope. */
+  updateBankAccount(bankAccountId: string, updates: UpdateBankAccountInput, entityId?: string): Promise<BankAccount> {
+    return this.request('PATCH', `/bank-accounts/${encodeURIComponent(bankAccountId)}`, updates, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** DELETE /bank-accounts/{id} responds 204 with no body. */
+  deleteBankAccount(bankAccountId: string, entityId?: string): Promise<void> {
+    return this.request('DELETE', `/bank-accounts/${encodeURIComponent(bankAccountId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Requirements ──────────────────────────────────────────────────────────────

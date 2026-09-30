@@ -603,7 +603,94 @@ export function createProgram(): Command {
       const result = await api('DELETE', `/suppliers/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
-  
+
+  // ── clearvo bank-accounts ───────────────────────────────────────────────────
+  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
+  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
+  // an invoice's own payment.iban always wins outright; this is a fallback.
+  const bankAccounts = program.command('bank-accounts').description('Manage bank-account master data');
+
+  bankAccounts
+    .command('list')
+    .description('List bank accounts')
+    .option('--entity <entityId>', 'Entity to list bank accounts for. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/bank-accounts', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  bankAccounts
+    .command('create')
+    .description('Store a bank account')
+    .requiredOption('--iban <iban>', 'IBAN — format/checksum-validated before storing')
+    .option('--currency <code>', 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.')
+    .option('--bic <bic>', 'BIC')
+    .option('--account-holder-name <name>', 'Dashboard display only — never rendered onto an invoice')
+    .option('--entity <entityId>', 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: {
+      iban: string;
+      currency?: string;
+      bic?: string;
+      accountHolderName?: string;
+      entity?: string;
+      pretty?: boolean;
+    }) => {
+      const body: Record<string, string> = { iban: opts.iban };
+      if (opts.currency) body.currency = opts.currency;
+      if (opts.bic) body.bic = opts.bic;
+      if (opts.accountHolderName) body.accountHolderName = opts.accountHolderName;
+      const result = await api('POST', '/bank-accounts', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  bankAccounts
+    .command('update <id>')
+    .description('Update a bank account')
+    .option('--currency <code>', 'Updated currency, or the literal string "null" to move it back to the entity-wide DEFAULT slot')
+    .option('--iban <iban>', 'Updated IBAN — re-validated (format/checksum)')
+    .option('--bic <bic>', 'Updated BIC, or the literal string "null" to clear it')
+    .option('--account-holder-name <name>', 'Updated account holder name, or the literal string "null" to clear it')
+    .option('--entity <entityId>', 'Entity the bank account belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: {
+      currency?: string;
+      iban?: string;
+      bic?: string;
+      accountHolderName?: string;
+      entity?: string;
+      pretty?: boolean;
+    }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.currency !== undefined) body.currency = opts.currency === 'null' ? null : opts.currency;
+      if (opts.iban) body.iban = opts.iban;
+      if (opts.bic !== undefined) body.bic = opts.bic === 'null' ? null : opts.bic;
+      if (opts.accountHolderName !== undefined) body.accountHolderName = opts.accountHolderName === 'null' ? null : opts.accountHolderName;
+      const result = await api('PATCH', `/bank-accounts/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  bankAccounts
+    .command('get <id>')
+    .description('Get a bank account by ID')
+    .option('--entity <entityId>', 'Entity the bank account belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/bank-accounts/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  bankAccounts
+    .command('delete <id>')
+    .description('Soft-delete a bank account')
+    .option('--entity <entityId>', 'Entity the bank account belongs to. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('DELETE', `/bank-accounts/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo webhooks ────────────────────────────────────────────────────────
   const webhooks = program.command('webhooks').description('Manage webhook endpoints');
   

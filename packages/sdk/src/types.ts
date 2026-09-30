@@ -1189,6 +1189,49 @@ export interface ListSuppliersResponse {
   limit?: number;
 }
 
+// ── Bank Account Master Data ─────────────────────────────────────────────────
+//
+// Entity-owned IBAN/BIC master data, one row per currency plus an optional
+// entity-wide DEFAULT (currency omitted). When an invoice's payment.iban is
+// omitted, submitInvoice/calculateTax's send step falls back to the account
+// matching the invoice's own currency, then to the DEFAULT account, in that
+// order — a payment.iban given directly on the invoice always wins outright.
+
+export interface BankAccount {
+  id: string;
+  /** ISO 4217 alpha-3, or null for the entity-wide default/fallback account. */
+  currency: string | null;
+  iban: string;
+  bic?: string | null;
+  accountHolderName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateBankAccountInput {
+  /** Omit to make this the entity-wide DEFAULT account. */
+  currency?: string;
+  /** Format/checksum-validated before storing. */
+  iban: string;
+  bic?: string;
+  accountHolderName?: string;
+  /** Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface UpdateBankAccountInput {
+  /** null moves this back to the entity-wide DEFAULT (no-currency) slot. */
+  currency?: string | null;
+  /** Re-validated (format/checksum) if provided. */
+  iban?: string;
+  bic?: string | null;
+  accountHolderName?: string | null;
+}
+
+export interface ListBankAccountsResponse {
+  bankAccounts: BankAccount[];
+}
+
 export interface Webhook {
   id: string;
   url: string;
