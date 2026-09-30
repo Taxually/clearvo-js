@@ -95,7 +95,7 @@ export function createProgram(): Command {
   // Invoice responses carry `totalTax` (never `totalVat`).
   program
     .command('send <file>')
-    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with 422 UNKNOWN_FIELD_LINE_RENAMED)')
+    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with 422 UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`')
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
     .option('--pretty', 'Pretty-print JSON output')
@@ -775,9 +775,9 @@ export function createProgram(): Command {
   
   registrations
     .command('update <id>')
-    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s Handelsregisternummer/Kleinunternehmer flag) in place')
+    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s Handelsregisternummer/Kleinunternehmer flag; Spain\'s es_tax_territory: mainland | canary_islands | both — Canary Islands IGIC invoices need it) in place')
     .option('--number <taxNumber>', 'New registration/VAT number (pass an empty string to clear it)')
-    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\' or \'{"de_handelsregisternummer":"HRB 12345","de_kleinunternehmer":"true"}\' — see docs for the full de_* key list')
+    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\' or \'{"de_handelsregisternummer":"HRB 12345","de_kleinunternehmer":"true"}\' or \'{"es_tax_territory":"canary_islands"}\' — see docs for the full de_* key list')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { number?: string; extra?: string; pretty?: boolean }) => {
       if (opts.number === undefined && opts.extra === undefined) {
