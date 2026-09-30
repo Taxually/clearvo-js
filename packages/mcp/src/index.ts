@@ -393,7 +393,7 @@ const TOOLS = [
                 customerIdType: {
                   type: 'string',
                   enum: ['passport', 'residence_document', 'residence_certificate', 'other', 'not_registered'],
-                  description: 'VeriFactu only. What kind of document customer.taxId is when it is not a Spanish NIF or an EU VAT number: passport (AEAT IDType 03), residence_document (04), residence_certificate (05), other (06), not_registered (07). A Spanish NIF and an EU VAT number are recognised automatically; any other identifier without this field holds the invoice as NEEDS_INFO (VERIFACTU_BUYER_ID_UNRESOLVED).',
+                  description: 'VeriFactu only. What kind of document customer.taxId is when it is not a Spanish NIF or an EU VAT number: passport (AEAT IDType 03), residence_document (04), residence_certificate (05), other (06), not_registered (07). A Spanish NIF and an EU VAT number are recognised automatically; any other identifier without this field holds the invoice as NEEDS_INFO (MANDATE_INCOMPLETE_DATA, missingFields names customerIdType).',
                 },
                 noRecipientIdentification: {
                   type: 'boolean',
@@ -1215,6 +1215,11 @@ const TOOLS = [
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
       'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
       'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
+      'For a Spain VeriFactu invoice, also returns verifactuDetail (estadoEnvio, estadoRegistro, statusLabel, ' +
+      'action, csv, codigoErrorRegistro, descripcionErrorRegistro, answeredAt) — AEAT\'s own answer to the real-time ' +
+      'submission, null until AEAT answers (and always in sandbox, which never calls AEAT). clearanceStatus stays ACCEPTED ' +
+      'for a generated record, so for an estadoRegistro of AceptadoConErrores or Incorrecto show verifactuDetail.statusLabel ' +
+      'and action verbatim, never "Accepted". ' +
       'For a Spain VeriFactu or Portugal AT invoice, also returns verificationQr (dataUrl, legend) — ' +
       'the country-mandated verification QR, rendered server-side. Null for every other country. ' +
       'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +

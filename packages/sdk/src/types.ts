@@ -2069,6 +2069,10 @@ export interface ClientTaxCodeOptionsResponse {
   supplyTypes: Array<{ value: ClientTaxCodeSupplyType; label: string }>;
   rateBands: Array<{ value: ClientTaxCodeRateBand; label: string; valid: boolean; rate: number | null }> | null;
   regionRequired: boolean | null;
+  /** Selectable sub-country regions when the country offers a fixed list (e.g. ES -> Canary Islands); null otherwise. */
+  regionOptions: Array<{ value: string; label: string }> | null;
+  /** Label for the empty choice when regionOptions is offered (e.g. ES -> mainland); null otherwise. */
+  regionNoneLabel: string | null;
   reverseChargeRelevant: boolean | null;
   useTaxSelfAssessedRelevant: boolean | null;
   zeroRatedGuidance: string | null;
