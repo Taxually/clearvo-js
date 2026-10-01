@@ -2,6 +2,26 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the Peppol for Germany backend PR has merged and deployed
+
+Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing and credit/debit notes for Germany.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- New `DeInvoiceFormat` (`ZUGFERD` | `XRECHNUNG` | `PEPPOL`); `UpdateEntityInput.defaultDeInvoiceFormat` and `Entity.defaultDeInvoiceFormat`; `countrySpecific.de.invoiceFormat` documented with the Peppol requirements and error codes.
+- `InvoiceSubmitResponse` gains `documentFormat` (`UBL_PEPPOL_BIS`) and `delivery { channel: 'NETWORK', receiver, evidence }`. New `PeppolCustomerUnreachableResponse` type for the 422 `PEPPOL_CUSTOMER_UNREACHABLE` body (`reason`, `alternatives[]`, `evidence`).
+- New `InboundValidation`, `ValidationOutcome` (now includes `BUSINESS_RULE_ERROR`, `NOT_VALIDATED`) and `ReceivedInvoiceFields` (`intakeChannel`, `receivedAt`, `validation`, `attachments`, `rendition`, `supersededBy`) for received rows from `listInvoices`.
+
+### @clearvo/mcp (additive)
+
+- `submit_invoice`: description covers Germany over Peppol (requirements, response, `PEPPOL_CUSTOMER_UNREACHABLE` and the new error codes, dry-run); `customer.endpointSchemeId` / `customer.endpointId` added.
+- `update_entity`: `defaultDeInvoiceFormat`. `create_customer`, `update_customer`, `upsert_customer_by_ref`: `countrySpecific.de.invoiceFormat`.
+- `list_invoices`, `get_invoice`: descriptions cover the received-document fields and the readable PDF copy.
+
+### @clearvo/cli (additive)
+
+- `clearvo send` help text covers the Germany `PEPPOL` format and `--dry-run` behaviour for it.
+
 ## Unreleased — publish only AFTER the Spain VeriFactu Canary Islands backend PR has merged and deployed
 
 Backend branch: Taxually-Einvoicing `claude/es-verifactu-igic-f2`. Until it is live, the new `countrySpecific.es` keys are ignored or rejected by the API. Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system under the same Spanish tax number; it does not file IGIC returns or the Canary SII.

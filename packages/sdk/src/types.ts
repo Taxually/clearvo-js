@@ -16,6 +16,8 @@ export interface Entity {
   mxIngestionStartDate?: string | null;
   /** Facts about the entity itself (not any one country registration) — e.g. legalForm. See UpdateEntityInput.entityFacts. */
   entityFacts?: Record<string, string>;
+  /** Germany only. This entity's default DE invoice format (level 3 of the format resolver), or null when unset (platform default ZUGFERD). */
+  defaultDeInvoiceFormat?: DeInvoiceFormat | null;
 }
 
 export interface CreateEntityInput {
@@ -36,6 +38,17 @@ export interface CreateEntityResponse {
 export interface UpdateEntityInput {
   name?: string;
   vatNumber?: string;
+  /**
+   * Germany only. Entity-level default for `countrySpecific.de.invoiceFormat`
+   * (used when neither the request nor the stored customer picks a format).
+   * `'PEPPOL'` sends the invoice over the Peppol network. null clears the
+   * override (back to the platform default, ZUGFERD). Anything else is
+   * rejected with 400 INVALID_DE_INVOICE_FORMAT. A self-billed invoice cannot
+   * resolve to PEPPOL: with this default set, it returns 422
+   * `DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED` unless the request names
+   * ZUGFERD or XRECHNUNG.
+   */
+  defaultDeInvoiceFormat?: DeInvoiceFormat | null;
   /** Default for SubmitInvoiceInput.notifyCustomer — applies whenever a send omits its own override. */
   notifyCustomerByDefault?: boolean;
   /**
@@ -58,6 +71,38 @@ export interface UpdateEntityInput {
   entityFacts?: Record<string, string | null>;
 }
 
+/** Values of Germany's `countrySpecific.de.invoiceFormat` (and the customer/entity default). */
+export type DeInvoiceFormat = 'ZUGFERD' | 'XRECHNUNG' | 'PEPPOL';
+
+/**
+ * The 422 body of POST /v1/send for a German invoice resolved to PEPPOL whose
+ * buyer cannot be reached over Peppol. There is no silent fallback: the invoice
+ * is stored NEEDS_INFO (absent on a dryRun) and `error.alternatives[]` lists
+ * the formats to re-send as.
+ */
+export interface PeppolCustomerUnreachableResponse {
+  ok: false;
+  id?: string;
+  clearanceStatus?: 'NEEDS_INFO';
+  error: {
+    code: 'PEPPOL_CUSTOMER_UNREACHABLE';
+    message: string;
+    /** NO_CUSTOMER_PEPPOL_ID: no explicit Peppol address (never derived from a VAT number). NOT_REGISTERED_ON_PEPPOL: the network does not know the address. */
+    reason: 'NO_CUSTOMER_PEPPOL_ID' | 'NOT_REGISTERED_ON_PEPPOL';
+    isMerchantResolvable?: boolean;
+    fixUrl?: string;
+    retryable?: boolean;
+    alternatives: Array<{
+      invoiceFormat: 'ZUGFERD' | 'XRECHNUNG';
+      label?: string;
+      description?: string;
+      /** Request fragment to re-send with; `correctsInvoiceId` reuses the invoice number. */
+      resend?: Record<string, unknown>;
+    }>;
+    evidence: Record<string, unknown>;
+  };
+}
+
 export interface InvoiceSubmitResponse {
   referenceId: string;
   /**
@@ -77,6 +122,24 @@ export interface InvoiceSubmitResponse {
   reason?: UnmappedTaxCodeReason;
   /** Echoed back only when the request set dryRun: true — no record was persisted. */
   dryRun?: boolean;
+  /**
+   * Germany: the generated document format. `UBL_PEPPOL_BIS` when the resolved
+   * `de.invoiceFormat` is `PEPPOL` — the invoice goes over the Peppol network,
+   * so `status` is PENDING (never ACCEPTED at generation) and moves to
+   * DELIVERED once the receiving access point confirms.
+   */
+  documentFormat?: 'UBL_XRECHNUNG' | 'CII_ZUGFERD' | 'UBL_PEPPOL_BIS';
+  /**
+   * Present for a Peppol send (and its dryRun): how the invoice reaches the
+   * buyer. `receiver` is the buyer's Peppol address as `scheme:value`
+   * (e.g. `9930:DE123456789`); a German buyer's address is never derived from
+   * a VAT number. `evidence` is dryRun only (what the reachability check saw).
+   */
+  delivery?: {
+    channel: 'NETWORK';
+    receiver: string | null;
+    evidence?: Record<string, unknown>;
+  };
   /**
    * Per-line tax-code resolution audit trail — one entry per submitted
    * `lines[]`, in original order. Present on every real submission (and on
@@ -374,7 +437,23 @@ export interface SubmitInvoiceInput {
    * - `hu.invoiceAppearance` — one of PAPER/ELECTRONIC/EDI/UNKNOWN, overriding
    *   the default appearance (PAPER for a resolved PRIVATE_PERSON customer,
    *   ELECTRONIC otherwise).
-   * - `de.invoiceFormat` — per-request override of ZUGFERD vs. XRECHNUNG.
+   * - `de.invoiceFormat` — per-request override of ZUGFERD vs. XRECHNUNG vs.
+   *   PEPPOL (see {@link DeInvoiceFormat}). `PEPPOL` sends the invoice over
+   *   the Peppol network (Peppol BIS Billing 3.0; response `documentFormat`
+   *   `UBL_PEPPOL_BIS`, status PENDING then DELIVERED). Needs the seller's
+   *   confirmed Peppol ID and an explicit Peppol ID for the customer
+   *   (`customer.endpointSchemeId` + `customer.endpointId`, or a confirmed one
+   *   on the stored customer) — a German buyer's address is never derived
+   *   from a VAT number — plus a `buyerReference` or `orderReference`. An
+   *   unreachable buyer fails 422 `PEPPOL_CUSTOMER_UNREACHABLE`
+   *   ({@link PeppolCustomerUnreachableResponse}). Other errors: 422
+   *   `MISSING_SELLER_PEPPOL_ID`, `CREDIT_NOTE_PEPPOL_UNSUPPORTED` (credit
+   *   and debit notes cannot go over Peppol for Germany; use ZUGFERD or
+   *   XRECHNUNG), `PEPPOL_SCHEMATRON_VALIDATION_FAILED`,
+   *   `XRECHNUNG_SCHEMATRON_VALIDATION_FAILED`, `VALIDATION_UNAVAILABLE`.
+   *   Self-billed German invoices cannot use PEPPOL: 400
+   *   `DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED` when requested explicitly, 422
+   *   `DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED` when a stored default is PEPPOL.
    * - `de.leitwegId` — BT-10 German public-sector routing ID (XRechnung
    *   only); falls back to the top-level `buyerReference` when omitted.
    * - `de.legalForm` — per-invoice override of the entity's own legal form
@@ -508,6 +587,73 @@ export interface ListInvoicesParams {
   status?: string;
   /** ISO 8601 timestamp — only invoices whose Clearvo-side created_at is strictly after this. A monotonic ingestion cursor, distinct from issueDate; most relevant for Mexico CFDIs given SAT's own multi-day publishing lag. */
   receivedAfter?: string;
+}
+
+/** `validation` block of a received document: what was checked and what was found. It never says a document is valid or approved. */
+export interface InboundValidation {
+  outcome: string | null;
+  status: 'CHECKS_PASSED' | 'CHECKS_WARNINGS' | 'CHECKS_FAILED' | 'CHECKS_NOT_RUN' | null;
+  /** For example "Checked against Peppol BIS Billing 3.0 (PEPPOL-EN16931-UBL 3.0.21): 0 errors, 2 warnings". */
+  summary: string | null;
+  ruleset: 'EN16931' | 'PEPPOL' | 'PEPPOL-SB' | 'XRECHNUNG' | null;
+  artefact: { name: string; version: string } | null;
+  checkedAt: string | null;
+  counts: { errors: number; warnings: number } | null;
+  /** Populated on the single-record read; empty on the list. */
+  findings: Array<{
+    rule: string;
+    severity: 'error' | 'warning';
+    message: string;
+    bmfClass?: string;
+    location?: string;
+  }>;
+  truncated?: boolean;
+}
+
+/** Classification of a received e-invoice (BMF three-tier taxonomy plus the Peppol checks). */
+export type ValidationOutcome =
+  | 'E_INVOICE'
+  | 'E_INVOICE_WITH_FLAGS'
+  | 'FORMAT_ERROR'
+  | 'PROFILE_NOT_SUFFICIENT'
+  | 'NOT_AN_EINVOICE'
+  | 'BUSINESS_RULE_ERROR'
+  | 'NOT_VALIDATED';
+
+/**
+ * Fields present on a RECEIVED document (direction `inbound`, e.g. inbound Peppol) in the
+ * GET /v1/invoices list and GET /v1/invoices/{id}. `ListInvoicesResponse.invoices`
+ * stays `unknown[]`; cast a received row to this shape.
+ */
+export interface ReceivedInvoiceFields {
+  validationOutcome?: ValidationOutcome | null;
+  /** PEPPOL_AS4, DE_INBOUND_API, DE_INBOUND_DASHBOARD, DE_INBOUND_BULK or DE_INBOUND_EMAIL. */
+  intakeChannel?: string;
+  /** When the platform received the document (not when it was stored). */
+  receivedAt?: string;
+  validation?: InboundValidation | null;
+  /** The supplier's own supporting documents (BG-24), listed only; the bytes are never included. */
+  attachments?: Array<{
+    id: string | null;
+    fileName: string | null;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    description: string | null;
+    externalUrl: string | null;
+    origin: 'supplier';
+  }>;
+  /**
+   * How GET /v1/documents/{id}?format=pdf answers: `original` (the archived
+   * PDF), `generated` (a labelled readable copy rendered from the structured
+   * data, not an invoice in its own right) or `none` (it would answer 422).
+   */
+  rendition?: 'original' | 'generated' | 'none' | null;
+  /**
+   * On a needs-review record replaced by a corrected re-send: the replacing
+   * record (`{ id }` on the list; the single-record read adds invoiceNumber,
+   * status and statusLabel). null otherwise.
+   */
+  supersededBy?: { id: string; invoiceNumber?: string; status?: string; statusLabel?: string } | null;
 }
 
 export interface ListInvoicesResponse {

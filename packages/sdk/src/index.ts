@@ -224,4 +224,9 @@ export type {
   ManualAdjustment,
   ListManualAdjustmentsResponse,
   ManualAdjustmentOptions,
+  DeInvoiceFormat,
+  PeppolCustomerUnreachableResponse,
+  InboundValidation,
+  ValidationOutcome,
+  ReceivedInvoiceFields,
 } from './types.js';
