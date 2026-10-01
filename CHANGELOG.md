@@ -2,6 +2,22 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — France e-reporting alignment: optional idempotency key on POST /v1/send (publish AFTER backend branch `claude/fr-ereporting-dgfip-alignment` has merged and deployed)
+
+Until the backend is live, `x-idempotency-key` is still required and a request without it returns 400.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- `submitInvoice(input, idempotencyKey?)`: the key was already an optional parameter; it is now optional on the wire too. Omitted, the API derives `auto-<hash>` from the document identity (sale: `documentType` + `invoiceNumber`; purchase: also `supplier.taxId` and `issueDate`). Re-sending the same identity with different content returns `409 IDEMPOTENT_BODY_MISMATCH` (an earlier `NEEDS_INFO` or `REJECTED` attempt re-runs in place instead). A supplied key always wins.
+
+### @clearvo/mcp (behaviour change)
+
+- `submit_invoice` no longer sends a client-derived `x-idempotency-key`; the API derives it from the invoice identity. A changed re-send of the same invoice is now refused 409 `IDEMPOTENT_BODY_MISMATCH` rather than replaying the first result.
+
+### @clearvo/cli (behaviour change)
+
+- `clearvo send <file>` no longer hashes the file into an `x-idempotency-key`; same server-side derivation and 409 behaviour as the MCP tool. Editing the file and re-submitting the same invoice number is now refused loudly instead of replaying.
+
 ## Unreleased — publish only AFTER the Spain VeriFactu Canary Islands backend PR has merged and deployed
 
 Backend branch: Taxually-Einvoicing `claude/es-verifactu-igic-f2`. Until it is live, the new `countrySpecific.es` keys are ignored or rejected by the API. Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system under the same Spanish tax number; it does not file IGIC returns or the Canary SII.

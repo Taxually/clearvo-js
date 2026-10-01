@@ -206,6 +206,12 @@ export class ClearvoClient {
 
   // ── E-Invoicing ──────────────────────────────────────────────────────────────
 
+  /**
+   * `idempotencyKey` is optional. When omitted the API derives one from the document identity
+   * (sale: documentType + invoiceNumber; purchase: also supplier.taxId + issueDate) and a re-send
+   * of the same identity with different content is refused 409 IDEMPOTENT_BODY_MISMATCH (unless the
+   * earlier attempt is NEEDS_INFO or REJECTED, which re-run in place). A supplied key always wins.
+   */
   submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;

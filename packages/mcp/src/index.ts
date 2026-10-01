@@ -2971,14 +2971,12 @@ const TOOLS = [
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
     case 'submit_invoice': {
-      // Derive a stable idempotency key from invoice identity fields
-      const idempotencyKey = createHash('sha256')
-        .update(`${args.invoiceNumber ?? ''}|${args.country ?? ''}|${args.issueDate ?? ''}`)
-        .digest('hex')
-        .slice(0, 64);
+      // No client-side key: POST /v1/send derives one from the document identity when
+      // x-idempotency-key is absent, and refuses a changed body for the same identity
+      // (409 IDEMPOTENT_BODY_MISMATCH) instead of silently replaying the old outcome.
       // Default documentType to 'invoice' if not provided
       const body = { documentType: 'invoice', ...args };
-      return callApi('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
+      return callApi('POST', '/send', body);
     }
 
     case 'amend_sii_report': {
