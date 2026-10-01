@@ -200,6 +200,22 @@ const TOOLS = [
       'supplierRef resolves a saved one) and customer becomes your OWN entity\'s identity instead ' +
       '(auto-derived, tax-ID-checked). See supplier/customer/countrySpecific.peppol.selfBilling below ' +
       'for the full behavior. ' +
+      'Germany over Peppol: set countrySpecific.de.invoiceFormat=PEPPOL (or store PEPPOL as the customer\'s or ' +
+      'entity\'s default de invoice format) to send a Peppol BIS Billing 3.0 invoice to the buyer over the Peppol network. ' +
+      'It needs the seller\'s confirmed Peppol ID (else 422 MISSING_SELLER_PEPPOL_ID), an EXPLICIT Peppol address for the ' +
+      'customer (customer.endpointSchemeId + customer.endpointId, or a confirmed peppolParticipantId on the stored ' +
+      'customer — a German buyer\'s address is never derived from a VAT number), and a buyerReference or orderReference. ' +
+      'The response carries documentFormat UBL_PEPPOL_BIS and delivery { channel: NETWORK, receiver, evidence }; status is ' +
+      'PENDING (never ACCEPTED at generation) and becomes DELIVERED once the receiving access point confirms. ' +
+      'An unreachable buyer fails 422 PEPPOL_CUSTOMER_UNREACHABLE (reason NO_CUSTOMER_PEPPOL_ID or NOT_REGISTERED_ON_PEPPOL): ' +
+      'the invoice is stored NEEDS_INFO, there is no silent fallback, and error.alternatives[] lists the formats to re-send as ' +
+      '(each with a resend fragment that includes correctsInvoiceId) plus error.evidence. Other codes: ' +
+      'PEPPOL_SCHEMATRON_VALIDATION_FAILED / XRECHNUNG_SCHEMATRON_VALIDATION_FAILED (the generated document failed its own ' +
+      'rule check), VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes ' +
+      'cannot go over Peppol for Germany — use ZUGFERD or XRECHNUNG). Self-billed German invoices cannot use PEPPOL: ' +
+      '400 DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a ' +
+      'stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). dryRun=true on a German PEPPOL invoice runs the real content ' +
+      'rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
       'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
       'and — for any customer that is not a private individual — a customer street address plus (only ' +
       'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
@@ -286,6 +302,8 @@ const TOOLS = [
                 email: { type: 'string', description: 'Customer email — required if notifyCustomer is set (or your entity default is on) for a country where Clearvo does not deliver the invoice electronically.' },
               },
             },
+            endpointSchemeId: { type: 'string', description: 'Peppol participant scheme ID of the customer\'s Peppol address (e.g. "0204" Leitweg-ID, "9930" German VAT). Use together with endpointId. Required for Germany over Peppol unless the stored customer has a confirmed Peppol ID.' },
+            endpointId: { type: 'string', description: 'Peppol participant ID value of the customer\'s Peppol address. Use together with endpointSchemeId.' },
             customerRef: {
               type: 'string',
               description: 'Your own reference for a previously-saved customer (see the dashboard\'s Customers page). When set, Clearvo fills in any of name/taxId/address you omit here from the saved record — fields you do supply still take precedence.',
@@ -717,6 +735,7 @@ const TOOLS = [
       'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
       'Also handles notifyCustomerByDefault — see submit_invoice\'s notifyCustomer for what this controls. ' +
       'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties. ' +
+      'Also handles Germany\'s defaultDeInvoiceFormat (ZUGFERD | XRECHNUNG | PEPPOL | null) — see that property. ' +
       'entityFacts sets facts about the entity itself (not any one country registration) — e.g. legalForm, the ' +
       'DE legal-form code (GMBH/UG/AG/SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/' +
       'FOREIGN_BRANCH/OTHER — see get_entity_fact_definitions for the full option list), which gates whether ' +
@@ -739,6 +758,7 @@ const TOOLS = [
         notifyCustomerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyCustomer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyCustomer override.' },
         mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
         mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
+        defaultDeInvoiceFormat: { type: ['string', 'null'], enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL', null], description: 'Germany: this entity\'s default DE invoice format, used when neither the request nor the stored customer picks one. PEPPOL sends over the Peppol network (needs the seller\'s confirmed Peppol ID and an explicit Peppol ID for each customer). null clears it back to the platform default (ZUGFERD). Any other value fails 400 INVALID_DE_INVOICE_FORMAT. Not used for self-billed invoices (422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG).' },
         entityFacts: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Facts about the entity itself, e.g. { "legalForm": "GMBH" } — see get_entity_fact_definitions for the known keys. A string value sets that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['entityId'],
@@ -1209,6 +1229,11 @@ const TOOLS = [
       'Returns submission timestamps, clearance status labels, and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
+      'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
+      'validationOutcome (E_INVOICE, E_INVOICE_WITH_FLAGS, FORMAT_ERROR, PROFILE_NOT_SUFFICIENT, NOT_AN_EINVOICE, BUSINESS_RULE_ERROR, ' +
+      'NOT_VALIDATED), validation (what was checked against which rule set and version, with error/warning counts and a summary; ' +
+      'the findings are on get_invoice), attachments (the supplier\'s supporting documents, listed only, never the bytes), ' +
+      'rendition (original | generated | none: how the PDF read answers) and supersededBy. ' +
       'Paginate using the nextCursor / prevCursor values returned in each response: pass nextCursor as after_id to advance forward.',
     inputSchema: {
       type: 'object' as const,
@@ -1251,6 +1276,14 @@ const TOOLS = [
       'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +
       'when applicable) and supplierAdditionalLegalInfo (BT-33, the assembled company-law disclosure string) — ' +
       'both null for every other country and for a DE seller with nothing to disclose. ' +
+      'For a received document (direction inbound, e.g. any invoice received over Peppol), also returns intakeChannel, receivedAt, ' +
+      'validationOutcome and validation: the rule set and version it was checked against, error/warning counts, a summary and the ' +
+      'individual findings (rule, severity, message, location). validation states what was checked and found; it never says a ' +
+      'document is valid, compliant or approved. Also attachments (the supplier\'s own supporting documents, listed only), ' +
+      'rendition (original = the archived PDF, generated = a labelled readable copy rendered from the structured data and not an ' +
+      'invoice in its own right, none = the PDF read would answer 422) and supersededBy (the corrected re-send that replaced a ' +
+      'needs-review record). The pdfUrl of a received document returns that readable copy for any received Peppol/e-invoice; when ' +
+      'it cannot be rendered it answers an explicit 422 code (for example PDF_SCRIPT_UNSUPPORTED) rather than a 500, and pdfUrl is omitted. ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
       'or check whether a suggested action has been applied.',
     inputSchema: {
@@ -1890,6 +1923,13 @@ const TOOLS = [
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country.',
           properties: {
+            de: {
+              type: 'object',
+              description: 'Germany: stored default invoice format for this customer.',
+              properties: {
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG).' },
+              },
+            },
             ar: {
               type: 'object',
               description: 'Argentina AFIP buyer VAT condition.',
@@ -1937,6 +1977,13 @@ const TOOLS = [
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country.',
           properties: {
+            de: {
+              type: 'object',
+              description: 'Germany: stored default invoice format for this customer.',
+              properties: {
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG). Pass null to clear it.' },
+              },
+            },
             ar: {
               type: 'object',
               description: 'Argentina AFIP buyer VAT condition.',
@@ -1988,6 +2035,13 @@ const TOOLS = [
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country. Omit a sub-field to leave it untouched, not clear it.',
           properties: {
+            de: {
+              type: 'object',
+              description: 'Germany: stored default invoice format for this customer.',
+              properties: {
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG).' },
+              },
+            },
             ar: {
               type: 'object',
               description: 'Argentina AFIP buyer VAT condition.',
