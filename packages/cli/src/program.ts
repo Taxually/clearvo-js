@@ -104,8 +104,9 @@ export function createProgram(): Command {
       const body = JSON.parse(raw) as Record<string, unknown>;
       if (opts.dryRun) body.dryRun = true;
       if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
-      // x-idempotency-key is optional: the API derives one from the invoice identity and
-      // answers 409 IDEMPOTENT_BODY_MISMATCH if the same invoice is re-sent with changed content.
+      // x-idempotency-key is optional: the API generates its own identity key from the invoice
+      // (type, country, invoice number) and answers 409 IDEMPOTENT_BODY_MISMATCH if the same invoice
+      // is re-sent with changed content.
       const result = await api('POST', '/send', body);
       print(result, !!opts.pretty);
     });

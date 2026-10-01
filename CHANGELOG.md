@@ -9,7 +9,7 @@ Until the backend is live, `x-idempotency-key` is still required and a request w
 ### @clearvo/sdk (additive, non-breaking)
 
 - `SubmitInvoiceInput`: added `shipFrom` / `shipTo` (France own-goods stock transfers; one entry per movement, French leg only) and documented France purchase-direction support on `transactionDirection`. The `submit_invoice` MCP tool schema carries the same fields and wording.
-- `submitInvoice(input, idempotencyKey?)`: the key was already an optional parameter; it is now optional on the wire too. Omitted, the API derives `auto-<hash>` from the document identity (sale: `documentType` + `invoiceNumber`; purchase: also `supplier.taxId` and `issueDate`). Re-sending the same identity with different content returns `409 IDEMPOTENT_BODY_MISMATCH` (an earlier `NEEDS_INFO` or `REJECTED` attempt re-runs in place instead). A supplied key always wins.
+- `submitInvoice(input, idempotencyKey?)`: the key was already an optional parameter; it is now optional on the wire too. It is now only the client's retry hint: every document gets a system-generated `sys-<hash>` identity key from its own fields (sale: `documentType` + `country` + `invoiceNumber`; purchase: also `supplier.taxId` and `issueDate`), returned in the `X-Idempotency-Key` response header, and that key alone deduplicates. Re-sending the same identity with different content returns `409 IDEMPOTENT_BODY_MISMATCH` (an earlier `NEEDS_INFO` or `REJECTED` attempt re-runs in place instead); reusing your key for a different document returns `409 IDEMPOTENCY_KEY_REUSED`; a missing identity field returns `422 MISSING_IDENTITY_FIELD`.
 
 ### @clearvo/mcp (behaviour change)
 
