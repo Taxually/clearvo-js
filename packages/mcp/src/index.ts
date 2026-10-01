@@ -1223,6 +1223,8 @@ const TOOLS = [
       'and action verbatim, never "Accepted". When AEAT never gave a record-level answer, verifactuDetail is null and ' +
       'verifactuSubmission (outcome UNKNOWN or SOAP_FAULT, statusLabel, action, attempts, at) says so — show its statusLabel ' +
       'and action, never plain "Accepted". ' +
+      'sandbox is true for a record created with a test key: it was generated locally and never sent to an authority, ' +
+      'so its ACCEPTED status is not an authority\'s answer. ' +
       'For a Spain VeriFactu or Portugal AT invoice, also returns verificationQr (dataUrl, legend) — ' +
       'the country-mandated verification QR, rendered server-side. Null for every other country. ' +
       'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +
