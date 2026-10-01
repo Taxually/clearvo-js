@@ -4,6 +4,33 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { Command } from 'commander';
 
+/** Commander collector for the repeatable --classification-code flag. */
+function collectClassificationCode(val: string, prev: string[]): string[] {
+  return [...prev, val];
+}
+
+/**
+ * Parse repeated `system:code` values into the API's classificationCodes
+ * shape. Splits on the FIRST colon only (codes may contain further colons).
+ * Exits with an error on a malformed value or more than 5 codes.
+ */
+function parseClassificationCodes(values: string[]): Array<{ system: string; code: string }> {
+  if (values.length > 5) {
+    console.error('Error: --classification-code may be given at most 5 times.');
+    process.exit(1);
+  }
+  return values.map((v) => {
+    const i = v.indexOf(':');
+    const system = i > 0 ? v.slice(0, i) : '';
+    const code = i > 0 ? v.slice(i + 1) : '';
+    if (!/^[a-z0-9_]{1,30}$/.test(system) || !code) {
+      console.error(`Error: invalid --classification-code "${v}". Expected system:code with a lowercase system, e.g. stripe:txcd_10103001`);
+      process.exit(1);
+    }
+    return { system, code };
+  });
+}
+
 export function createProgram(): Command {
   
   const CONFIG_PATH = join(homedir(), '.clearvo', 'config.json');
@@ -402,6 +429,7 @@ export function createProgram(): Command {
     .option('--sku <sku>', 'Internal SKU or product code')
     .option('--description <text>', 'Optional longer description')
     .option('--tax-category <slug>', 'Tax category slug (e.g. saas_business, physical_goods_general)')
+    .option('--classification-code <system:code>', 'Repeatable (max 5). External classification code, e.g. stripe:txcd_10103001, shopify:aa-1-13, hs:610910', collectClassificationCode, [] as string[])
     .option('--entity <entityId>', 'Entity to create the product under')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
@@ -409,13 +437,15 @@ export function createProgram(): Command {
       sku?: string;
       description?: string;
       taxCategory?: string;
+      classificationCode?: string[];
       entity?: string;
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = { name: opts.name };
+      const body: Record<string, unknown> = { name: opts.name };
       if (opts.sku) body.sku = opts.sku;
       if (opts.description) body.description = opts.description;
       if (opts.taxCategory) body.taxCategory = opts.taxCategory;
+      if (opts.classificationCode?.length) body.classificationCodes = parseClassificationCodes(opts.classificationCode);
       if (opts.entity) body.entityId = opts.entity;
       const result = await api('POST', '/products', body);
       print(result, !!opts.pretty);
@@ -428,15 +458,18 @@ export function createProgram(): Command {
     .option('--sku <sku>', 'Updated SKU')
     .option('--description <text>', 'Updated description')
     .option('--tax-category <slug>', 'Updated tax category slug')
+    .option('--classification-code <system:code>', 'Repeatable (max 5). Replaces the product\'s classification codes, e.g. stripe:txcd_10103001, shopify:aa-1-13', collectClassificationCode, [] as string[])
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
       name?: string;
       sku?: string;
       description?: string;
       taxCategory?: string;
+      classificationCode?: string[];
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = {};
+      const body: Record<string, unknown> = {};
+      if (opts.classificationCode?.length) body.classificationCodes = parseClassificationCodes(opts.classificationCode);
       if (opts.name) body.name = opts.name;
       if (opts.sku) body.sku = opts.sku;
       if (opts.description) body.description = opts.description;

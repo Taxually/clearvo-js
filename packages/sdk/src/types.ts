@@ -832,6 +832,15 @@ export interface TaxCalculateRequest {
     productName: string;
     taxCategory?: string;
     /**
+     * Optional external classification codes for this line (max 5), tried in
+     * order; the first that maps to a Clearvo tax category wins. Skipped when
+     * `taxCategory` is supplied. A code with no mapping falls through to the
+     * product cache, name classification and the entity default. The result
+     * reports the decision as `classificationSource: 'CODE_MAP'` plus
+     * `classificationSystem` / `classificationMatchedCode`.
+     */
+    classificationCodes?: ClassificationCode[];
+    /**
      * Caller-forced rate band for this line — names a band only, never a raw
      * rate; the engine still resolves the actual percentage for the line's
      * own jurisdiction from that band. Highest-precedence input to rate-band
@@ -998,7 +1007,18 @@ export interface TaxCalculateResponse {
      * AI_FALLBACK: no real classification signal existed — confidence
      * carries no real meaning and must never be presented as a percentage.
      */
-    classificationSource?: 'EXPLICIT' | 'STRIPE_CODE' | 'CACHED' | 'AI' | 'AI_FALLBACK' | null;
+    classificationSource?: 'EXPLICIT' | 'CODE_MAP' | 'CACHED' | 'AI' | 'AI_FALLBACK' | null;
+    /**
+     * Set only when `classificationSource` is 'CODE_MAP': which classification
+     * system (e.g. 'stripe', 'shopify', 'hs') decided this line.
+     */
+    classificationSystem?: string;
+    /**
+     * Set only when `classificationSource` is 'CODE_MAP': the code that
+     * actually matched. For hierarchical systems this can be an ancestor of
+     * the code sent (e.g. sent 'aa-1-13-5', matched 'aa-1-13').
+     */
+    classificationMatchedCode?: string;
     sourcingRationale?: {
       /** This line's resolved rate band (STANDARD/MIDDLE/REDUCED/SUPER_REDUCED/SPECIAL/ZERO/EXEMPT/etc). Always present when sourcingRationale is. */
       rateBand?: string;
@@ -1179,6 +1199,17 @@ export interface CountryRequirements {
 
 export type ProductTier = 'CONFIRMED' | 'STANDARD_MAPPING' | 'AI_CLASSIFIED' | 'UNCLASSIFIED';
 
+/**
+ * An external classification code. `system` is lowercase `[a-z0-9_]{1,30}`.
+ * Known systems: 'stripe' (Stripe product tax code, `txcd_*`), 'shopify'
+ * (Shopify product taxonomy category id, e.g. `aa-1-13`), 'hs' (customs
+ * commodity code).
+ */
+export interface ClassificationCode {
+  system: string;
+  code: string;
+}
+
 export interface Product {
   id: string;
   entityId: string;
@@ -1186,6 +1217,8 @@ export interface Product {
   sku?: string;
   description?: string;
   taxCategory?: string;
+  /** Classification codes stored on the product (max 5). */
+  classificationCodes?: ClassificationCode[];
   /** AI classification confidence (0-1). Only populated when tier is 'AI_CLASSIFIED'. */
   confidence?: number | null;
   /** Trust tier derived from the classification source — see ProductTier. */
@@ -1205,6 +1238,8 @@ export interface CreateProductInput {
   sku?: string;
   description?: string;
   taxCategory?: string;
+  /** External classification codes (max 5), e.g. [{ system: 'stripe', code: 'txcd_10000000' }]. */
+  classificationCodes?: ClassificationCode[];
   entityId?: string;
 }
 
@@ -1213,6 +1248,8 @@ export interface UpdateProductInput {
   sku?: string;
   description?: string;
   taxCategory?: string;
+  /** Replaces the product's classification codes (max 5). */
+  classificationCodes?: ClassificationCode[];
 }
 
 export interface ListProductsParams {

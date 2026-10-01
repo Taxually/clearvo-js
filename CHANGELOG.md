@@ -2,6 +2,23 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — BREAKING: publish only AFTER the classification-code-map backend PR has merged and deployed
+
+Backend branch: Taxually-Einvoicing `claude/classification-code-map`. The backend removes `stripeTaxCode` outright (no alias) and replaces it with a vendor-agnostic `classificationCodes` array. Until it is live, `classificationCodes` is ignored or rejected and `CODE_MAP` is never returned. After it is live, `stripeTaxCode` is rejected; send `[{ system: 'stripe', code: 'txcd_...' }]` instead.
+
+### @clearvo/sdk (BREAKING)
+
+- `classificationSource` value `'STRIPE_CODE'` is now `'CODE_MAP'`. Line results gain optional `classificationSystem` and `classificationMatchedCode` (the matched code can be an ancestor of the one sent).
+- New `ClassificationCode` (`{ system, code }`; system lowercase `[a-z0-9_]{1,30}`; known systems `stripe`, `shopify`, `hs`). `classificationCodes?` (max 5) added to `TaxCalculateRequest.lineItems[]`, `CreateProductInput`, `UpdateProductInput` and `Product`.
+
+### @clearvo/mcp (BREAKING)
+
+- `calculate_tax` line items, `create_product` and `update_product` take `classificationCodes` (max 5). `calculate_tax` description covers `CODE_MAP`.
+
+### @clearvo/cli (BREAKING)
+
+- `clearvo products create` and `clearvo products update` take a repeatable `--classification-code system:code` flag (max 5). Any `stripeTaxCode` in a `clearvo calculate` JSON file must become `classificationCodes`.
+
 ## Unreleased — publish only AFTER the Peppol for Germany backend PR has merged and deployed
 
 Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing and credit/debit notes for Germany.
