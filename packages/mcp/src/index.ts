@@ -431,18 +431,6 @@ const TOOLS = [
                 },
               },
             },
-            de: {
-              type: 'object',
-              description: 'Germany fields.',
-              properties: {
-                invoiceFormat: {
-                  type: 'string',
-                  enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'],
-                  description: 'Highest-precedence override of the German invoice format (request > customer default > entity default defaultDeInvoiceFormat > platform default ZUGFERD). PEPPOL delivers a Peppol BIS Billing 3.0 invoice over the Peppol network (DE-NRS).',
-                },
-                leitwegId: { type: 'string', description: 'Leitweg-ID (BT-10) for XRechnung; falls back to the top-level buyerReference.' },
-              },
-            },
             peppol: {
               type: 'object',
               description: 'Peppol-routed invoice fields.',
@@ -457,7 +445,7 @@ const TOOLS = [
               type: 'object',
               description: 'Germany ZUGFeRD/XRechnung fields, plus per-invoice overrides of the invoice-content-field-registry company-law facts (each falls back to the matching de_* extra_fields value on the entity\'s own DE tax registration when omitted — see update_registration).',
               properties: {
-                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD).' },
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD). PEPPOL delivers a Peppol BIS Billing 3.0 invoice over the Peppol network (DE-NRS).' },
                 leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference when omitted. Missing both on a resolved-XRechnung invoice fails 422 MISSING_LEITWEG_ID.' },
                 legalForm: { type: 'string', description: 'DE legal-form select vocabulary (e.g. GMBH, UG, AG, SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER, FOREIGN_BRANCH, OTHER) — case-sensitive. Gates whether the register-identity and managing-directors disclosure tiers below apply at all.' },
                 handelsregisternummer: { type: 'string', description: 'BT-30. HGB § 37a commercial-register number (e.g. "HRB 12345"). Required once legalForm is a Handelsregister-registered form — missing this, registergericht, or registeredSeat never blocks the send, it returns a non-terminal errorCode MISSING_DE_COMPANY_REGISTER_DETAILS (WARNING severity).' },
