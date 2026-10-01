@@ -186,6 +186,14 @@ const TOOLS = [
       '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). A Spain SII/VeriFactu invoice for ' +
       'an entity with no current Spanish registration is held NEEDS_INFO (errorCode ' +
       'MISSING_SUPPLIER_REGISTRATION, fixUrl) — add the registration, then resubmit. ' +
+      'Spain VeriFactu covers the Canary Islands: Clearvo registers Canary Islands (IGIC) invoices with the AEAT under ' +
+      'the same Spanish tax number (it does not file IGIC returns or the Canary SII, and does not support IPSI). Set ' +
+      'es_tax_territory (mainland | canary_islands | both) on the Spanish registration first (update_registration) — an ' +
+      'IGIC line without it fails VERIFACTU_TAX_TERRITORY_REQUIRED. An original invoice with no customer.taxId and a ' +
+      'total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); above EUR 3,000 it needs ' +
+      'countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion. A buyer with ' +
+      'a passport or residence document needs countrySpecific.es.customerIdType. VeriFactu applies from 2027-01-01 ' +
+      '(corporate-tax payers) and 2027-07-01 (everyone else); sandbox invoices must be dated on or after 2027-01-01. ' +
       'Set countrySpecific.peppol.selfBilling=true for a self-billed invoice (you, the customer, ' +
       'issuing on the real seller\'s behalf) — supplier then identifies that real seller (required; ' +
       'supplierRef resolves a saved one) and customer becomes your OWN entity\'s identity instead ' +
@@ -257,8 +265,9 @@ const TOOLS = [
           type: 'object',
           description: 'The customer receiving the invoice. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this is instead your OWN entity\'s identity (the buyer being self-billed for) — auto-derived when omitted, tax-ID-compared against your own registration the same way supplier normally is (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch), and its Peppol endpoint identity backfilled from your entity\'s own confirmed Peppol Participant ID when omitted.',
           properties: {
-            name: { type: 'string' },
-            taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment' },
+            name: { type: 'string', description: 'Customer name. Required everywhere except a Spain VeriFactu simplified invoice (F2/R5, no customer identification), where it is optional.' },
+            taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment. Spain VeriFactu: a full invoice (F1) must identify the customer here (Spanish NIF, EU VAT number, or a passport/residence document together with countrySpecific.es.customerIdType and customer.taxIdCountry); with none, an original invoice up to EUR 400 to a non-business customer is issued as a simplified invoice (F2).' },
+            taxIdCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country that issued customer.taxId. Spain VeriFactu: required with a passport/residence/other identifier (customerIdType).' },
             address: {
               type: 'object',
               properties: {
@@ -281,7 +290,7 @@ const TOOLS = [
               description: 'Your own reference for a previously-saved customer (see the dashboard\'s Customers page). When set, Clearvo fills in any of name/taxId/address you omit here from the saved record — fields you do supply still take precedence.',
             },
           },
-          required: ['name', 'address'],
+          required: ['address'],
         },
         lines: {
           type: 'array',
@@ -377,6 +386,23 @@ const TOOLS = [
               type: 'object',
               description: 'Spain SII / VeriFactu fields.',
               properties: {
+                tipoFactura: {
+                  type: 'string',
+                  description: 'Explicit F1/F2/R1-R5 override. Under VeriFactu an original invoice with no buyer identification and a total up to EUR 400 is issued as F2 automatically (R5 for a credit note against it).',
+                },
+                customerIdType: {
+                  type: 'string',
+                  enum: ['passport', 'residence_document', 'residence_certificate', 'other', 'not_registered'],
+                  description: 'VeriFactu only. What kind of document customer.taxId is when it is not a Spanish NIF or an EU VAT number: passport (AEAT IDType 03), residence_document (04), residence_certificate (05), other (06), not_registered (07). A Spanish NIF and an EU VAT number are recognised automatically; any other identifier without this field holds the invoice as NEEDS_INFO (MANDATE_INCOMPLETE_DATA, missingFields names customerIdType).',
+                },
+                noRecipientIdentification: {
+                  type: 'boolean',
+                  description: 'VeriFactu only. Your declaration (RD 1619/2012 art. 6.1.d) that this invoice is lawfully issued without identifying the recipient. Simplified invoices (F2/R5) only; needed above EUR 3,000 unless numRegistroAcuerdoFacturacion is sent. Never inferred.',
+                },
+                numRegistroAcuerdoFacturacion: {
+                  type: 'string',
+                  description: 'VeriFactu only. Billing agreement number (max 15 characters) that allows a simplified invoice (F2) above EUR 3,000.',
+                },
                 duaNumber: {
                   type: 'string',
                   description: 'NumeroDUA (Documento Único Administrativo) — required, and only meaningful, when this purchase\'s tipoFactura resolves to F5 (import). Missing on an import produces NEEDS_INFO naming countrySpecific.es.duaNumber.',
@@ -1189,6 +1215,13 @@ const TOOLS = [
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
       'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
       'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
+      'For a Spain VeriFactu invoice, also returns verifactuDetail (estadoEnvio, estadoRegistro, statusLabel, ' +
+      'action, csv, codigoErrorRegistro, descripcionErrorRegistro, answeredAt) — AEAT\'s own answer to the real-time ' +
+      'submission, null until AEAT answers (and always in sandbox, which never calls AEAT). clearanceStatus stays ACCEPTED ' +
+      'for a generated record, so for an estadoRegistro of AceptadoConErrores or Incorrecto show verifactuDetail.statusLabel ' +
+      'and action verbatim, never "Accepted". When AEAT never gave a record-level answer, verifactuDetail is null and ' +
+      'verifactuSubmission (outcome UNKNOWN or SOAP_FAULT, statusLabel, action, attempts, at) says so — show its statusLabel ' +
+      'and action, never plain "Accepted". ' +
       'For a Spain VeriFactu or Portugal AT invoice, also returns verificationQr (dataUrl, legend) — ' +
       'the country-mandated verification QR, rendered server-side. Null for every other country. ' +
       'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +
@@ -1441,7 +1474,9 @@ const TOOLS = [
       'send/validate time, once the entity\'s legalForm (set via update_entity, NOT here — legal form is an ' +
       'entity-level fact, not scoped to any one country registration) makes them applicable (e.g. ' +
       'de_handelsregisternummer/de_registergericht/de_registered_seat once a Handelsregister-registered legal ' +
-      'form like GmbH is set).',
+      'form like GmbH is set). Spain (ES) accepts es_tax_territory (mainland | canary_islands | both) — which part of ' +
+      'Spain the entity sells from; Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system ' +
+      'under the same Spanish tax number, and an IGIC line without this field fails VERIFACTU_TAX_TERRITORY_REQUIRED.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1465,7 +1500,8 @@ const TOOLS = [
       'enforced as required) and requiredHint (a human sentence describing that same condition), so a caller can ' +
       'tell "this field exists and can be set" apart from "this field is currently mandatory for this entity" ' +
       'without guessing. For country=US, also returns usLocalityCodes (valid home-rule locality codes) when a ' +
-      'region is a home-rule state.',
+      'region is a home-rule state. For country=ES this includes es_tax_territory (mainland | canary_islands | both — ' +
+      'Canary Islands supplies are IGIC).',
     inputSchema: {
       type: 'object' as const,
       properties: {

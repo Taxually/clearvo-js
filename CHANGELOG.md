@@ -2,6 +2,24 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the Spain VeriFactu Canary Islands backend PR has merged and deployed
+
+Backend branch: Taxually-Einvoicing `claude/es-verifactu-igic-f2`. Until it is live, the new `countrySpecific.es` keys are ignored or rejected by the API. Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system under the same Spanish tax number; it does not file IGIC returns or the Canary SII.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- `SubmitInvoiceInput.customer` is now `CustomerPartyInput` (`PartyInput` with `name` optional): a Spain VeriFactu simplified invoice (F2/R5, no customer identification) may omit it. Every other country still requires it server-side.
+- New types `EsCountrySpecific`, `EsCustomerIdType`, `EsTaxTerritory`; `countrySpecific.es.customerIdType`, `es.noRecipientIdentification`, `es.numRegistroAcuerdoFacturacion` documented. `UpdateRegistrationInput.extraFields` documents `es_tax_territory` (`mainland` | `canary_islands` | `both`).
+
+### @clearvo/mcp (additive)
+
+- `submit_invoice`: `countrySpecific.es.customerIdType`, `noRecipientIdentification`, `numRegistroAcuerdoFacturacion`, `tipoFactura`; `customer.taxIdCountry`; `customer.name` no longer required by the input schema. Description covers the F2 rules (EUR 400 inference, EUR 3,000 cap) and the 2027-01-01 / 2027-07-01 dates.
+- `update_registration`, `get_registration_field_definitions`: `es_tax_territory` documented.
+
+### @clearvo/cli (additive)
+
+- `clearvo send` and `clearvo registrations update --extra` help text covers the Spain VeriFactu simplified-invoice and Canary Islands fields (`es_tax_territory`, `customerIdType`, `noRecipientIdentification`).
+
 ## Unreleased — publish only AFTER the entity bank-accounts backend PR has merged and deployed
 
 Backend PR: Taxually-Einvoicing `claude/entity-bank-accounts`, `GET`/`POST /v1/bank-accounts` + `GET`/`PATCH`/`DELETE /v1/bank-accounts/{id}`. Until it is live in production, these SDK/MCP/CLI calls 404. Lets an entity store its own IBAN/BIC once per currency (plus one entity-wide DEFAULT, currency omitted) instead of resending it on every invoice — closes the gap noted on `payment.iban`'s own doc comment ("API-only per-invoice for now; no entity-level default"). Resolution order when an invoice's own `payment.iban` is omitted: the entity's account for the invoice's currency, then the entity's DEFAULT account, then nothing (today's pre-existing behaviour). A `payment.iban` given directly on the invoice always wins outright — this master data is a fallback, never an override.

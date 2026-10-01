@@ -130,6 +130,9 @@ import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 export type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
 import type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
 
+/** The customer party of a sale: a PartyInput whose `name` is optional (Spain VeriFactu simplified invoices F2/R5 carry no customer identification). */
+export type CustomerPartyInput = Omit<PartyInput, 'name'> & { name?: string };
+
 export interface PartyInput {
   name: string;
   taxId?: string;
@@ -262,6 +265,25 @@ export interface PaymentInput {
   debitedIban?: string;
 }
 
+/** Words for `countrySpecific.es.customerIdType` (Spain VeriFactu buyer identification; AEAT IDType 03 to 07). */
+export type EsCustomerIdType = 'passport' | 'residence_document' | 'residence_certificate' | 'other' | 'not_registered';
+
+/** Values of the `es_tax_territory` field on a Spanish tax registration. */
+export type EsTaxTerritory = 'mainland' | 'canary_islands' | 'both';
+
+/** Spain VeriFactu fields of `SubmitInvoiceInput.countrySpecific.es` (Canary Islands IGIC and simplified invoices). */
+export interface EsCountrySpecific {
+  /** Explicit F1/F2/R1-R5 override. With no buyer identification, an original invoice up to EUR 400 is issued as F2 automatically. */
+  tipoFactura?: string;
+  /** What kind of document `customer.taxId` is when it is not a Spanish NIF or EU VAT number. */
+  customerIdType?: EsCustomerIdType;
+  /** Declaration that a simplified invoice is lawfully issued without identifying the recipient (RD 1619/2012 art. 6.1.d). */
+  noRecipientIdentification?: boolean;
+  /** Billing agreement number, at most 15 characters. */
+  numRegistroAcuerdoFacturacion?: string;
+  [key: string]: unknown;
+}
+
 export interface SubmitInvoiceInput {
   documentType?: 'invoice' | 'credit_note' | 'debit_note';
   invoiceNumber: string;
@@ -288,8 +310,11 @@ export interface SubmitInvoiceInput {
    * the entity's own registration the same way `supplier` normally is, and
    * its endpointId/endpointSchemeId (BT-49) backfilled from the entity's
    * own confirmed Peppol Participant ID when omitted.
+   *
+   * `name` may be omitted only on a Spain VeriFactu simplified invoice (F2 or
+   * R5, no customer identification); everywhere else it is required.
    */
-  customer: PartyInput;
+  customer: CustomerPartyInput;
   /** Optional customer classification for the whole invoice. Can be overridden per line via lines[].customerType. */
   customerType?: 'B2B' | 'B2C';
   lines: LineItemInput[];
@@ -329,6 +354,21 @@ export interface SubmitInvoiceInput {
    *   and only meaningful when a `transactionDirection: 'purchase'` line's
    *   tipoFactura resolves to F5 (import). Missing on an import produces
    *   NEEDS_INFO naming `countrySpecific.es.duaNumber`.
+   * - `es.customerIdType` — Spain VeriFactu only. What kind of document
+   *   `customer.taxId` is when it is not a Spanish NIF or an EU VAT number
+   *   (`passport`, `residence_document`, `residence_certificate`, `other`,
+   *   `not_registered`); send the buyer's country in `customer.taxIdCountry`.
+   *   See {@link EsCountrySpecific}.
+   * - `es.noRecipientIdentification` — Spain VeriFactu only. Your declaration
+   *   that a simplified invoice is lawfully issued without identifying the
+   *   recipient (RD 1619/2012 art. 6.1.d). Never inferred.
+   * - `es.numRegistroAcuerdoFacturacion` — Spain VeriFactu only. Billing
+   *   agreement number (max 15 characters) allowing a simplified invoice
+   *   above EUR 3,000.
+   * - Canary Islands: Clearvo registers Canary Islands (IGIC) invoices with
+   *   the AEAT VeriFactu system under the same Spanish tax number. Set
+   *   `es_tax_territory` on the Spanish registration (see
+   *   {@link UpdateRegistrationInput}); Clearvo does not file IGIC returns.
    * - `hu.exchangeRate` — exchange rate to HUF for this invoice date.
    *   Required whenever `currency` is not HUF.
    * - `hu.invoiceAppearance` — one of PAPER/ELECTRONIC/EDI/UNKNOWN, overriding
@@ -1336,7 +1376,10 @@ export interface UpdateRegistrationInput {
    * `SubmitInvoiceInput.countrySpecific`'s `de.*` doc comments for what each
    * one means and when it's enforced. Legal form is NOT here — it's an
    * entity-level fact, not scoped to any one country registration; set it
-   * via `UpdateEntityInput.entityFacts.legalForm` instead.
+   * via `UpdateEntityInput.entityFacts.legalForm` instead. Spain (ES)
+   * accepts `es_tax_territory` (`mainland`, `canary_islands` or `both`) —
+   * which part of Spain you sell from; an IGIC (Canary Islands) line cannot
+   * be registered with VeriFactu until it is set.
    */
   extraFields?: Record<string, string | null>;
 }
@@ -2026,6 +2069,10 @@ export interface ClientTaxCodeOptionsResponse {
   supplyTypes: Array<{ value: ClientTaxCodeSupplyType; label: string }>;
   rateBands: Array<{ value: ClientTaxCodeRateBand; label: string; valid: boolean; rate: number | null }> | null;
   regionRequired: boolean | null;
+  /** Selectable sub-country regions when the country offers a fixed list (e.g. ES -> Canary Islands); null otherwise. */
+  regionOptions: Array<{ value: string; label: string }> | null;
+  /** Label for the empty choice when regionOptions is offered (e.g. ES -> mainland); null otherwise. */
+  regionNoneLabel: string | null;
   reverseChargeRelevant: boolean | null;
   useTaxSelfAssessedRelevant: boolean | null;
   zeroRatedGuidance: string | null;
