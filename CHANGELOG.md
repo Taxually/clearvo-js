@@ -8,6 +8,7 @@ Until the backend is live, `x-idempotency-key` is still required and a request w
 
 ### @clearvo/sdk (additive, non-breaking)
 
+- `SubmitInvoiceInput`: added `shipFrom` / `shipTo` (France own-goods stock transfers; one entry per movement, French leg only) and documented France purchase-direction support on `transactionDirection`. The `submit_invoice` MCP tool schema carries the same fields and wording.
 - `submitInvoice(input, idempotencyKey?)`: the key was already an optional parameter; it is now optional on the wire too. Omitted, the API derives `auto-<hash>` from the document identity (sale: `documentType` + `invoiceNumber`; purchase: also `supplier.taxId` and `issueDate`). Re-sending the same identity with different content returns `409 IDEMPOTENT_BODY_MISMATCH` (an earlier `NEEDS_INFO` or `REJECTED` attempt re-runs in place instead). A supplied key always wins.
 
 ### @clearvo/mcp (behaviour change)

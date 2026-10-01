@@ -348,7 +348,7 @@ const TOOLS = [
         },
         correctsInvoiceId: {
           type: 'string',
-          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; submit under a fresh idempotencyKey alongside this field.',
+          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
         },
         dryRun: {
           type: 'boolean',
@@ -361,7 +361,17 @@ const TOOLS = [
         transactionDirection: {
           type: 'string',
           enum: ['sale', 'purchase'],
-          description: 'ES SII block 3. Defaults to "sale" (this entity\'s own outbound/issued document — LFE). "purchase" records a vendor\'s document on this entity\'s received side (LFR) — Spain SII only; every other live country\'s purchase-direction submission currently resolves to no reporting mandate at all. supplier is still required and is the VENDOR/counterparty for a purchase (the entity\'s own Spanish registration is applied automatically, same derivation as the sale-side supplier.taxId rule).',
+          description: 'ES SII block 3. Defaults to "sale" (this entity\'s own outbound/issued document — LFE). "purchase" records a vendor\'s document on this entity\'s received side (LFR) — Spain SII (received book) and France e-reporting (a purchase from a vendor not established in France is declared by you as the receiving party, at invoice level, in its own Received batch; send supplier.taxId and supplier.address.country, a missing one parks NEEDS_INFO); every other live country\'s purchase-direction submission currently resolves to no reporting mandate at all. supplier is still required and is the VENDOR/counterparty for a purchase (the entity\'s own Spanish registration is applied automatically, same derivation as the sale-side supplier.taxId rule).',
+        },
+                shipFrom: {
+          type: 'object',
+          description: 'France e-reporting, own-goods stock transfers only (a client tax code with movement "own_goods_movement"). Where the goods leave: for an outbound transfer (sale) the French origin; for an inbound transfer (purchase) the origin member state. Send one entry per movement, on the French leg only. Optional and ignored for every other transaction; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country.',
+          properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
+        },
+        shipTo: {
+          type: 'object',
+          description: 'France e-reporting, own-goods stock transfers only. Where the goods arrive. Needed only for an outbound transfer (shipFrom in France) to name the destination member state; ignored otherwise.',
+          properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         accountingDate: {
           type: 'string',
@@ -516,7 +526,7 @@ const TOOLS = [
       'yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then ' +
       'resubmit under a new idempotency key). ' +
       'NEEDS_INFO and SETUP_NEEDED are not dead ends: call submit_invoice again with correctsInvoiceId set to ' +
-      'this invoice\'s id (a fresh idempotencyKey too) once the underlying data or setup gap is fixed. ' +
+      'this invoice\'s id (under a different invoiceNumber) once the underlying data or setup gap is fixed. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
     inputSchema: {
