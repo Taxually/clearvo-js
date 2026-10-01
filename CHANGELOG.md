@@ -6,6 +6,10 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 Backend branch: Taxually-Einvoicing `claude/es-verifactu-igic-f2`. Until it is live, the new `countrySpecific.es` keys are ignored or rejected by the API. Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system under the same Spanish tax number; it does not file IGIC returns or the Canary SII.
 
+### Rate-band vocabulary (BREAKING, all packages) — publish only after the rate-band-vocabulary backend PR has deployed
+
+The public API now uses the central rates database's band names. Client tax code `rateBand` is `standard | middle | reduced | super_reduced | special | zero` (was `standard | reduced | second_reduced | super_reduced | zero`). Old `reduced` means what is now `middle`; old `second_reduced` is now `reduced`. `taxTreatmentOverride` is `STANDARD | MIDDLE | REDUCED | SUPER_REDUCED | SPECIAL | EXEMPT | ZERO` (`SECOND_REDUCED` removed). Affects `ClientTaxCodeRateBand` and `taxTreatmentOverride` (SDK), the `create_client_tax_code` / `update_client_tax_code` / `list_tax_codes` / `calculate_tax` schemas (MCP) and `--rate-band` (CLI).
+
 ### @clearvo/sdk (additive, non-breaking)
 
 - `SubmitInvoiceInput.customer` is now `CustomerPartyInput` (`PartyInput` with `name` optional): a Spain VeriFactu simplified invoice (F2/R5, no customer identification) may omit it. Every other country still requires it server-side.

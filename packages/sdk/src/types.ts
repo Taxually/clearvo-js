@@ -693,7 +693,7 @@ export interface TaxCalculateRequest {
      * affect classification, place-of-supply, or upstream B2B/reverse-charge/
      * exemption logic — those run unconditionally first and are unaffected.
      */
-    taxTreatmentOverride?: 'STANDARD' | 'REDUCED' | 'SECOND_REDUCED' | 'SUPER_REDUCED' | 'ZERO' | 'EXEMPT';
+    taxTreatmentOverride?: 'STANDARD' | 'MIDDLE' | 'REDUCED' | 'SUPER_REDUCED' | 'SPECIAL' | 'EXEMPT' | 'ZERO';
     /**
      * Optional tariff/customs classification code for this line (HS, CN, or
      * UK Trade Tariff — no separate scheme field needed; matching is
@@ -854,7 +854,7 @@ export interface TaxCalculateResponse {
      */
     classificationSource?: 'EXPLICIT' | 'STRIPE_CODE' | 'CACHED' | 'AI' | 'AI_FALLBACK' | null;
     sourcingRationale?: {
-      /** This line's resolved rate band (STANDARD/REDUCED/ZERO/EXEMPT/etc). Always present when sourcingRationale is. */
+      /** This line's resolved rate band (STANDARD/MIDDLE/REDUCED/SUPER_REDUCED/SPECIAL/ZERO/EXEMPT/etc). Always present when sourcingRationale is. */
       rateBand?: string;
       /**
        * Which resolution tier decided `rateBand` above. 'OVERRIDE' confirms
@@ -1892,7 +1892,7 @@ export type ClientTaxCodeMovement = 'local' | 'intra_community' | 'export' | 'di
 export type ClientTaxCodeTaxability = 'taxable' | 'exempt' | 'out_of_scope';
 export type ClientTaxCodeCustomerType = 'b2b' | 'b2c';
 export type ClientTaxCodeSupplyType = 'goods' | 'digital_service' | 'general_service';
-export type ClientTaxCodeRateBand = 'standard' | 'reduced' | 'second_reduced' | 'super_reduced' | 'zero';
+export type ClientTaxCodeRateBand = 'standard' | 'middle' | 'reduced' | 'super_reduced' | 'special' | 'zero';
 export type ClientTaxCodeFilingTag =
   | 'cash_accounting_settled' | 'cash_accounting_unsettled' | 'split_payment' | 'statement_of_intent'
   | 'withholding' | 'bad_debt_adjustment' | 'triangular_party_b' | 'triangular_party_c';
