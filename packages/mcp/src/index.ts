@@ -332,6 +332,11 @@ const TOOLS = [
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/taxRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
         },
         customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional customer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the customer\'s own country, which also exempts the customer from HU\'s mandatory street-address requirement.' },
+        buyerReference: {
+          type: 'string',
+          description: 'Buyer reference (EN16931 BT-10). Required by German XRechnung (the Leitweg-ID for public-sector buyers) and by Peppol BIS Billing 3.0 unless orderReference is set — Germany over Peppol (DE-NRS) 422s without payment instructions and a buyer reference.',
+        },
+        orderReference: { type: 'string', description: 'Purchase order number from the customer (EN16931 BT-13). For Peppol, either this or buyerReference must be present.' },
         payment: {
           type: 'object',
           description: 'Payment details.',
@@ -344,6 +349,22 @@ const TOOLS = [
             mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the call fails 422 MANDATE_REFERENCE_TOO_LONG.' },
             creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
             debitedIban: { type: 'string', description: 'The CUSTOMER\'s own IBAN the SEPA direct debit draws from (BT-91). Must be a real IBAN (checksum-validated) — malformed input fails 422 INVALID_DEBITED_IBAN. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-31). Distinct from `iban` above, which is the seller\'s own account for a bank_transfer payment.' },
+          },
+        },
+        delivery: {
+          type: 'object',
+          description: 'Delivery information (EN16931 BG-13).',
+          properties: {
+            date: { type: 'string', description: 'Actual delivery date, YYYY-MM-DD (BT-72).' },
+            locationId: { type: 'string', description: 'Delivery location identifier (BT-71).' },
+            partyName: { type: 'string', description: 'Name of the party receiving the goods (BT-70).' },
+            address: {
+              type: 'object',
+              description: 'Delivery address.',
+              properties: {
+                street: { type: 'string' }, city: { type: 'string' }, postalCode: { type: 'string' }, country: { type: 'string', description: 'ISO 3166-1 alpha-2.' },
+              },
+            },
           },
         },
         correctsInvoiceId: {
@@ -408,6 +429,18 @@ const TOOLS = [
                   type: 'string',
                   description: 'NumeroDUA (Documento Único Administrativo) — required, and only meaningful, when this purchase\'s tipoFactura resolves to F5 (import). Missing on an import produces NEEDS_INFO naming countrySpecific.es.duaNumber.',
                 },
+              },
+            },
+            de: {
+              type: 'object',
+              description: 'Germany fields.',
+              properties: {
+                invoiceFormat: {
+                  type: 'string',
+                  enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'],
+                  description: 'Highest-precedence override of the German invoice format (request > customer default > entity default defaultDeInvoiceFormat > platform default ZUGFERD). PEPPOL delivers a Peppol BIS Billing 3.0 invoice over the Peppol network (DE-NRS).',
+                },
+                leitwegId: { type: 'string', description: 'Leitweg-ID (BT-10) for XRechnung; falls back to the top-level buyerReference.' },
               },
             },
             peppol: {
