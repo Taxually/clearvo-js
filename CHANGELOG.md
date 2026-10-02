@@ -2,7 +2,9 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
-## Unreleased — France e-reporting alignment: optional idempotency key on POST /v1/send (publish AFTER backend branch `claude/fr-ereporting-dgfip-alignment` has merged and deployed)
+**2026-10-02 release: `@clearvo/sdk` 0.4.0, `@clearvo/mcp` 0.5.0, `@clearvo/cli` 0.4.0** (previous npm versions: 0.2.0, 0.3.0, 0.2.0). One combined release of every block below, each of which was gated on a backend change; all of those backend changes are deployed to production. The release includes breaking changes (classification codes replace `stripeTaxCode`, the `lines[]` tax-code and `vatRate`/`vatAmount` renames): read those blocks before upgrading.
+
+## France e-reporting alignment: optional idempotency key on POST /v1/send
 
 Until the backend is live, `x-idempotency-key` is still required and a request without it returns 400.
 
@@ -18,7 +20,7 @@ Until the backend is live, `x-idempotency-key` is still required and a request w
 ### @clearvo/cli (behaviour change)
 
 - `clearvo send <file>` no longer hashes the file into an `x-idempotency-key`; same server-side derivation and 409 behaviour as the MCP tool. Editing the file and re-submitting the same invoice number is now refused loudly instead of replaying.
-## Unreleased — BREAKING: publish only AFTER the classification-code-map backend PR has merged and deployed
+## BREAKING: classification-code-map
 
 Backend branch: Taxually-Einvoicing `claude/classification-code-map`. The backend removes `stripeTaxCode` outright (no alias) and replaces it with a vendor-agnostic `classificationCodes` array. Until it is live, `classificationCodes` is ignored or rejected and `CODE_MAP` is never returned. After it is live, `stripeTaxCode` is rejected; send `[{ system: 'stripe', code: 'txcd_...' }]` instead.
 
@@ -35,7 +37,7 @@ Backend branch: Taxually-Einvoicing `claude/classification-code-map`. The backen
 
 - `clearvo products create` and `clearvo products update` take a repeatable `--classification-code system:code` flag (max 5). Any `stripeTaxCode` in a `clearvo calculate` JSON file must become `classificationCodes`.
 
-## Unreleased — publish only AFTER the Peppol for Germany backend PR has merged and deployed
+## Peppol for Germany
 
 Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing and credit/debit notes for Germany.
 
@@ -55,7 +57,7 @@ Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `
 
 - `clearvo send` help text covers the Germany `PEPPOL` format and `--dry-run` behaviour for it.
 
-## Unreleased — publish only AFTER the Spain VeriFactu Canary Islands backend PR has merged and deployed
+## Spain VeriFactu Canary Islands
 
 Backend branch: Taxually-Einvoicing `claude/es-verifactu-igic-f2`. Until it is live, the new `countrySpecific.es` keys are ignored or rejected by the API. Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system under the same Spanish tax number; it does not file IGIC returns or the Canary SII.
 
@@ -77,7 +79,7 @@ The public API now uses the central rates database's band names. Client tax code
 
 - `clearvo send` and `clearvo registrations update --extra` help text covers the Spain VeriFactu simplified-invoice and Canary Islands fields (`es_tax_territory`, `customerIdType`, `noRecipientIdentification`).
 
-## Unreleased — publish only AFTER the entity bank-accounts backend PR has merged and deployed
+## Entity bank accounts
 
 Backend PR: Taxually-Einvoicing `claude/entity-bank-accounts`, `GET`/`POST /v1/bank-accounts` + `GET`/`PATCH`/`DELETE /v1/bank-accounts/{id}`. Until it is live in production, these SDK/MCP/CLI calls 404. Lets an entity store its own IBAN/BIC once per currency (plus one entity-wide DEFAULT, currency omitted) instead of resending it on every invoice — closes the gap noted on `payment.iban`'s own doc comment ("API-only per-invoice for now; no entity-level default"). Resolution order when an invoice's own `payment.iban` is omitted: the entity's account for the invoice's currency, then the entity's DEFAULT account, then nothing (today's pre-existing behaviour). A `payment.iban` given directly on the invoice always wins outright — this master data is a fallback, never an override.
 
@@ -94,7 +96,7 @@ Backend PR: Taxually-Einvoicing `claude/entity-bank-accounts`, `GET`/`POST /v1/b
 
 - New `clearvo bank-accounts list|create|update|get|delete`, mirroring the `clearvo suppliers` command shape.
 
-## Unreleased — publish only AFTER the IT/ES profile-field backend PR has merged and deployed
+## IT/ES profile fields
 
 Backend PR: Taxually-Einvoicing `claude/it-es-profile-fields`, `GET`/`PUT /v1/it/profile`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored — Clearvo is the accredited SDI intermediary, so Italy has no per-entity credential at all. This registers/reads back the entity's required Regime Fiscale profile field, which previously had no way to be set ahead of time (only inline on `/v1/send` via `countrySpecific.it.regimeFiscale`, by a caller who already knew to). Also fixes a separate, unrelated data-quality issue: Spain's `es_nif` profile field was removed from the manifest entirely (no SDK/MCP/CLI change — it was never wired up on this side) since it duplicated the entity's own ES VAT registration number with no reconciliation between the two.
 
@@ -111,7 +113,7 @@ Backend PR: Taxually-Einvoicing `claude/it-es-profile-fields`, `GET`/`PUT /v1/it
 
 - New `clearvo it profile set --regime-fiscale <code> [--entity <entityId>]` and `clearvo it profile get [--entity <entityId>]`.
 
-## Unreleased — publish only AFTER the FR credentials backend PR has merged and deployed
+## FR credentials
 
 Backend PR: Taxually-Einvoicing #16203 (`claude/fr-credentials-api`), `POST`/`GET /v1/fr/credentials`. Until it is live in production, these SDK/MCP/CLI calls 404. No secret is stored by this endpoint — it registers/reads back the entity's own French VAT number and reports honest per-capability onboarding status (`active` / `pending_activation` / `sandbox`) instead of a blind "saved", mirroring the pattern Poland's `set_pl_credentials`/`get_pl_credentials` already established.
 
@@ -131,7 +133,7 @@ Backend PR: Taxually-Einvoicing #16203 (`claude/fr-credentials-api`), `POST`/`GE
 - New `clearvo fr credentials set --tax-number <taxNumber> [--entity <entityId>]` and `clearvo fr credentials get [--entity <entityId>]`.
 - New `clearvo fr inbound poll [--entity <entityId>]` for manually triggering the France inbound poll (the automatic poll already runs every 5 minutes).
 
-## Unreleased — publish only AFTER the backend rename has deployed
+## Rename: line items `vatRate`/`vatAmount` to `taxRate`/`taxAmount`
 
 Backend PR: Taxually-Einvoicing branch `claude/vat-rate-to-tax-rate-rename`. Until it is live in production, the API still expects the old names, so these versions must not be published before it.
 
