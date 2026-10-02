@@ -157,6 +157,25 @@ const FR_SANDBOX_MASKS_ACTIVATION_NOTE =
 const FR_SANDBOX_NO_RECEIVING_NOTE =
   'Sandbox sends are accepted locally, but inbound receiving cannot be exercised in sandbox.';
 
+const CLASSIFICATION_CODES_SCHEMA = {
+  type: 'array' as const,
+  maxItems: 5,
+  description:
+    'Optional external classification codes (max 5), tried in order — the first that maps to a Clearvo tax category wins. ' +
+    'Known systems: "stripe" (Stripe product tax code, e.g. txcd_10103001), "shopify" (Shopify product taxonomy category id, ' +
+    'e.g. aa-1-13; a deeper id inherits the nearest mapped ancestor), "hs" (customs commodity code). A code with no mapping ' +
+    'falls through to the product cache, name classification and the entity default. Skipped when taxCategory is given. ' +
+    'The result reports classificationSource "CODE_MAP" with classificationSystem and classificationMatchedCode.',
+  items: {
+    type: 'object' as const,
+    properties: {
+      system: { type: 'string', pattern: '^[a-z0-9_]{1,30}$', description: 'Classification system, lowercase [a-z0-9_], 1-30 chars (e.g. stripe, shopify, hs)' },
+      code: { type: 'string', description: 'The code within that system' },
+    },
+    required: ['system', 'code'],
+  },
+};
+
 const TOOLS = [
   {
     name: 'submit_invoice',
@@ -591,6 +610,8 @@ const TOOLS = [
       'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
       'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing. ' +
+      'A line item can carry classificationCodes (e.g. [{system:"stripe",code:"txcd_..."}, {system:"shopify",code:"aa-1-13"}]) ' +
+      'to classify it from an external catalogue instead of by name; the response reports classificationSource "CODE_MAP". ' +
       'Each line item can also carry taxTreatmentOverride (force a rate band) or commodityCode (tariff-driven ' +
       'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain. ' +
       'Direction rule (transactionDirection, default "sale"): on a sale, the entity is the supplier and the ' +
@@ -672,6 +693,7 @@ const TOOLS = [
               productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
               productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
               taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
+              classificationCodes: CLASSIFICATION_CODES_SCHEMA,
               taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
               commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff — no separate scheme field needed, matching is jurisdiction-scoped by the line\'s own resolved country). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
               exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
@@ -1336,6 +1358,7 @@ const TOOLS = [
         sku: { type: 'string', description: 'Your internal SKU or product code' },
         description: { type: 'string', description: 'Optional longer description' },
         taxCategory: { type: 'string', description: 'Tax category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Use calculate_tax first to discover the right slug.' },
+        classificationCodes: CLASSIFICATION_CODES_SCHEMA,
         entityId: { type: 'string', description: 'Entity to create the product under. Omit to use the default entity for this API key.' },
       },
       required: ['name'],
@@ -1355,6 +1378,7 @@ const TOOLS = [
         sku: { type: 'string', description: 'Updated SKU' },
         description: { type: 'string', description: 'Updated description' },
         taxCategory: { type: 'string', description: 'Updated tax category slug' },
+        classificationCodes: CLASSIFICATION_CODES_SCHEMA,
       },
       required: ['productId'],
     },
