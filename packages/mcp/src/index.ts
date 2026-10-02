@@ -231,7 +231,8 @@ const TOOLS = [
       '(each with a resend fragment that includes correctsInvoiceId) plus error.evidence. Other codes: ' +
       'PEPPOL_SCHEMATRON_VALIDATION_FAILED / XRECHNUNG_SCHEMATRON_VALIDATION_FAILED (the generated document failed its own ' +
       'rule check), VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes ' +
-      'cannot go over Peppol for Germany — use ZUGFERD or XRECHNUNG). Self-billed German invoices cannot use PEPPOL: ' +
+      'cannot yet go over Peppol for Singapore, Japan or the UAE; Germany and the other Peppol countries support them, and a ' +
+      'credit note must reverse a previously accepted invoice in full — partial credit notes over Peppol are not supported yet). Self-billed German invoices cannot use PEPPOL: ' +
       '400 DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a ' +
       'stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). dryRun=true on a German PEPPOL invoice runs the real content ' +
       'rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
@@ -375,7 +376,7 @@ const TOOLS = [
         },
         totalAmount: { type: 'number', description: 'Net total excluding tax' },
         taxAmount: { type: 'number', description: 'Total tax amount' },
-        documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note"' },
+        documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note". Over Peppol a credit note reverses a previously accepted invoice in full (no partial credit notes yet) and a debit note is sent as an invoice marked as a debit note; not yet available for Singapore, Japan or the UAE (422 CREDIT_NOTE_PEPPOL_UNSUPPORTED).' },
         clientTaxCode: {
           type: 'string',
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/taxRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',

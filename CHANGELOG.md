@@ -37,9 +37,21 @@ Backend branch: Taxually-Einvoicing `claude/classification-code-map`. The backen
 
 - `clearvo products create` and `clearvo products update` take a repeatable `--classification-code system:code` flag (max 5). Any `stripeTaxCode` in a `clearvo calculate` JSON file must become `classificationCodes`.
 
+## Peppol credit and debit notes (Unreleased — publish only AFTER the backend PR 16945 is deployed)
+
+Backend: Taxually-Einvoicing PR 16945. Outbound credit and debit notes can now be sent over Peppol in Belgium, Netherlands, Austria, Croatia, Slovakia, Ireland, Norway, Sweden, Denmark, Finland, Lithuania, Latvia, Estonia, Luxembourg, Slovenia, Iceland, Switzerland, Germany (Peppol format), Australia and New Zealand. Singapore, Japan and the UAE do not yet (422 `CREDIT_NOTE_PEPPOL_UNSUPPORTED`). A credit note reverses a previously accepted invoice in full; partial credit notes over Peppol are not supported yet (only France and Spain support partial). A debit note is sent as an invoice marked as a debit note. Germany: ZUGFeRD, XRechnung and Peppol all support credit and debit notes. Self-billed documents over Peppol for German entities remain unsupported.
+
+### @clearvo/sdk (documentation only)
+
+- Corrected the `CREDIT_NOTE_PEPPOL_UNSUPPORTED` JSDoc: it applies to Singapore, Japan and the UAE, no longer to Germany.
+
+### @clearvo/mcp (documentation only)
+
+- `submit_invoice` description and `documentType` description corrected the same way, with the full-reversal and debit-note behaviour.
+
 ## Peppol for Germany
 
-Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing and credit/debit notes for Germany.
+Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing for Germany. (Credit and debit notes: see "Peppol credit and debit notes" below.)
 
 ### @clearvo/sdk (additive, non-breaking)
 
