@@ -157,6 +157,25 @@ const FR_SANDBOX_MASKS_ACTIVATION_NOTE =
 const FR_SANDBOX_NO_RECEIVING_NOTE =
   'Sandbox sends are accepted locally, but inbound receiving cannot be exercised in sandbox.';
 
+const CLASSIFICATION_CODES_SCHEMA = {
+  type: 'array' as const,
+  maxItems: 5,
+  description:
+    'Optional external classification codes (max 5), tried in order — the first that maps to a Clearvo tax category wins. ' +
+    'Known systems: "stripe" (Stripe product tax code, e.g. txcd_10103001), "shopify" (Shopify product taxonomy category id, ' +
+    'e.g. aa-1-13; a deeper id inherits the nearest mapped ancestor), "hs" (customs commodity code). A code with no mapping ' +
+    'falls through to the product cache, name classification and the entity default. Skipped when taxCategory is given. ' +
+    'The result reports classificationSource "CODE_MAP" with classificationSystem and classificationMatchedCode.',
+  items: {
+    type: 'object' as const,
+    properties: {
+      system: { type: 'string', pattern: '^[a-z0-9_]{1,30}$', description: 'Classification system, lowercase [a-z0-9_], 1-30 chars (e.g. stripe, shopify, hs)' },
+      code: { type: 'string', description: 'The code within that system' },
+    },
+    required: ['system', 'code'],
+  },
+};
+
 const TOOLS = [
   {
     name: 'submit_invoice',
@@ -200,6 +219,22 @@ const TOOLS = [
       'supplierRef resolves a saved one) and customer becomes your OWN entity\'s identity instead ' +
       '(auto-derived, tax-ID-checked). See supplier/customer/countrySpecific.peppol.selfBilling below ' +
       'for the full behavior. ' +
+      'Germany over Peppol: set countrySpecific.de.invoiceFormat=PEPPOL (or store PEPPOL as the customer\'s or ' +
+      'entity\'s default de invoice format) to send a Peppol BIS Billing 3.0 invoice to the buyer over the Peppol network. ' +
+      'It needs the seller\'s confirmed Peppol ID (else 422 MISSING_SELLER_PEPPOL_ID), an EXPLICIT Peppol address for the ' +
+      'customer (customer.endpointSchemeId + customer.endpointId, or a confirmed peppolParticipantId on the stored ' +
+      'customer — a German buyer\'s address is never derived from a VAT number), and a buyerReference or orderReference. ' +
+      'The response carries documentFormat UBL_PEPPOL_BIS and delivery { channel: NETWORK, receiver, evidence }; status is ' +
+      'PENDING (never ACCEPTED at generation) and becomes DELIVERED once the receiving access point confirms. ' +
+      'An unreachable buyer fails 422 PEPPOL_CUSTOMER_UNREACHABLE (reason NO_CUSTOMER_PEPPOL_ID or NOT_REGISTERED_ON_PEPPOL): ' +
+      'the invoice is stored NEEDS_INFO, there is no silent fallback, and error.alternatives[] lists the formats to re-send as ' +
+      '(each with a resend fragment that includes correctsInvoiceId) plus error.evidence. Other codes: ' +
+      'PEPPOL_SCHEMATRON_VALIDATION_FAILED / XRECHNUNG_SCHEMATRON_VALIDATION_FAILED (the generated document failed its own ' +
+      'rule check), VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes ' +
+      'cannot go over Peppol for Germany — use ZUGFERD or XRECHNUNG). Self-billed German invoices cannot use PEPPOL: ' +
+      '400 DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a ' +
+      'stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). dryRun=true on a German PEPPOL invoice runs the real content ' +
+      'rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
       'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
       'and — for any customer that is not a private individual — a customer street address plus (only ' +
       'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
@@ -239,6 +274,18 @@ const TOOLS = [
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReportingAmounts below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReportingAmounts — supply one or the other, never both.' },
+        taxReportingAmounts: {
+          type: 'object',
+          description: 'Authoritative net/tax/gross totals in taxReportingCurrency, taken as-is rather than derived from a single exchange rate — use this instead of exchangeRate when your own books already have exact converted figures that must reconcile precisely (the tax amount especially often needs to match your records exactly). Mutually exclusive with exchangeRate.',
+          properties: {
+            netAmount: { type: 'number', description: 'Required.' },
+            taxAmount: { type: 'number', description: 'Required.' },
+            grossAmount: { type: 'number', description: 'Optional — computed as netAmount + taxAmount when omitted.' },
+          },
+          required: ['netAmount', 'taxAmount'],
+        },
         supplier: {
           type: 'object',
           description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef fails with 422 MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
@@ -286,6 +333,8 @@ const TOOLS = [
                 email: { type: 'string', description: 'Customer email — required if notifyCustomer is set (or your entity default is on) for a country where Clearvo does not deliver the invoice electronically.' },
               },
             },
+            endpointSchemeId: { type: 'string', description: 'Peppol participant scheme ID of the customer\'s Peppol address (e.g. "0204" Leitweg-ID, "9930" German VAT). Use together with endpointId. Required for Germany over Peppol unless the stored customer has a confirmed Peppol ID.' },
+            endpointId: { type: 'string', description: 'Peppol participant ID value of the customer\'s Peppol address. Use together with endpointSchemeId.' },
             customerRef: {
               type: 'string',
               description: 'Your own reference for a previously-saved customer (see the dashboard\'s Customers page). When set, Clearvo fills in any of name/taxId/address you omit here from the saved record — fields you do supply still take precedence.',
@@ -332,6 +381,11 @@ const TOOLS = [
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/taxRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
         },
         customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional customer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the customer\'s own country, which also exempts the customer from HU\'s mandatory street-address requirement.' },
+        buyerReference: {
+          type: 'string',
+          description: 'Buyer reference (EN16931 BT-10). Required by German XRechnung (the Leitweg-ID for public-sector buyers) and by Peppol BIS Billing 3.0 unless orderReference is set — Germany over Peppol (DE-NRS) 422s without payment instructions and a buyer reference.',
+        },
+        orderReference: { type: 'string', description: 'Purchase order number from the customer (EN16931 BT-13). For Peppol, either this or buyerReference must be present.' },
         payment: {
           type: 'object',
           description: 'Payment details.',
@@ -344,6 +398,22 @@ const TOOLS = [
             mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the call fails 422 MANDATE_REFERENCE_TOO_LONG.' },
             creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
             debitedIban: { type: 'string', description: 'The CUSTOMER\'s own IBAN the SEPA direct debit draws from (BT-91). Must be a real IBAN (checksum-validated) — malformed input fails 422 INVALID_DEBITED_IBAN. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-31). Distinct from `iban` above, which is the seller\'s own account for a bank_transfer payment.' },
+          },
+        },
+        delivery: {
+          type: 'object',
+          description: 'Delivery information (EN16931 BG-13).',
+          properties: {
+            date: { type: 'string', description: 'Actual delivery date, YYYY-MM-DD (BT-72).' },
+            locationId: { type: 'string', description: 'Delivery location identifier (BT-71).' },
+            partyName: { type: 'string', description: 'Name of the party receiving the goods (BT-70).' },
+            address: {
+              type: 'object',
+              description: 'Delivery address.',
+              properties: {
+                street: { type: 'string' }, city: { type: 'string' }, postalCode: { type: 'string' }, country: { type: 'string', description: 'ISO 3166-1 alpha-2.' },
+              },
+            },
           },
         },
         correctsInvoiceId: {
@@ -434,7 +504,7 @@ const TOOLS = [
               type: 'object',
               description: 'Germany ZUGFeRD/XRechnung fields, plus per-invoice overrides of the invoice-content-field-registry company-law facts (each falls back to the matching de_* extra_fields value on the entity\'s own DE tax registration when omitted — see update_registration).',
               properties: {
-                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD).' },
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD). PEPPOL delivers a Peppol BIS Billing 3.0 invoice over the Peppol network (DE-NRS).' },
                 leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference when omitted. Missing both on a resolved-XRechnung invoice fails 422 MISSING_LEITWEG_ID.' },
                 legalForm: { type: 'string', description: 'DE legal-form select vocabulary (e.g. GMBH, UG, AG, SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER, FOREIGN_BRANCH, OTHER) — case-sensitive. Gates whether the register-identity and managing-directors disclosure tiers below apply at all.' },
                 handelsregisternummer: { type: 'string', description: 'BT-30. HGB § 37a commercial-register number (e.g. "HRB 12345"). Required once legalForm is a Handelsregister-registered form — missing this, registergericht, or registeredSeat never blocks the send, it returns a non-terminal errorCode MISSING_DE_COMPANY_REGISTER_DETAILS (WARNING severity).' },
@@ -550,6 +620,8 @@ const TOOLS = [
       'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
       'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing. ' +
+      'A line item can carry classificationCodes (e.g. [{system:"stripe",code:"txcd_..."}, {system:"shopify",code:"aa-1-13"}]) ' +
+      'to classify it from an external catalogue instead of by name; the response reports classificationSource "CODE_MAP". ' +
       'Each line item can also carry taxTreatmentOverride (force a rate band) or commodityCode (tariff-driven ' +
       'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain. ' +
       'Direction rule (transactionDirection, default "sale"): on a sale, the entity is the supplier and the ' +
@@ -631,7 +703,8 @@ const TOOLS = [
               productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
               productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
               taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
-              taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'REDUCED', 'SECOND_REDUCED', 'SUPER_REDUCED', 'ZERO', 'EXEMPT'], description: 'Caller-forced rate band for this line — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
+              classificationCodes: CLASSIFICATION_CODES_SCHEMA,
+              taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
               commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff — no separate scheme field needed, matching is jurisdiction-scoped by the line\'s own resolved country). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
               exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
               exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
@@ -706,6 +779,7 @@ const TOOLS = [
       'fabricated registration. Rejected with 422 if the entity already has a real registration on file. ' +
       'Also handles notifyCustomerByDefault — see submit_invoice\'s notifyCustomer for what this controls. ' +
       'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties. ' +
+      'Also handles Germany\'s defaultDeInvoiceFormat (ZUGFERD | XRECHNUNG | PEPPOL | null) — see that property. ' +
       'entityFacts sets facts about the entity itself (not any one country registration) — e.g. legalForm, the ' +
       'DE legal-form code (GMBH/UG/AG/SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/' +
       'FOREIGN_BRANCH/OTHER — see get_entity_fact_definitions for the full option list), which gates whether ' +
@@ -728,6 +802,7 @@ const TOOLS = [
         notifyCustomerByDefault: { type: 'boolean', description: 'Default for submit_invoice\'s notifyCustomer behavior — see that tool\'s description. Applies whenever a submit_invoice call omits its own notifyCustomer override.' },
         mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
         mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
+        defaultDeInvoiceFormat: { type: ['string', 'null'], enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL', null], description: 'Germany: this entity\'s default DE invoice format, used when neither the request nor the stored customer picks one. PEPPOL sends over the Peppol network (needs the seller\'s confirmed Peppol ID and an explicit Peppol ID for each customer). null clears it back to the platform default (ZUGFERD). Any other value fails 400 INVALID_DE_INVOICE_FORMAT. Not used for self-billed invoices (422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG).' },
         entityFacts: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Facts about the entity itself, e.g. { "legalForm": "GMBH" } — see get_entity_fact_definitions for the known keys. A string value sets that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['entityId'],
@@ -1198,6 +1273,11 @@ const TOOLS = [
       'Returns submission timestamps, clearance status labels, and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
+      'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
+      'validationOutcome (E_INVOICE, E_INVOICE_WITH_FLAGS, FORMAT_ERROR, PROFILE_NOT_SUFFICIENT, NOT_AN_EINVOICE, BUSINESS_RULE_ERROR, ' +
+      'NOT_VALIDATED), validation (what was checked against which rule set and version, with error/warning counts and a summary; ' +
+      'the findings are on get_invoice), attachments (the supplier\'s supporting documents, listed only, never the bytes), ' +
+      'rendition (original | generated | none: how the PDF read answers) and supersededBy. ' +
       'Paginate using the nextCursor / prevCursor values returned in each response: pass nextCursor as after_id to advance forward.',
     inputSchema: {
       type: 'object' as const,
@@ -1240,6 +1320,14 @@ const TOOLS = [
       'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +
       'when applicable) and supplierAdditionalLegalInfo (BT-33, the assembled company-law disclosure string) — ' +
       'both null for every other country and for a DE seller with nothing to disclose. ' +
+      'For a received document (direction inbound, e.g. any invoice received over Peppol), also returns intakeChannel, receivedAt, ' +
+      'validationOutcome and validation: the rule set and version it was checked against, error/warning counts, a summary and the ' +
+      'individual findings (rule, severity, message, location). validation states what was checked and found; it never says a ' +
+      'document is valid, compliant or approved. Also attachments (the supplier\'s own supporting documents, listed only), ' +
+      'rendition (original = the archived PDF, generated = a labelled readable copy rendered from the structured data and not an ' +
+      'invoice in its own right, none = the PDF read would answer 422) and supersededBy (the corrected re-send that replaced a ' +
+      'needs-review record). The pdfUrl of a received document returns that readable copy for any received Peppol/e-invoice; when ' +
+      'it cannot be rendered it answers an explicit 422 code (for example PDF_SCRIPT_UNSUPPORTED) rather than a 500, and pdfUrl is omitted. ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
       'or check whether a suggested action has been applied.',
     inputSchema: {
@@ -1280,6 +1368,7 @@ const TOOLS = [
         sku: { type: 'string', description: 'Your internal SKU or product code' },
         description: { type: 'string', description: 'Optional longer description' },
         taxCategory: { type: 'string', description: 'Tax category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Use calculate_tax first to discover the right slug.' },
+        classificationCodes: CLASSIFICATION_CODES_SCHEMA,
         entityId: { type: 'string', description: 'Entity to create the product under. Omit to use the default entity for this API key.' },
       },
       required: ['name'],
@@ -1299,6 +1388,7 @@ const TOOLS = [
         sku: { type: 'string', description: 'Updated SKU' },
         description: { type: 'string', description: 'Updated description' },
         taxCategory: { type: 'string', description: 'Updated tax category slug' },
+        classificationCodes: CLASSIFICATION_CODES_SCHEMA,
       },
       required: ['productId'],
     },
@@ -1879,6 +1969,13 @@ const TOOLS = [
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country.',
           properties: {
+            de: {
+              type: 'object',
+              description: 'Germany: stored default invoice format for this customer.',
+              properties: {
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG).' },
+              },
+            },
             ar: {
               type: 'object',
               description: 'Argentina AFIP buyer VAT condition.',
@@ -1926,6 +2023,13 @@ const TOOLS = [
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country.',
           properties: {
+            de: {
+              type: 'object',
+              description: 'Germany: stored default invoice format for this customer.',
+              properties: {
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG). Pass null to clear it.' },
+              },
+            },
             ar: {
               type: 'object',
               description: 'Argentina AFIP buyer VAT condition.',
@@ -1977,6 +2081,13 @@ const TOOLS = [
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country. Omit a sub-field to leave it untouched, not clear it.',
           properties: {
+            de: {
+              type: 'object',
+              description: 'Germany: stored default invoice format for this customer.',
+              properties: {
+                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG).' },
+              },
+            },
             ar: {
               type: 'object',
               description: 'Argentina AFIP buyer VAT condition.',
@@ -2254,7 +2365,7 @@ const TOOLS = [
         taxability: { type: 'string', enum: ['taxable', 'exempt', 'out_of_scope'] },
         customerType: { type: 'string', enum: ['b2b', 'b2c'], description: 'Omit for a code that applies to either b2b or b2c.' },
         supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'] },
-        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'], description: 'Required when taxability=taxable and this movement/reverseCharge combination doesn\'t already fix the EN16931 code (e.g. required for movement=local without reverseCharge). Not applicable — and ignored if sent — for intra_community, export, or a domestic reverse charge. Which bands have a real researched rate also depends on `country`/`region` (e.g. only `standard` is valid for the US) — rejected server-side if unresearched for the given jurisdiction.' },
+        rateBand: { type: 'string', enum: ['standard', 'middle', 'reduced', 'super_reduced', 'special', 'zero'], description: 'Rate band, named as in the central rates database (Standard, Middle, Reduced, Super reduced, Special, Zero). Required when taxability=taxable and this movement/reverseCharge combination doesn\'t already fix the EN16931 code (e.g. required for movement=local without reverseCharge). Not applicable — and ignored if sent — for intra_community, export, or a domestic reverse charge. Which bands have a real researched rate also depends on `country`/`region` (e.g. only `standard` is valid for the US) — rejected server-side if unresearched for the given jurisdiction.' },
         reverseCharge: { type: 'boolean', description: 'Defaults to false. Independent of movement — some countries require domestic reverse charge for specific goods categories even on a wholly local sale.' },
         useTaxSelfAssessed: { type: 'boolean', description: 'Defaults to false.' },
         filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'], description: 'Pure metadata for a future Taxsure integration — never consumed by any computation.' },
@@ -2283,7 +2394,7 @@ const TOOLS = [
         taxability: { type: 'string', enum: ['taxable', 'exempt', 'out_of_scope'] },
         customerType: { type: 'string', enum: ['b2b', 'b2c'] },
         supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'] },
-        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'], description: 'Which bands are valid depends on `country`/`region` — see create_client_tax_code.' },
+        rateBand: { type: 'string', enum: ['standard', 'middle', 'reduced', 'super_reduced', 'special', 'zero'], description: 'Which bands are valid depends on `country`/`region` — see create_client_tax_code.' },
         reverseCharge: { type: 'boolean' },
         useTaxSelfAssessed: { type: 'boolean' },
         filingTag: { type: 'string', enum: ['cash_accounting_settled', 'cash_accounting_unsettled', 'split_payment', 'statement_of_intent', 'withholding', 'bad_debt_adjustment', 'triangular_party_b', 'triangular_party_c'] },
@@ -2347,7 +2458,7 @@ const TOOLS = [
         reverseCharge: { type: 'string', enum: ['true', 'false'], description: 'Pass as the literal string "true" or "false".' },
         supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'] },
         customerType: { type: 'string', enum: ['b2b', 'b2c'] },
-        rateBand: { type: 'string', enum: ['standard', 'reduced', 'second_reduced', 'super_reduced', 'zero'] },
+        rateBand: { type: 'string', enum: ['standard', 'middle', 'reduced', 'super_reduced', 'special', 'zero'] },
         direction: { type: 'string', enum: ['sale', 'purchase'] },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },

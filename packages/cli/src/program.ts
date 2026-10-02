@@ -4,6 +4,33 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { Command } from 'commander';
 
+/** Commander collector for the repeatable --classification-code flag. */
+function collectClassificationCode(val: string, prev: string[]): string[] {
+  return [...prev, val];
+}
+
+/**
+ * Parse repeated `system:code` values into the API's classificationCodes
+ * shape. Splits on the FIRST colon only (codes may contain further colons).
+ * Exits with an error on a malformed value or more than 5 codes.
+ */
+function parseClassificationCodes(values: string[]): Array<{ system: string; code: string }> {
+  if (values.length > 5) {
+    console.error('Error: --classification-code may be given at most 5 times.');
+    process.exit(1);
+  }
+  return values.map((v) => {
+    const i = v.indexOf(':');
+    const system = i > 0 ? v.slice(0, i) : '';
+    const code = i > 0 ? v.slice(i + 1) : '';
+    if (!/^[a-z0-9_]{1,30}$/.test(system) || !code) {
+      console.error(`Error: invalid --classification-code "${v}". Expected system:code with a lowercase system, e.g. stripe:txcd_10103001`);
+      process.exit(1);
+    }
+    return { system, code };
+  });
+}
+
 export function createProgram(): Command {
   
   const CONFIG_PATH = join(homedir(), '.clearvo', 'config.json');
@@ -95,7 +122,7 @@ export function createProgram(): Command {
   // Invoice responses carry `totalTax` (never `totalVat`).
   program
     .command('send <file>')
-    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with 422 UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`')
+    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with 422 UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.endpointSchemeId + customer.endpointId (never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: 422 PEPPOL_CUSTOMER_UNREACHABLE with re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything')
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
     .option('--pretty', 'Pretty-print JSON output')
@@ -403,6 +430,7 @@ export function createProgram(): Command {
     .option('--sku <sku>', 'Internal SKU or product code')
     .option('--description <text>', 'Optional longer description')
     .option('--tax-category <slug>', 'Tax category slug (e.g. saas_business, physical_goods_general)')
+    .option('--classification-code <system:code>', 'Repeatable (max 5). External classification code, e.g. stripe:txcd_10103001, shopify:aa-1-13, hs:610910', collectClassificationCode, [] as string[])
     .option('--entity <entityId>', 'Entity to create the product under')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
@@ -410,13 +438,15 @@ export function createProgram(): Command {
       sku?: string;
       description?: string;
       taxCategory?: string;
+      classificationCode?: string[];
       entity?: string;
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = { name: opts.name };
+      const body: Record<string, unknown> = { name: opts.name };
       if (opts.sku) body.sku = opts.sku;
       if (opts.description) body.description = opts.description;
       if (opts.taxCategory) body.taxCategory = opts.taxCategory;
+      if (opts.classificationCode?.length) body.classificationCodes = parseClassificationCodes(opts.classificationCode);
       if (opts.entity) body.entityId = opts.entity;
       const result = await api('POST', '/products', body);
       print(result, !!opts.pretty);
@@ -429,15 +459,18 @@ export function createProgram(): Command {
     .option('--sku <sku>', 'Updated SKU')
     .option('--description <text>', 'Updated description')
     .option('--tax-category <slug>', 'Updated tax category slug')
+    .option('--classification-code <system:code>', 'Repeatable (max 5). Replaces the product\'s classification codes, e.g. stripe:txcd_10103001, shopify:aa-1-13', collectClassificationCode, [] as string[])
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
       name?: string;
       sku?: string;
       description?: string;
       taxCategory?: string;
+      classificationCode?: string[];
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = {};
+      const body: Record<string, unknown> = {};
+      if (opts.classificationCode?.length) body.classificationCodes = parseClassificationCodes(opts.classificationCode);
       if (opts.name) body.name = opts.name;
       if (opts.sku) body.sku = opts.sku;
       if (opts.description) body.description = opts.description;
@@ -1014,7 +1047,7 @@ export function createProgram(): Command {
     .requiredOption('--taxability <taxability>', 'taxable, exempt, or out_of_scope')
     .option('--customer-type <type>', 'b2b or b2c — omit for a code that applies to either')
     .requiredOption('--supply-type <type>', 'goods, digital_service, or general_service')
-    .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero — required when taxability=taxable and the movement/reverseCharge combination doesn\'t already fix the EN16931 code')
+    .option('--rate-band <band>', 'standard, middle, reduced, super_reduced, special, or zero — required when taxability=taxable and the movement/reverseCharge combination doesn\'t already fix the EN16931 code')
     .option('--reverse-charge', 'Independent of movement — some countries require domestic reverse charge even on a wholly local sale')
     .option('--use-tax-self-assessed', 'Mark use tax as self-assessed')
     .option('--filing-tag <tag>', 'Pure metadata for a future Taxsure integration — never consumed by any computation')
@@ -1048,7 +1081,7 @@ export function createProgram(): Command {
     .option('--taxability <taxability>', 'taxable, exempt, or out_of_scope')
     .option('--customer-type <type>', 'b2b or b2c')
     .option('--supply-type <type>', 'goods, digital_service, or general_service')
-    .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero')
+    .option('--rate-band <band>', 'standard, middle, reduced, super_reduced, special, or zero')
     .option('--reverse-charge', 'Set reverseCharge to true')
     .option('--use-tax-self-assessed', 'Set useTaxSelfAssessed to true')
     .option('--filing-tag <tag>', 'Updated filing tag')
@@ -1141,7 +1174,7 @@ export function createProgram(): Command {
     .option('--reverse-charge <bool>', 'true or false')
     .option('--supply-type <type>', 'goods, digital_service, or general_service')
     .option('--customer-type <type>', 'b2b or b2c')
-    .option('--rate-band <band>', 'standard, reduced, second_reduced, super_reduced, or zero')
+    .option('--rate-band <band>', 'standard, middle, reduced, super_reduced, special, or zero')
     .option('--direction <direction>', 'sale or purchase')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')

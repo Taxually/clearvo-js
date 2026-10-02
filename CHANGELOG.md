@@ -18,10 +18,50 @@ Until the backend is live, `x-idempotency-key` is still required and a request w
 ### @clearvo/cli (behaviour change)
 
 - `clearvo send <file>` no longer hashes the file into an `x-idempotency-key`; same server-side derivation and 409 behaviour as the MCP tool. Editing the file and re-submitting the same invoice number is now refused loudly instead of replaying.
+## Unreleased — BREAKING: publish only AFTER the classification-code-map backend PR has merged and deployed
+
+Backend branch: Taxually-Einvoicing `claude/classification-code-map`. The backend removes `stripeTaxCode` outright (no alias) and replaces it with a vendor-agnostic `classificationCodes` array. Until it is live, `classificationCodes` is ignored or rejected and `CODE_MAP` is never returned. After it is live, `stripeTaxCode` is rejected; send `[{ system: 'stripe', code: 'txcd_...' }]` instead.
+
+### @clearvo/sdk (BREAKING)
+
+- `classificationSource` value `'STRIPE_CODE'` is now `'CODE_MAP'`. Line results gain optional `classificationSystem` and `classificationMatchedCode` (the matched code can be an ancestor of the one sent).
+- New `ClassificationCode` (`{ system, code }`; system lowercase `[a-z0-9_]{1,30}`; known systems `stripe`, `shopify`, `hs`). `classificationCodes?` (max 5) added to `TaxCalculateRequest.lineItems[]`, `CreateProductInput`, `UpdateProductInput` and `Product`.
+
+### @clearvo/mcp (BREAKING)
+
+- `calculate_tax` line items, `create_product` and `update_product` take `classificationCodes` (max 5). `calculate_tax` description covers `CODE_MAP`.
+
+### @clearvo/cli (BREAKING)
+
+- `clearvo products create` and `clearvo products update` take a repeatable `--classification-code system:code` flag (max 5). Any `stripeTaxCode` in a `clearvo calculate` JSON file must become `classificationCodes`.
+
+## Unreleased — publish only AFTER the Peppol for Germany backend PR has merged and deployed
+
+Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing and credit/debit notes for Germany.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- New `DeInvoiceFormat` (`ZUGFERD` | `XRECHNUNG` | `PEPPOL`); `UpdateEntityInput.defaultDeInvoiceFormat` and `Entity.defaultDeInvoiceFormat`; `countrySpecific.de.invoiceFormat` documented with the Peppol requirements and error codes.
+- `InvoiceSubmitResponse` gains `documentFormat` (`UBL_PEPPOL_BIS`) and `delivery { channel: 'NETWORK', receiver, evidence }`. New `PeppolCustomerUnreachableResponse` type for the 422 `PEPPOL_CUSTOMER_UNREACHABLE` body (`reason`, `alternatives[]`, `evidence`).
+- New `InboundValidation`, `ValidationOutcome` (now includes `BUSINESS_RULE_ERROR`, `NOT_VALIDATED`) and `ReceivedInvoiceFields` (`intakeChannel`, `receivedAt`, `validation`, `attachments`, `rendition`, `supersededBy`) for received rows from `listInvoices`.
+
+### @clearvo/mcp (additive)
+
+- `submit_invoice`: description covers Germany over Peppol (requirements, response, `PEPPOL_CUSTOMER_UNREACHABLE` and the new error codes, dry-run); `customer.endpointSchemeId` / `customer.endpointId` added.
+- `update_entity`: `defaultDeInvoiceFormat`. `create_customer`, `update_customer`, `upsert_customer_by_ref`: `countrySpecific.de.invoiceFormat`.
+- `list_invoices`, `get_invoice`: descriptions cover the received-document fields and the readable PDF copy.
+
+### @clearvo/cli (additive)
+
+- `clearvo send` help text covers the Germany `PEPPOL` format and `--dry-run` behaviour for it.
 
 ## Unreleased — publish only AFTER the Spain VeriFactu Canary Islands backend PR has merged and deployed
 
 Backend branch: Taxually-Einvoicing `claude/es-verifactu-igic-f2`. Until it is live, the new `countrySpecific.es` keys are ignored or rejected by the API. Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system under the same Spanish tax number; it does not file IGIC returns or the Canary SII.
+
+### Rate-band vocabulary (BREAKING, all packages) — publish only after the rate-band-vocabulary backend PR has deployed
+
+The public API now uses the central rates database's band names. Client tax code `rateBand` is `standard | middle | reduced | super_reduced | special | zero` (was `standard | reduced | second_reduced | super_reduced | zero`). Old `reduced` means what is now `middle`; old `second_reduced` is now `reduced`. `taxTreatmentOverride` is `STANDARD | MIDDLE | REDUCED | SUPER_REDUCED | SPECIAL | EXEMPT | ZERO` (`SECOND_REDUCED` removed). Affects `ClientTaxCodeRateBand` and `taxTreatmentOverride` (SDK), the `create_client_tax_code` / `update_client_tax_code` / `list_tax_codes` / `calculate_tax` schemas (MCP) and `--rate-band` (CLI).
 
 ### @clearvo/sdk (additive, non-breaking)
 
