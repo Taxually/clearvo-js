@@ -2,6 +2,22 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — France e-reporting alignment: optional idempotency key on POST /v1/send (publish AFTER backend branch `claude/fr-ereporting-dgfip-alignment` has merged and deployed)
+
+Until the backend is live, `x-idempotency-key` is still required and a request without it returns 400.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- `SubmitInvoiceInput`: added `shipFrom` / `shipTo` (France own-goods stock transfers; one entry per movement, French leg only) and documented France purchase-direction support on `transactionDirection`. The `submit_invoice` MCP tool schema carries the same fields and wording.
+- `submitInvoice(input, idempotencyKey?)`: the key was already an optional parameter; it is now optional on the wire too. It is now only the client's retry hint: every document gets a system-generated `sys-<hash>` identity key from its own fields (sale: `documentType` + `country` + `invoiceNumber`; purchase: also `supplier.taxId` and `issueDate`), returned in the `X-Idempotency-Key` response header, and that key alone deduplicates. Re-sending the same identity with different content returns `409 IDEMPOTENT_BODY_MISMATCH` (an earlier `NEEDS_INFO` or `REJECTED` attempt re-runs in place instead); reusing your key for a different document returns `409 IDEMPOTENCY_KEY_REUSED`; a missing identity field returns `422 MISSING_IDENTITY_FIELD`.
+
+### @clearvo/mcp (behaviour change)
+
+- `submit_invoice` no longer sends a client-derived `x-idempotency-key`; the API derives it from the invoice identity. A changed re-send of the same invoice is now refused 409 `IDEMPOTENT_BODY_MISMATCH` rather than replaying the first result.
+
+### @clearvo/cli (behaviour change)
+
+- `clearvo send <file>` no longer hashes the file into an `x-idempotency-key`; same server-side derivation and 409 behaviour as the MCP tool. Editing the file and re-submitting the same invoice number is now refused loudly instead of replaying.
 ## Unreleased — BREAKING: publish only AFTER the classification-code-map backend PR has merged and deployed
 
 Backend branch: Taxually-Einvoicing `claude/classification-code-map`. The backend removes `stripeTaxCode` outright (no alias) and replaces it with a vendor-agnostic `classificationCodes` array. Until it is live, `classificationCodes` is ignored or rejected and `CODE_MAP` is never returned. After it is live, `stripeTaxCode` is rejected; send `[{ system: 'stripe', code: 'txcd_...' }]` instead.

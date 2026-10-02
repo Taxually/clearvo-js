@@ -131,9 +131,10 @@ export function createProgram(): Command {
       const body = JSON.parse(raw) as Record<string, unknown>;
       if (opts.dryRun) body.dryRun = true;
       if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
-      // Derive a stable idempotency key from the invoice file content
-      const idempotencyKey = createHash('sha256').update(raw).digest('hex').slice(0, 64);
-      const result = await api('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
+      // x-idempotency-key is optional: the API generates its own identity key from the invoice
+      // (type, country, invoice number) and answers 409 IDEMPOTENT_BODY_MISMATCH if the same invoice
+      // is re-sent with changed content.
+      const result = await api('POST', '/send', body);
       print(result, !!opts.pretty);
     });
 

@@ -528,13 +528,26 @@ export interface SubmitInvoiceInput {
   /**
    * ES SII block 3. Defaults to `'sale'` (this entity's own outbound/issued document —
    * LFE). `'purchase'` records a vendor's document on this entity's received side
-   * (LFR) — Spain SII only; every other live country's purchase-direction submission
-   * currently resolves to no reporting mandate at all. `supplier` is still required
-   * for a purchase and is the VENDOR/counterparty (the entity's own Spanish
-   * registration is applied automatically, same derivation as the sale-side
-   * `supplier.taxId` rule).
+   * (LFR) — Spain SII (received book) and France e-reporting (a purchase from a
+   * vendor not established in France is declared by you as the receiving party, in
+   * its own Received batch; send `supplier.taxId` and `supplier.address.country`, a
+   * missing one parks NEEDS_INFO); every other live country's purchase-direction
+   * submission currently resolves to no reporting mandate at all. `supplier` is
+   * still required for a purchase and is the VENDOR/counterparty (the entity's own
+   * Spanish registration is applied automatically, same derivation as the
+   * sale-side `supplier.taxId` rule).
    */
   transactionDirection?: 'sale' | 'purchase';
+  /**
+   * France e-reporting, own-goods stock transfers only (client tax code with
+   * movement `own_goods_movement`). Where the goods leave: the French origin for an
+   * outbound transfer (`transactionDirection: 'sale'`), the origin member state for
+   * an inbound one (`'purchase'`). Send ONE entry per movement, on the French leg
+   * only. Ignored for every other transaction; a transfer without it parks NEEDS_INFO.
+   */
+  shipFrom?: { country: string };
+  /** France e-reporting, own-goods stock transfers only. Where the goods arrive; needed for an outbound transfer (shipFrom in France) to name the destination member state. */
+  shipTo?: { country: string };
   /**
    * PURCHASE documents only, Spain SII, YYYY-MM-DD. The accounting-entry date
    * (FechaRegContable) — anchors both the compliance-mandate effective-date gate
