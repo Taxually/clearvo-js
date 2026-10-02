@@ -354,6 +354,38 @@ export interface SubmitInvoiceInput {
   dueDate?: string;
   currency: string;
   country: string;
+  /**
+   * ISO 4217 currency code this invoice must be VAT-reported in, when it
+   * differs from `currency` (EN16931 BT-6 — e.g. a EUR invoice for a
+   * transaction whose jurisdiction reports in RON). Omit to let it resolve
+   * automatically from the transaction's own tax jurisdiction; only set it to
+   * override that. When the resolved reporting currency differs from
+   * `currency`, you must also supply `exchangeRate` or `taxReportingAmounts`
+   * below, or the call fails with 422 `TAX_REPORTING_CONVERSION_MISSING` —
+   * Clearvo never fetches or computes an exchange rate itself.
+   */
+  taxReportingCurrency?: string;
+  /**
+   * `currency` -> `taxReportingCurrency` rate, applied uniformly to every
+   * total (subtotal, tax-exclusive amount, tax total, grand total). Mutually
+   * exclusive with `taxReportingAmounts` — 422
+   * `EXCHANGE_RATE_AND_TAX_REPORTING_AMOUNTS_BOTH_SUPPLIED` if both are sent.
+   */
+  exchangeRate?: number;
+  /**
+   * Authoritative net/tax/gross totals in `taxReportingCurrency`, taken as-is
+   * rather than back-derived from a single collapsed figure or exchange rate
+   * — your own rounding of net+tax often isn't identical to rounding the
+   * gross directly, and the tax amount specifically usually needs to
+   * reconcile exactly with your own books. Mutually exclusive with
+   * `exchangeRate`.
+   */
+  taxReportingAmounts?: {
+    netAmount: number;
+    taxAmount: number;
+    /** Optional — computed as `netAmount + taxAmount` when omitted. */
+    grossAmount?: number;
+  };
   taxIncluded?: boolean;
   /**
    * Optional on an ordinary sale — auto-derived from the entity's own
