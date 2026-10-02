@@ -18,6 +18,13 @@ export interface Entity {
   entityFacts?: Record<string, string>;
   /** Germany only. This entity's default DE invoice format (level 3 of the format resolver), or null when unset (platform default ZUGFERD). */
   defaultDeInvoiceFormat?: DeInvoiceFormat | null;
+  /**
+   * Where the legal entity is ESTABLISHED (2-letter ISO country code), or null when unset —
+   * meaning it is treated as established in `country`. Distinct from where it holds VAT
+   * registrations and from `country` (its home / primary-registration country). Decides which
+   * French e-invoicing / e-reporting rules apply. See UpdateEntityInput.establishmentCountry.
+   */
+  establishmentCountry?: string | null;
 }
 
 export interface CreateEntityInput {
@@ -49,6 +56,15 @@ export interface UpdateEntityInput {
    * ZUGFERD or XRECHNUNG.
    */
   defaultDeInvoiceFormat?: DeInvoiceFormat | null;
+  /**
+   * Where the legal entity is ESTABLISHED, as a 2-letter ISO country code (e.g. "DE"). This is
+   * not where it holds VAT registrations (use add_registration for those): a German company
+   * registered for VAT in France is established in Germany, and that decides which French
+   * e-invoicing / e-reporting rules apply to it. null clears it, meaning the entity is treated
+   * as established in its own `country`. An invalid code is rejected with 400
+   * INVALID_ESTABLISHMENT_COUNTRY.
+   */
+  establishmentCountry?: string | null;
   /** Default for SubmitInvoiceInput.notifyCustomer — applies whenever a send omits its own override. */
   notifyCustomerByDefault?: boolean;
   /**

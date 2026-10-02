@@ -708,8 +708,8 @@ const TOOLS = [
     name: 'list_entities',
     description:
       'List the business entities registered under this Clearvo account. ' +
-      'Each entity is a legal company registered for tax compliance (one VAT registration, one country of establishment). ' +
-      'Returns entity IDs, names, countries of establishment, and VAT numbers. ' +
+      'Each entity is a legal company registered for tax compliance (one VAT registration, one home country). ' +
+      'Returns entity IDs, names, home countries, and VAT numbers (get an entity for its establishmentCountry). ' +
       'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices.',
     inputSchema: {
       type: 'object' as const,
@@ -748,6 +748,7 @@ const TOOLS = [
       'Also handles notifyCustomerByDefault — see submit_invoice\'s notifyCustomer for what this controls. ' +
       'Also handles Mexico\'s mxIngestionMode/mxIngestionStartDate — see those two properties. ' +
       'Also handles Germany\'s defaultDeInvoiceFormat (ZUGFERD | XRECHNUNG | PEPPOL | null) — see that property. ' +
+      'Also handles establishmentCountry (where the legal entity is established, which can differ from where it is VAT-registered) — see that property. ' +
       'entityFacts sets facts about the entity itself (not any one country registration) — e.g. legalForm, the ' +
       'DE legal-form code (GMBH/UG/AG/SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/' +
       'FOREIGN_BRANCH/OTHER — see get_entity_fact_definitions for the full option list), which gates whether ' +
@@ -771,6 +772,7 @@ const TOOLS = [
         mxIngestionMode: { type: 'string', enum: ['sat_pull', 'client_push'], description: 'Mexico only. sat_pull (default) — Clearvo polls SAT\'s Descarga Masiva service on this entity\'s behalf; requires an e.firma/CSD on file first (set_mx_credentials), or this is rejected with MX_CREDENTIALS_REQUIRED. client_push — the entity\'s own AP/ERP system submits CFDI XML directly (POST /mx/inbound/cfdi, not yet exposed as its own tool); no credential needed.' },
         mxIngestionStartDate: { type: 'string', description: 'Mexico only. ISO date (YYYY-MM-DD) or null — the earliest CFDI issue date (fecha de emisión) the SAT-pull poller\'s rolling lookback window considers for this entity.' },
         defaultDeInvoiceFormat: { type: ['string', 'null'], enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL', null], description: 'Germany: this entity\'s default DE invoice format, used when neither the request nor the stored customer picks one. PEPPOL sends over the Peppol network (needs the seller\'s confirmed Peppol ID and an explicit Peppol ID for each customer). null clears it back to the platform default (ZUGFERD). Any other value fails 400 INVALID_DE_INVOICE_FORMAT. Not used for self-billed invoices (422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG).' },
+        establishmentCountry: { type: ['string', 'null'], description: 'Where the legal entity is ESTABLISHED, as a 2-letter ISO country code (e.g. "DE"). This is not where it holds VAT registrations (add_registration is for those): a German company registered for VAT in France is established in Germany, and that decides which French e-invoicing / e-reporting rules apply to it. Pass null to clear it, which means the entity is treated as established in its own country.' },
         entityFacts: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Facts about the entity itself, e.g. { "legalForm": "GMBH" } — see get_entity_fact_definitions for the known keys. A string value sets that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['entityId'],

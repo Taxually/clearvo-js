@@ -352,7 +352,7 @@ export function createProgram(): Command {
     .command('create')
     .description('Create a new entity and receive an API key')
     .requiredOption('--name <legalName>', 'Official registered legal name')
-    .requiredOption('--country <code>', 'Country of establishment (ISO 3166-1 alpha-2)')
+    .requiredOption('--country <code>', 'Home country of the entity (ISO 3166-1 alpha-2)')
     .option('--vat <vatNumber>', 'VAT registration number (include country prefix)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { name: string; country: string; vat?: string; pretty?: boolean }) => {

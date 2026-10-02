@@ -2,6 +2,22 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the entity establishment-country backend PR has merged and deployed
+
+Backend: Taxually-Einvoicing entity `establishmentCountry` PR. Until it is live, `PATCH /v1/entities/{id}` ignores or rejects `establishmentCountry` and `GET` does not return it. It is where the legal entity is established (2-letter ISO code, or null = established in its own `country`), distinct from where it holds VAT registrations. It decides which French e-invoicing / e-reporting rules apply: a company established in Germany but VAT-registered in France is not established in France. Not settable on entity create.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- `Entity.establishmentCountry` and `UpdateEntityInput.establishmentCountry` (`string | null`; invalid code returns 400 `INVALID_ESTABLISHMENT_COUNTRY`).
+
+### @clearvo/mcp (additive)
+
+- `update_entity`: `establishmentCountry` (2-letter ISO code, or null to clear). `list_entities` description now says "home country" rather than "country of establishment".
+
+### @clearvo/cli (additive)
+
+- No new flags (the CLI has no `entities update`); `entities get` prints `establishmentCountry` as returned by the API. `entities create --country` help now says "Home country" to avoid confusion with establishment.
+
 ## Unreleased — publish only AFTER the Peppol for Germany backend PR has merged and deployed
 
 Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing and credit/debit notes for Germany.
