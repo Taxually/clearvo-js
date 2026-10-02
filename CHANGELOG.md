@@ -2,6 +2,25 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend customer-references PRs are deployed
+
+Backend: Taxually-Einvoicing customer references (typed per-customer reference values, folding in the Peppol participant ID; `GET /v1/customer-reference-types`). Until it is live the API rejects `references` and still expects `peppolParticipantId`. Not released.
+
+### @clearvo/mcp (additive, with one breaking input change)
+
+- New tool `list_customer_reference_types` (optional `country`): the registry of reference kinds a customer can carry, e.g. `PEPPOL_PARTICIPANT_ID` (confirmation required) and `LEITWEG_ID` (Germany only, one per customer). Read-only.
+- `create_customer`, `update_customer`, `upsert_customer_by_ref`: new `references` (`[{ type, value }]`, or `null`). BREAKING: `peppolParticipantId` is removed; send `{ type: 'PEPPOL_PARTICIPANT_ID', value: 'scheme:value' }` in `references` instead. Create and replace semantics: supplied replaces the whole list, `null` or `[]` clears it, omitted leaves it untouched (including on `upsert_customer_by_ref`). Bad items return 422 `INVALID_REFERENCES` with a per-item `index`. Tax and VAT numbers are not references.
+- `list_customers` description: each customer returns `references` (replaces the top-level `peppol` object).
+- `submit_invoice`: description and `countrySpecific.de.leitwegId` cover the stored-reference fallbacks (a stored confirmed Peppol ID and a stored `LEITWEG_ID` fill in only when the request has no explicit value; a Leitweg-ID is used as the electronic address only if its check digits are valid) and the `MISSING_CUSTOMER_ELECTRONIC_ADDRESS` / `MISSING_SUPPLIER_ELECTRONIC_ADDRESS` ERROR codes raised before any XML.
+
+### @clearvo/sdk (docs only)
+
+- `SubmitInvoiceInput.countrySpecific` doc comment covers the stored-reference fallbacks and the electronic-address error codes. The SDK has no typed customer methods, so no type changes.
+
+### @clearvo/cli
+
+- No change: the CLI has no customers command.
+
 ## Unreleased — publish only AFTER the Peppol for Germany backend PR has merged and deployed
 
 Backend branch: Taxually-Einvoicing `claude/peppol-germany`. Until it is live, `PEPPOL` as a German invoice format is rejected and the received-document fields are absent. Germany can now send an invoice to the buyer over the Peppol network (Peppol BIS Billing 3.0), and every received Peppol or e-invoice reports what was checked and has a readable PDF copy. Not supported: Peppol self-billing and credit/debit notes for Germany.
