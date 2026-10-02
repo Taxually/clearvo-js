@@ -255,6 +255,18 @@ const TOOLS = [
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReportingAmounts below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReportingAmounts — supply one or the other, never both.' },
+        taxReportingAmounts: {
+          type: 'object',
+          description: 'Authoritative net/tax/gross totals in taxReportingCurrency, taken as-is rather than derived from a single exchange rate — use this instead of exchangeRate when your own books already have exact converted figures that must reconcile precisely (the tax amount especially often needs to match your records exactly). Mutually exclusive with exchangeRate.',
+          properties: {
+            netAmount: { type: 'number', description: 'Required.' },
+            taxAmount: { type: 'number', description: 'Required.' },
+            grossAmount: { type: 'number', description: 'Optional — computed as netAmount + taxAmount when omitted.' },
+          },
+          required: ['netAmount', 'taxAmount'],
+        },
         supplier: {
           type: 'object',
           description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef fails with 422 MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
