@@ -199,7 +199,8 @@ export type CustomerPartyInput = Omit<PartyInput, 'name'> & { name?: string };
 export interface PartyInput {
   name: string;
   taxId?: string;
-  taxIdCountry?: string;
+  /** ISO 3166-1 alpha-2 country of the tax registration that issued `taxId`. */
+  establishmentCountry?: string;
   legalRegistrationId?: string;
   address: {
     street?: string;
@@ -210,8 +211,8 @@ export interface PartyInput {
     country: string;
   };
   contact?: { name?: string; phone?: string; email?: string };
-  endpointId?: string;
-  endpointSchemeId?: string;
+  /** Peppol electronic address (BT-34 supplier, BT-49 customer): `value` and `schemeId` (EAS code) together. */
+  electronicAddress?: { value?: string; schemeId?: string };
   /** Customer only — resolve a previously-saved customer record instead of repeating its fields. */
   customerRef?: string;
   /**
@@ -360,7 +361,7 @@ export interface SubmitInvoiceInput {
    * transaction whose jurisdiction reports in RON). Omit to let it resolve
    * automatically from the transaction's own tax jurisdiction; only set it to
    * override that. When the resolved reporting currency differs from
-   * `currency`, you must also supply `exchangeRate` or `taxReportingAmounts`
+   * `currency`, you must also supply `exchangeRate` or `taxReporting`
    * below, or the call fails with 422 `TAX_REPORTING_CONVERSION_MISSING` —
    * Clearvo never fetches or computes an exchange rate itself.
    */
@@ -368,23 +369,23 @@ export interface SubmitInvoiceInput {
   /**
    * `currency` -> `taxReportingCurrency` rate, applied uniformly to every
    * total (subtotal, tax-exclusive amount, tax total, grand total). Mutually
-   * exclusive with `taxReportingAmounts` — 422
-   * `EXCHANGE_RATE_AND_TAX_REPORTING_AMOUNTS_BOTH_SUPPLIED` if both are sent.
+   * exclusive with `taxReporting` — 422
+   * `EXCHANGE_RATE_AND_TAX_REPORTING_BOTH_SUPPLIED` if both are sent.
    */
   exchangeRate?: number;
   /**
-   * Authoritative net/tax/gross totals in `taxReportingCurrency`, taken as-is
+   * Authoritative tax-exclusive amount, tax total and total in `taxReportingCurrency`, taken as-is
    * rather than back-derived from a single collapsed figure or exchange rate
    * — your own rounding of net+tax often isn't identical to rounding the
    * gross directly, and the tax amount specifically usually needs to
    * reconcile exactly with your own books. Mutually exclusive with
    * `exchangeRate`.
    */
-  taxReportingAmounts?: {
-    netAmount: number;
-    taxAmount: number;
-    /** Optional — computed as `netAmount + taxAmount` when omitted. */
-    grossAmount?: number;
+  taxReporting?: {
+    taxExclusiveAmount: number;
+    taxTotal: number;
+    /** Optional — computed as `taxExclusiveAmount + taxTotal` when omitted. */
+    total?: number;
   };
   taxIncluded?: boolean;
   /**
@@ -403,7 +404,7 @@ export interface SubmitInvoiceInput {
    * `customer` is instead the entity's OWN identity (the buyer being
    * self-billed for) — auto-derived when omitted, tax-ID-compared against
    * the entity's own registration the same way `supplier` normally is, and
-   * its endpointId/endpointSchemeId (BT-49) backfilled from the entity's
+   * its electronicAddress (BT-49) backfilled from the entity's
    * own confirmed Peppol Participant ID when omitted.
    *
    * `name` may be omitted only on a Spain VeriFactu simplified invoice (F2 or
@@ -452,7 +453,7 @@ export interface SubmitInvoiceInput {
    * - `es.customerIdType` — Spain VeriFactu only. What kind of document
    *   `customer.taxId` is when it is not a Spanish NIF or an EU VAT number
    *   (`passport`, `residence_document`, `residence_certificate`, `other`,
-   *   `not_registered`); send the buyer's country in `customer.taxIdCountry`.
+   *   `not_registered`); send the buyer's country in `customer.establishmentCountry`.
    *   See {@link EsCountrySpecific}.
    * - `es.noRecipientIdentification` — Spain VeriFactu only. Your declaration
    *   that a simplified invoice is lawfully issued without identifying the
@@ -474,7 +475,7 @@ export interface SubmitInvoiceInput {
    *   the Peppol network (Peppol BIS Billing 3.0; response `documentFormat`
    *   `UBL_PEPPOL_BIS`, status PENDING then DELIVERED). Needs the seller's
    *   confirmed Peppol ID and an explicit Peppol ID for the customer
-   *   (`customer.endpointSchemeId` + `customer.endpointId`, or a confirmed one
+   *   (`customer.electronicAddress` with `schemeId` + `value`, or a confirmed one
    *   on the stored customer) — a German buyer's address is never derived
    *   from a VAT number — plus a `buyerReference` or `orderReference`. An
    *   unreachable buyer fails 422 `PEPPOL_CUSTOMER_UNREACHABLE`
@@ -492,7 +493,7 @@ export interface SubmitInvoiceInput {
    *   only used as the customer electronic address if it passes check-digit
    *   validation. A stored, confirmed `PEPPOL_PARTICIPANT_ID` reference
    *   likewise supplies the customer's Peppol address when the request has no
-   *   explicit `endpointId` + `endpointSchemeId`. German XRechnung and Peppol
+   *   explicit `electronicAddress` (`value` + `schemeId`). German XRechnung and Peppol
    *   invoices need a customer and a seller electronic address; without one the
    *   call fails with ERROR rules `MISSING_CUSTOMER_ELECTRONIC_ADDRESS` /
    *   `MISSING_SUPPLIER_ELECTRONIC_ADDRESS` before any XML is generated. The
@@ -530,6 +531,13 @@ export interface SubmitInvoiceInput {
    *   `customer` above for how party semantics change. Silently ignored
    *   for SG and JP (self-billing document-type registration not yet
    *   supported for those two).
+   * - `ro.supplierTaxRegistered` / `ro.customerTaxRegistered` (boolean,
+   *   Romania only) — whether that party genuinely holds an active VAT
+   *   registration (a CUI, "RO" prefix) rather than a bare fiscal identifier
+   *   (CIF). Omit to default to whether the party's `taxId` carried the "RO"
+   *   prefix; an unresolved party fails with 422
+   *   `RO_SUPPLIER_TAX_REGISTRATION_STATUS_UNKNOWN` /
+   *   `RO_CUSTOMER_TAX_REGISTRATION_STATUS_UNKNOWN`.
    */
   countrySpecific?: Record<string, unknown>;
   notifyCustomer?: boolean;
@@ -574,7 +582,7 @@ export interface SubmitInvoiceInput {
    * (an exempt/non-deductible purchase) — NOT the same as omitting the field, which
    * produces `NEEDS_INFO` naming this field.
    */
-  deductibleVatAmount?: number;
+  deductibleTaxAmount?: number;
   /**
    * Received book only, Spain SII. The VAT declaration period this deduction is
    * actually taken in, when it differs from `accountingDate`'s own month. Optional
@@ -2176,7 +2184,7 @@ export interface ClientTaxCode {
   rate: number | null;
   description: string | null;
   /** Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code. Never derived or auto-generated. */
-  exemptionReasonText: string | null;
+  invoiceReferenceText: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2206,7 +2214,7 @@ export interface CreateClientTaxCodeInput {
   exemptionReasonCode?: string;
   description?: string;
   /** Only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code. Never derived or auto-generated. */
-  exemptionReasonText?: string;
+  invoiceReferenceText?: string;
   /** Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;
 }
@@ -2394,7 +2402,7 @@ export interface MandateTransaction {
   totalNet: number | null;
   totalTax: number | null;
   totalGross: number | null;
-  amountDue: number | null;
+  payableAmount: number | null;
   supplierTaxId: string | null;
   customerTaxId: string | null;
   isLate: boolean;

@@ -2,6 +2,19 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
+
+**BREAKING**, no aliases: client tax code field `exemptionReasonText` is now `invoiceReferenceText` (SDK `ClientTaxCode`/request types, MCP `create_client_tax_code`/`update_client_tax_code`, CLI `tax-codes create|update --invoice-reference-text`, replacing `--exemption-reason-text`). Tax-calculation request `reportingCurrency` is now `taxReportingCurrency`.
+
+Also renamed in this release (send/invoice vocabulary, SDK `SubmitInvoiceInput`/`PartyInput`/invoice view types, MCP `submit_invoice`, CLI `invoices submit` help):
+
+- Party objects: `endpointId` + `endpointSchemeId` are now `electronicAddress { value, schemeId }`; `taxIdCountry` is now `establishmentCountry`.
+- Romania: the party `taxRegistered` flag is replaced by `countrySpecific.ro.supplierTaxRegistered` and `countrySpecific.ro.customerTaxRegistered`.
+- Top level: `deductibleVatAmount` is now `deductibleTaxAmount`; `taxReportingAmounts { netAmount, taxAmount, grossAmount }` is now `taxReporting { taxExclusiveAmount, taxTotal, total }`.
+- Error codes: `EXCHANGE_RATE_AND_TAX_REPORTING_AMOUNTS_BOTH_SUPPLIED` is now `EXCHANGE_RATE_AND_TAX_REPORTING_BOTH_SUPPLIED`; `MISSING_TAX_REPORTING_NET_AMOUNT` is now `MISSING_TAX_REPORTING_TAX_EXCLUSIVE_AMOUNT`; `MISSING_TAX_REPORTING_TAX_AMOUNT` is now `MISSING_TAX_REPORTING_TAX_TOTAL`; `INVALID_TAX_REPORTING_GROSS_AMOUNT` is now `INVALID_TAX_REPORTING_TOTAL`.
+- Invoice view (`GET /v1/invoices/{id}`): `amountDue` is now `payableAmount`.
+- Not typed in this repo: `POST /v1/invoices/{id}/deliver` body (`electronicAddress { value, schemeId }`) and `GET /v1/participants/lookup` (`electronicAddress`, `electronicAddressSchemeId`; `derivedFrom` value `electronicAddress`).
+
 ## Unreleased — publish only AFTER the backend customer-references PRs are deployed
 
 Backend: Taxually-Einvoicing customer references (typed per-customer reference values, folding in the Peppol participant ID; `GET /v1/customer-reference-types`). Until it is live the API rejects `references` and still expects `peppolParticipantId`. Not released.
