@@ -206,6 +206,15 @@ export class ClearvoClient {
 
   // ── E-Invoicing ──────────────────────────────────────────────────────────────
 
+  /**
+   * `idempotencyKey` is optional and is only YOUR retry hint. Every document gets a system-generated
+   * identity key from its own fields (sale: documentType + country + invoiceNumber; purchase: also
+   * supplier.taxId + issueDate), returned in the `X-Idempotency-Key` response header; that, not your
+   * key, is what deduplicates. A re-send of the same identity with different content is refused
+   * 409 IDEMPOTENT_BODY_MISMATCH (unless the earlier attempt is NEEDS_INFO or REJECTED, which re-run
+   * in place), and reusing your key for a different document is refused 409 IDEMPOTENCY_KEY_REUSED.
+   * A document missing one of its identity fields is refused 422 MISSING_IDENTITY_FIELD.
+   */
   submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;

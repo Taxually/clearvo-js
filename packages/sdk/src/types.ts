@@ -354,6 +354,38 @@ export interface SubmitInvoiceInput {
   dueDate?: string;
   currency: string;
   country: string;
+  /**
+   * ISO 4217 currency code this invoice must be VAT-reported in, when it
+   * differs from `currency` (EN16931 BT-6 — e.g. a EUR invoice for a
+   * transaction whose jurisdiction reports in RON). Omit to let it resolve
+   * automatically from the transaction's own tax jurisdiction; only set it to
+   * override that. When the resolved reporting currency differs from
+   * `currency`, you must also supply `exchangeRate` or `taxReportingAmounts`
+   * below, or the call fails with 422 `TAX_REPORTING_CONVERSION_MISSING` —
+   * Clearvo never fetches or computes an exchange rate itself.
+   */
+  taxReportingCurrency?: string;
+  /**
+   * `currency` -> `taxReportingCurrency` rate, applied uniformly to every
+   * total (subtotal, tax-exclusive amount, tax total, grand total). Mutually
+   * exclusive with `taxReportingAmounts` — 422
+   * `EXCHANGE_RATE_AND_TAX_REPORTING_AMOUNTS_BOTH_SUPPLIED` if both are sent.
+   */
+  exchangeRate?: number;
+  /**
+   * Authoritative net/tax/gross totals in `taxReportingCurrency`, taken as-is
+   * rather than back-derived from a single collapsed figure or exchange rate
+   * — your own rounding of net+tax often isn't identical to rounding the
+   * gross directly, and the tax amount specifically usually needs to
+   * reconcile exactly with your own books. Mutually exclusive with
+   * `exchangeRate`.
+   */
+  taxReportingAmounts?: {
+    netAmount: number;
+    taxAmount: number;
+    /** Optional — computed as `netAmount + taxAmount` when omitted. */
+    grossAmount?: number;
+  };
   taxIncluded?: boolean;
   /**
    * Optional on an ordinary sale — auto-derived from the entity's own
@@ -448,8 +480,8 @@ export interface SubmitInvoiceInput {
    *   unreachable buyer fails 422 `PEPPOL_CUSTOMER_UNREACHABLE`
    *   ({@link PeppolCustomerUnreachableResponse}). Other errors: 422
    *   `MISSING_SELLER_PEPPOL_ID`, `CREDIT_NOTE_PEPPOL_UNSUPPORTED` (credit
-   *   and debit notes cannot go over Peppol for Germany; use ZUGFERD or
-   *   XRECHNUNG), `PEPPOL_SCHEMATRON_VALIDATION_FAILED`,
+   *   and debit notes cannot yet go over Peppol for Singapore, Japan or the
+   *   UAE; Germany supports them in all three formats), `PEPPOL_SCHEMATRON_VALIDATION_FAILED`,
    *   `XRECHNUNG_SCHEMATRON_VALIDATION_FAILED`, `VALIDATION_UNAVAILABLE`.
    *   Self-billed German invoices cannot use PEPPOL: 400
    *   `DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED` when requested explicitly, 422
@@ -506,13 +538,26 @@ export interface SubmitInvoiceInput {
   /**
    * ES SII block 3. Defaults to `'sale'` (this entity's own outbound/issued document —
    * LFE). `'purchase'` records a vendor's document on this entity's received side
-   * (LFR) — Spain SII only; every other live country's purchase-direction submission
-   * currently resolves to no reporting mandate at all. `supplier` is still required
-   * for a purchase and is the VENDOR/counterparty (the entity's own Spanish
-   * registration is applied automatically, same derivation as the sale-side
-   * `supplier.taxId` rule).
+   * (LFR) — Spain SII (received book) and France e-reporting (a purchase from a
+   * vendor not established in France is declared by you as the receiving party, in
+   * its own Received batch; send `supplier.taxId` and `supplier.address.country`, a
+   * missing one parks NEEDS_INFO); every other live country's purchase-direction
+   * submission currently resolves to no reporting mandate at all. `supplier` is
+   * still required for a purchase and is the VENDOR/counterparty (the entity's own
+   * Spanish registration is applied automatically, same derivation as the
+   * sale-side `supplier.taxId` rule).
    */
   transactionDirection?: 'sale' | 'purchase';
+  /**
+   * France e-reporting, own-goods stock transfers only (client tax code with
+   * movement `own_goods_movement`). Where the goods leave: the French origin for an
+   * outbound transfer (`transactionDirection: 'sale'`), the origin member state for
+   * an inbound one (`'purchase'`). Send ONE entry per movement, on the French leg
+   * only. Ignored for every other transaction; a transfer without it parks NEEDS_INFO.
+   */
+  shipFrom?: { country: string };
+  /** France e-reporting, own-goods stock transfers only. Where the goods arrive; needed for an outbound transfer (shipFrom in France) to name the destination member state. */
+  shipTo?: { country: string };
   /**
    * PURCHASE documents only, Spain SII, YYYY-MM-DD. The accounting-entry date
    * (FechaRegContable) — anchors both the compliance-mandate effective-date gate
@@ -842,6 +887,15 @@ export interface TaxCalculateRequest {
     productName: string;
     taxCategory?: string;
     /**
+     * Optional external classification codes for this line (max 5), tried in
+     * order; the first that maps to a Clearvo tax category wins. Skipped when
+     * `taxCategory` is supplied. A code with no mapping falls through to the
+     * product cache, name classification and the entity default. The result
+     * reports the decision as `classificationSource: 'CODE_MAP'` plus
+     * `classificationSystem` / `classificationMatchedCode`.
+     */
+    classificationCodes?: ClassificationCode[];
+    /**
      * Caller-forced rate band for this line — names a band only, never a raw
      * rate; the engine still resolves the actual percentage for the line's
      * own jurisdiction from that band. Highest-precedence input to rate-band
@@ -1008,7 +1062,18 @@ export interface TaxCalculateResponse {
      * AI_FALLBACK: no real classification signal existed — confidence
      * carries no real meaning and must never be presented as a percentage.
      */
-    classificationSource?: 'EXPLICIT' | 'STRIPE_CODE' | 'CACHED' | 'AI' | 'AI_FALLBACK' | null;
+    classificationSource?: 'EXPLICIT' | 'CODE_MAP' | 'CACHED' | 'AI' | 'AI_FALLBACK' | null;
+    /**
+     * Set only when `classificationSource` is 'CODE_MAP': which classification
+     * system (e.g. 'stripe', 'shopify', 'hs') decided this line.
+     */
+    classificationSystem?: string;
+    /**
+     * Set only when `classificationSource` is 'CODE_MAP': the code that
+     * actually matched. For hierarchical systems this can be an ancestor of
+     * the code sent (e.g. sent 'aa-1-13-5', matched 'aa-1-13').
+     */
+    classificationMatchedCode?: string;
     sourcingRationale?: {
       /** This line's resolved rate band (STANDARD/MIDDLE/REDUCED/SUPER_REDUCED/SPECIAL/ZERO/EXEMPT/etc). Always present when sourcingRationale is. */
       rateBand?: string;
@@ -1189,6 +1254,17 @@ export interface CountryRequirements {
 
 export type ProductTier = 'CONFIRMED' | 'STANDARD_MAPPING' | 'AI_CLASSIFIED' | 'UNCLASSIFIED';
 
+/**
+ * An external classification code. `system` is lowercase `[a-z0-9_]{1,30}`.
+ * Known systems: 'stripe' (Stripe product tax code, `txcd_*`), 'shopify'
+ * (Shopify product taxonomy category id, e.g. `aa-1-13`), 'hs' (customs
+ * commodity code).
+ */
+export interface ClassificationCode {
+  system: string;
+  code: string;
+}
+
 export interface Product {
   id: string;
   entityId: string;
@@ -1196,6 +1272,8 @@ export interface Product {
   sku?: string;
   description?: string;
   taxCategory?: string;
+  /** Classification codes stored on the product (max 5). */
+  classificationCodes?: ClassificationCode[];
   /** AI classification confidence (0-1). Only populated when tier is 'AI_CLASSIFIED'. */
   confidence?: number | null;
   /** Trust tier derived from the classification source — see ProductTier. */
@@ -1215,6 +1293,8 @@ export interface CreateProductInput {
   sku?: string;
   description?: string;
   taxCategory?: string;
+  /** External classification codes (max 5), e.g. [{ system: 'stripe', code: 'txcd_10000000' }]. */
+  classificationCodes?: ClassificationCode[];
   entityId?: string;
 }
 
@@ -1223,6 +1303,8 @@ export interface UpdateProductInput {
   sku?: string;
   description?: string;
   taxCategory?: string;
+  /** Replaces the product's classification codes (max 5). */
+  classificationCodes?: ClassificationCode[];
 }
 
 export interface ListProductsParams {

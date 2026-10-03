@@ -179,6 +179,25 @@ const CUSTOMER_REFERENCES_SCHEMA = {
   },
 } as const;
 
+const CLASSIFICATION_CODES_SCHEMA = {
+  type: 'array' as const,
+  maxItems: 5,
+  description:
+    'Optional external classification codes (max 5), tried in order — the first that maps to a Clearvo tax category wins. ' +
+    'Known systems: "stripe" (Stripe product tax code, e.g. txcd_10103001), "shopify" (Shopify product taxonomy category id, ' +
+    'e.g. aa-1-13; a deeper id inherits the nearest mapped ancestor), "hs" (customs commodity code). A code with no mapping ' +
+    'falls through to the product cache, name classification and the entity default. Skipped when taxCategory is given. ' +
+    'The result reports classificationSource "CODE_MAP" with classificationSystem and classificationMatchedCode.',
+  items: {
+    type: 'object' as const,
+    properties: {
+      system: { type: 'string', pattern: '^[a-z0-9_]{1,30}$', description: 'Classification system, lowercase [a-z0-9_], 1-30 chars (e.g. stripe, shopify, hs)' },
+      code: { type: 'string', description: 'The code within that system' },
+    },
+    required: ['system', 'code'],
+  },
+};
+
 const TOOLS = [
   {
     name: 'submit_invoice',
@@ -234,7 +253,8 @@ const TOOLS = [
       '(each with a resend fragment that includes correctsInvoiceId) plus error.evidence. Other codes: ' +
       'PEPPOL_SCHEMATRON_VALIDATION_FAILED / XRECHNUNG_SCHEMATRON_VALIDATION_FAILED (the generated document failed its own ' +
       'rule check), VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes ' +
-      'cannot go over Peppol for Germany — use ZUGFERD or XRECHNUNG). Self-billed German invoices cannot use PEPPOL: ' +
+      'cannot yet go over Peppol for Singapore, Japan or the UAE; Germany and the other Peppol countries support them, and a ' +
+      'credit note must reverse a previously accepted invoice in full — partial credit notes over Peppol are not supported yet). Self-billed German invoices cannot use PEPPOL: ' +
       '400 DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a ' +
       'stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). dryRun=true on a German PEPPOL invoice runs the real content ' +
       'rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
@@ -282,6 +302,18 @@ const TOOLS = [
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReportingAmounts below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReportingAmounts — supply one or the other, never both.' },
+        taxReportingAmounts: {
+          type: 'object',
+          description: 'Authoritative net/tax/gross totals in taxReportingCurrency, taken as-is rather than derived from a single exchange rate — use this instead of exchangeRate when your own books already have exact converted figures that must reconcile precisely (the tax amount especially often needs to match your records exactly). Mutually exclusive with exchangeRate.',
+          properties: {
+            netAmount: { type: 'number', description: 'Required.' },
+            taxAmount: { type: 'number', description: 'Required.' },
+            grossAmount: { type: 'number', description: 'Optional — computed as netAmount + taxAmount when omitted.' },
+          },
+          required: ['netAmount', 'taxAmount'],
+        },
         supplier: {
           type: 'object',
           description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef fails with 422 MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
@@ -371,7 +403,7 @@ const TOOLS = [
         },
         totalAmount: { type: 'number', description: 'Net total excluding tax' },
         taxAmount: { type: 'number', description: 'Total tax amount' },
-        documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note"' },
+        documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note". Over Peppol a credit note reverses a previously accepted invoice in full (no partial credit notes yet) and a debit note is sent as an invoice marked as a debit note; not yet available for Singapore, Japan or the UAE (422 CREDIT_NOTE_PEPPOL_UNSUPPORTED).' },
         clientTaxCode: {
           type: 'string',
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/taxRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
@@ -414,7 +446,7 @@ const TOOLS = [
         },
         correctsInvoiceId: {
           type: 'string',
-          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; submit under a fresh idempotencyKey alongside this field.',
+          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
         },
         dryRun: {
           type: 'boolean',
@@ -427,7 +459,17 @@ const TOOLS = [
         transactionDirection: {
           type: 'string',
           enum: ['sale', 'purchase'],
-          description: 'ES SII block 3. Defaults to "sale" (this entity\'s own outbound/issued document — LFE). "purchase" records a vendor\'s document on this entity\'s received side (LFR) — Spain SII only; every other live country\'s purchase-direction submission currently resolves to no reporting mandate at all. supplier is still required and is the VENDOR/counterparty for a purchase (the entity\'s own Spanish registration is applied automatically, same derivation as the sale-side supplier.taxId rule).',
+          description: 'ES SII block 3. Defaults to "sale" (this entity\'s own outbound/issued document — LFE). "purchase" records a vendor\'s document on this entity\'s received side (LFR) — Spain SII (received book) and France e-reporting (a purchase from a vendor not established in France is declared by you as the receiving party, at invoice level, in its own Received batch; send supplier.taxId and supplier.address.country, a missing one parks NEEDS_INFO); every other live country\'s purchase-direction submission currently resolves to no reporting mandate at all. supplier is still required and is the VENDOR/counterparty for a purchase (the entity\'s own Spanish registration is applied automatically, same derivation as the sale-side supplier.taxId rule).',
+        },
+                shipFrom: {
+          type: 'object',
+          description: 'France e-reporting, own-goods stock transfers only (a client tax code with movement "own_goods_movement"). Where the goods leave: for an outbound transfer (sale) the French origin; for an inbound transfer (purchase) the origin member state. Send one entry per movement, on the French leg only. Optional and ignored for every other transaction; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country.',
+          properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
+        },
+        shipTo: {
+          type: 'object',
+          description: 'France e-reporting, own-goods stock transfers only. Where the goods arrive. Needed only for an outbound transfer (shipFrom in France) to name the destination member state; ignored otherwise.',
+          properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         accountingDate: {
           type: 'string',
@@ -582,7 +624,7 @@ const TOOLS = [
       'yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then ' +
       'resubmit under a new idempotency key). ' +
       'NEEDS_INFO and SETUP_NEEDED are not dead ends: call submit_invoice again with correctsInvoiceId set to ' +
-      'this invoice\'s id (a fresh idempotencyKey too) once the underlying data or setup gap is fixed. ' +
+      'this invoice\'s id (under a different invoiceNumber) once the underlying data or setup gap is fixed. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
     inputSchema: {
@@ -606,6 +648,8 @@ const TOOLS = [
       'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
       'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing. ' +
+      'A line item can carry classificationCodes (e.g. [{system:"stripe",code:"txcd_..."}, {system:"shopify",code:"aa-1-13"}]) ' +
+      'to classify it from an external catalogue instead of by name; the response reports classificationSource "CODE_MAP". ' +
       'Each line item can also carry taxTreatmentOverride (force a rate band) or commodityCode (tariff-driven ' +
       'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain. ' +
       'Direction rule (transactionDirection, default "sale"): on a sale, the entity is the supplier and the ' +
@@ -687,6 +731,7 @@ const TOOLS = [
               productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
               productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
               taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
+              classificationCodes: CLASSIFICATION_CODES_SCHEMA,
               taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
               commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff — no separate scheme field needed, matching is jurisdiction-scoped by the line\'s own resolved country). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
               exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
@@ -1351,6 +1396,7 @@ const TOOLS = [
         sku: { type: 'string', description: 'Your internal SKU or product code' },
         description: { type: 'string', description: 'Optional longer description' },
         taxCategory: { type: 'string', description: 'Tax category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Use calculate_tax first to discover the right slug.' },
+        classificationCodes: CLASSIFICATION_CODES_SCHEMA,
         entityId: { type: 'string', description: 'Entity to create the product under. Omit to use the default entity for this API key.' },
       },
       required: ['name'],
@@ -1370,6 +1416,7 @@ const TOOLS = [
         sku: { type: 'string', description: 'Updated SKU' },
         description: { type: 'string', description: 'Updated description' },
         taxCategory: { type: 'string', description: 'Updated tax category slug' },
+        classificationCodes: CLASSIFICATION_CODES_SCHEMA,
       },
       required: ['productId'],
     },
@@ -3091,14 +3138,12 @@ const TOOLS = [
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
     case 'submit_invoice': {
-      // Derive a stable idempotency key from invoice identity fields
-      const idempotencyKey = createHash('sha256')
-        .update(`${args.invoiceNumber ?? ''}|${args.country ?? ''}|${args.issueDate ?? ''}`)
-        .digest('hex')
-        .slice(0, 64);
+      // No client-side key: POST /v1/send derives one from the document identity when
+      // x-idempotency-key is absent, and refuses a changed body for the same identity
+      // (409 IDEMPOTENT_BODY_MISMATCH) instead of silently replaying the old outcome.
       // Default documentType to 'invoice' if not provided
       const body = { documentType: 'invoice', ...args };
-      return callApi('POST', '/send', body, { 'x-idempotency-key': idempotencyKey });
+      return callApi('POST', '/send', body);
     }
 
     case 'amend_sii_report': {
