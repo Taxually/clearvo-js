@@ -157,6 +157,28 @@ const FR_SANDBOX_MASKS_ACTIVATION_NOTE =
 const FR_SANDBOX_NO_RECEIVING_NOTE =
   'Sandbox sends are accepted locally, but inbound receiving cannot be exercised in sandbox.';
 
+// Shared `references` input for create_customer / update_customer / upsert_customer_by_ref: the
+// customer's typed references (Leitweg-ID, Peppol participant ID, ...). Types come from
+// list_customer_reference_types; validation is server-side only.
+const CUSTOMER_REFERENCES_SCHEMA = {
+  type: ['array', 'null'],
+  description:
+    'The customer\'s typed references, e.g. [{ "type": "LEITWEG_ID", "value": "04011000-1234512345-06" }, ' +
+    '{ "type": "PEPPOL_PARTICIPANT_ID", "value": "0204:991-33333TEST-33" }]. Call list_customer_reference_types ' +
+    'for the supported types, their country applicability and examples. When supplied it REPLACES the customer\'s ' +
+    'whole list (null or [] clears it); omit it to leave the stored references untouched. A Peppol participant ID ' +
+    'supplied here is treated as confirmed immediately. One reference per type unless a type allows several; ' +
+    'tax/VAT numbers are not references (use taxIds). A bad item returns a per-item error with its index.',
+  items: {
+    type: 'object',
+    properties: {
+      type: { type: 'string', description: 'A reference type code, e.g. LEITWEG_ID or PEPPOL_PARTICIPANT_ID.' },
+      value: { type: 'string', description: 'The reference value in the type\'s own format (see its example).' },
+    },
+    required: ['type', 'value'],
+  },
+} as const;
+
 const CLASSIFICATION_CODES_SCHEMA = {
   type: 'array' as const,
   maxItems: 5,
@@ -222,7 +244,7 @@ const TOOLS = [
       'Germany over Peppol: set countrySpecific.de.invoiceFormat=PEPPOL (or store PEPPOL as the customer\'s or ' +
       'entity\'s default de invoice format) to send a Peppol BIS Billing 3.0 invoice to the buyer over the Peppol network. ' +
       'It needs the seller\'s confirmed Peppol ID (else 422 MISSING_SELLER_PEPPOL_ID), an EXPLICIT Peppol address for the ' +
-      'customer (customer.endpointSchemeId + customer.endpointId, or a confirmed peppolParticipantId on the stored ' +
+      'customer (customer.endpointSchemeId + customer.endpointId, or a confirmed Peppol participant ID reference on the stored ' +
       'customer — a German buyer\'s address is never derived from a VAT number), and a buyerReference or orderReference. ' +
       'The response carries documentFormat UBL_PEPPOL_BIS and delivery { channel: NETWORK, receiver, evidence }; status is ' +
       'PENDING (never ACCEPTED at generation) and becomes DELIVERED once the receiving access point confirms. ' +
@@ -236,6 +258,11 @@ const TOOLS = [
       '400 DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a ' +
       'stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). dryRun=true on a German PEPPOL invoice runs the real content ' +
       'rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
+      'For German XRechnung and Peppol invoices the customer\'s stored references fill in only when the request has no ' +
+      'explicit value: a stored confirmed Peppol participant ID supplies the customer Peppol address (when customer.endpointId + ' +
+      'endpointSchemeId are not sent) and a stored LEITWEG_ID supplies the Leitweg-ID (when neither countrySpecific.de.leitwegId nor ' +
+      'buyerReference is sent). Both customer and seller need an electronic address (BT-49 / BT-34); without one the call fails ' +
+      'before any XML is generated with MISSING_CUSTOMER_ELECTRONIC_ADDRESS or MISSING_SUPPLIER_ELECTRONIC_ADDRESS (ERROR severity). ' +
       'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
       'and — for any customer that is not a private individual — a customer street address plus (only ' +
       'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
@@ -506,7 +533,7 @@ const TOOLS = [
               description: 'Germany ZUGFeRD/XRechnung fields, plus per-invoice overrides of the invoice-content-field-registry company-law facts (each falls back to the matching de_* extra_fields value on the entity\'s own DE tax registration when omitted — see update_registration).',
               properties: {
                 invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD). PEPPOL delivers a Peppol BIS Billing 3.0 invoice over the Peppol network (DE-NRS).' },
-                leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference when omitted. Missing both on a resolved-XRechnung invoice fails 422 MISSING_LEITWEG_ID.' },
+                leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference, then to the customer\'s stored LEITWEG_ID reference (see create_customer references), when omitted. Missing all three on a resolved-XRechnung invoice fails 422 MISSING_LEITWEG_ID. The Leitweg-ID is only used as the customer electronic address if it passes check-digit validation.' },
                 legalForm: { type: 'string', description: 'DE legal-form select vocabulary (e.g. GMBH, UG, AG, SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER, FOREIGN_BRANCH, OTHER) — case-sensitive. Gates whether the register-identity and managing-directors disclosure tiers below apply at all.' },
                 handelsregisternummer: { type: 'string', description: 'BT-30. HGB § 37a commercial-register number (e.g. "HRB 12345"). Required once legalForm is a Handelsregister-registered form — missing this, registergericht, or registeredSeat never blocks the send, it returns a non-terminal errorCode MISSING_DE_COMPANY_REGISTER_DETAILS (WARNING severity).' },
                 registergericht: { type: 'string', description: 'HGB § 37a register court (e.g. "Amtsgericht München") — see handelsregisternummer above for the shared MISSING_DE_COMPANY_REGISTER_DETAILS gate.' },
@@ -1920,9 +1947,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_customer_reference_types',
+    description:
+      'List the kinds of reference a customer can carry beyond a tax number, e.g. a German Leitweg-ID or a Peppol participant ID. ' +
+      'Returns, per type: code, label, description, helpText, an example value, the countries/mandates it applies to (null = any), ' +
+      'allowMultiple, requiresConfirmation, easSchemeCode (the Peppol scheme for a plain value; null when the value carries its own "scheme:value") ' +
+      'and a validation hint (kind NONE | PATTERN | VALIDATOR, plus the regular expression when PATTERN). ' +
+      'Pass country (ISO 3166-1 alpha-2, e.g. "DE") to see only the types that apply there. This is the registry only; it does not store customer values. ' +
+      'Set values with the references field of create_customer, update_customer or upsert_customer_by_ref.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code (e.g. "DE"). Omit to list every type.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'list_customers',
     description:
-      'List an entity\'s customer master data (name, tax ID, address). ' +
+      'List an entity\'s customer master data (name, tax ID, address, and typed references such as a Leitweg-ID or ' +
+      'Peppol participant ID in each customer\'s `references` array). ' +
       'Every successfully-issued invoice also auto-captures/refreshes a customer record from its customer details, ' +
       'so this list fills in over time even without calling create_customer directly. ' +
       'Reference a customer via customer.customerRef on submit_invoice instead of resending full customer details every time.',
@@ -1965,7 +2010,7 @@ const TOOLS = [
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
-        peppolParticipantId: { type: 'string', description: '"schemeId:value" form, e.g. "0106:12345678". Supplying it is treated as confirmed immediately.' },
+        references: CUSTOMER_REFERENCES_SCHEMA,
         countrySpecific: {
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country.',
@@ -2019,7 +2064,7 @@ const TOOLS = [
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
-        peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Setting it is treated as confirmed immediately; pass null to clear it.' },
+        references: CUSTOMER_REFERENCES_SCHEMA,
         countrySpecific: {
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country.',
@@ -2053,8 +2098,8 @@ const TOOLS = [
       'customer" runs repeatedly, not a one-time create. Unlike create_customer (which errors on a repeat ' +
       'customerRef), this always succeeds: creates on first call, REPLACES on every later call with the same ' +
       'customerRef — an omitted optional field clears whatever was previously stored. The one exception is ' +
-      'peppolParticipantId: omitted, it is left untouched, so a plain field sync doesn\'t wipe an identity ' +
-      'confirmed separately.',
+      'references: omitted, the stored list is left untouched, so a plain field sync doesn\'t wipe an identity ' +
+      'confirmed separately (pass references to replace the whole list, null or [] to clear it).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -2077,7 +2122,7 @@ const TOOLS = [
         city: { type: 'string' },
         region: { type: 'string' },
         postalCode: { type: 'string' },
-        peppolParticipantId: { type: 'string', description: '"schemeId:value" form. Supplying it is treated as confirmed immediately. Omit to leave an existing confirmed value untouched.' },
+        references: CUSTOMER_REFERENCES_SCHEMA,
         countrySpecific: {
           type: 'object',
           description: 'Country-specific master data, only meaningful for the named country. Omit a sub-field to leave it untouched, not clear it.',
@@ -3424,6 +3469,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'run_reporting_batch_sweep': {
       const { today, madridToday } = args as { today?: string; madridToday?: string };
       return callApi('POST', '/test-helpers/reporting-batches/run-sweep', { today, madridToday });
+    }
+
+    case 'list_customer_reference_types': {
+      const { entityId, country } = args as { entityId?: string; country?: string };
+      const q = country ? `?country=${encodeURIComponent(country)}` : '';
+      return callApi('GET', `/customer-reference-types${q}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'list_customers': {

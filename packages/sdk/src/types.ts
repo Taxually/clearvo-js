@@ -487,7 +487,17 @@ export interface SubmitInvoiceInput {
    *   `DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED` when requested explicitly, 422
    *   `DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED` when a stored default is PEPPOL.
    * - `de.leitwegId` — BT-10 German public-sector routing ID (XRechnung
-   *   only); falls back to the top-level `buyerReference` when omitted.
+   *   only); falls back to the top-level `buyerReference`, then to the
+   *   customer's stored `LEITWEG_ID` reference, when omitted. The Leitweg-ID is
+   *   only used as the customer electronic address if it passes check-digit
+   *   validation. A stored, confirmed `PEPPOL_PARTICIPANT_ID` reference
+   *   likewise supplies the customer's Peppol address when the request has no
+   *   explicit `endpointId` + `endpointSchemeId`. German XRechnung and Peppol
+   *   invoices need a customer and a seller electronic address; without one the
+   *   call fails with ERROR rules `MISSING_CUSTOMER_ELECTRONIC_ADDRESS` /
+   *   `MISSING_SUPPLIER_ELECTRONIC_ADDRESS` before any XML is generated. The
+   *   SDK has no typed customer methods; customer `references` are managed
+   *   through the REST API and MCP tools.
    * - `de.legalForm` — per-invoice override of the entity's own legal form
    *   (DE legal-form select vocabulary, e.g. GMBH, UG, AG, SE, KGAA, EG,
    *   GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER,
