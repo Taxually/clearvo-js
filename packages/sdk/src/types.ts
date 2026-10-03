@@ -480,8 +480,8 @@ export interface SubmitInvoiceInput {
    *   unreachable buyer fails 422 `PEPPOL_CUSTOMER_UNREACHABLE`
    *   ({@link PeppolCustomerUnreachableResponse}). Other errors: 422
    *   `MISSING_SELLER_PEPPOL_ID`, `CREDIT_NOTE_PEPPOL_UNSUPPORTED` (credit
-   *   and debit notes cannot go over Peppol for Germany; use ZUGFERD or
-   *   XRECHNUNG), `PEPPOL_SCHEMATRON_VALIDATION_FAILED`,
+   *   and debit notes cannot yet go over Peppol for Singapore, Japan or the
+   *   UAE; Germany supports them in all three formats), `PEPPOL_SCHEMATRON_VALIDATION_FAILED`,
    *   `XRECHNUNG_SCHEMATRON_VALIDATION_FAILED`, `VALIDATION_UNAVAILABLE`.
    *   Self-billed German invoices cannot use PEPPOL: 400
    *   `DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED` when requested explicitly, 422
