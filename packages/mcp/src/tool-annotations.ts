@@ -43,7 +43,7 @@ const READ_ONLY = new Set<string>([
   'get_rules_engine_schema', 'list_rules', 'get_rule', 'list_rule_versions', 'get_rules_trace',
   'list_platform_rule_changes', 'list_rule_property_definitions', 'list_rule_templates', 'get_rule_template',
   'list_field_mappings', 'list_rules_engine_datasets', 'get_rules_engine_dataset', 'list_rules_engine_dataset_rows',
-  'query_data', 'simulate_rule',
+  'query_data', 'simulate_rule', 'quote_duties',
 ]);
 
 const DESTRUCTIVE = new Set<string>([

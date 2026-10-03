@@ -9,6 +9,8 @@ import type {
   ListInvoicesParams,
   ListInvoicesResponse,
   TaxCalculateRequest,
+  QuoteDutiesInput,
+  DutiesResult,
   TaxCalculateResponse,
   TaxNumberValidateResponse,
   TaxNumberBatchItem,
@@ -244,6 +246,17 @@ export class ClearvoClient {
 
   calculateTax(input: TaxCalculateRequest): Promise<TaxCalculateResponse> {
     return this.request('POST', '/tax/calculate', input);
+  }
+
+  /**
+   * Estimate import duty, import VAT/GST and customs fees for a cross-border
+   * cart without recording a calculation (POST /v1/duties/quote). Stateless:
+   * nothing is stored and no idempotency key is read. A duty failure is a 200
+   * with `duties.status: 'degraded'`, never a thrown error. Nothing in the
+   * result is tax: it is never added to `totalTax`/`totalAmountWithTax`.
+   */
+  quoteDuties(input: QuoteDutiesInput): Promise<DutiesResult> {
+    return this.request('POST', '/duties/quote', input);
   }
 
   // ── Tax Number Validation ─────────────────────────────────────────────────────

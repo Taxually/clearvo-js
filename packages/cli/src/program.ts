@@ -338,6 +338,23 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo duties quote <file> ──────────────────────────────────────────────
+  // POST /v1/duties/quote: estimated import duty, import VAT/GST and customs
+  // fees for a cross-border cart. The JSON file is the same body as `clearvo
+  // calculate`; commit, credit-note fields and transactionDirection 'purchase'
+  // are rejected by the API. Stateless: nothing is recorded.
+  const duties = program.command('duties').description('Estimated import duty, import VAT/GST and customs fees for cross-border carts');
+  duties
+    .command('quote <file>')
+    .description('Estimate import duties and landed cost for a cart from a JSON file (the same body as `clearvo calculate`, without commit). Nothing is recorded, and nothing in the result is tax: it is never added to totalTax/totalAmountWithTax. summary.importChargesAtCheckout is the one amount a checkout may add.')
+    .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
+      const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const result = await api('POST', '/duties/quote', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo validate-tin ─────────────────────────────────────────────────────
   program
     .command('validate-tin')
