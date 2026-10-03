@@ -2176,7 +2176,7 @@ export interface ClientTaxCode {
   rate: number | null;
   description: string | null;
   /** Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code. Never derived or auto-generated. */
-  exemptionReasonText: string | null;
+  invoiceReferenceText: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2206,7 +2206,7 @@ export interface CreateClientTaxCodeInput {
   exemptionReasonCode?: string;
   description?: string;
   /** Only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code. Never derived or auto-generated. */
-  exemptionReasonText?: string;
+  invoiceReferenceText?: string;
   /** Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;
 }

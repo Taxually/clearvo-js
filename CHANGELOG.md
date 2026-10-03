@@ -2,6 +2,10 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
+
+**BREAKING**, no aliases: client tax code field `exemptionReasonText` is now `invoiceReferenceText` (SDK `ClientTaxCode`/request types, MCP `create_client_tax_code`/`update_client_tax_code`, CLI `tax-codes create|update --invoice-reference-text`, replacing `--exemption-reason-text`). Tax-calculation request `reportingCurrency` is now `taxReportingCurrency`.
+
 ## Unreleased — publish only AFTER the backend customer-references PRs are deployed
 
 Backend: Taxually-Einvoicing customer references (typed per-customer reference values, folding in the Peppol participant ID; `GET /v1/customer-reference-types`). Until it is live the API rejects `references` and still expects `peppolParticipantId`. Not released.

@@ -1004,7 +1004,7 @@ export function createProgram(): Command {
     movement?: string; taxability?: string; customerType?: string; supplyType?: string;
     rateBand?: string; reverseCharge?: boolean; useTaxSelfAssessed?: boolean;
     filingTag?: string; direction?: string; recoverabilityType?: string; recoverablePercentage?: string;
-    exemptionReasonCode?: string; description?: string; exemptionReasonText?: string;
+    exemptionReasonCode?: string; description?: string; invoiceReferenceText?: string;
   }): Record<string, unknown> {
     const body: Record<string, unknown> = {};
     if (opts.code)        body.code = opts.code;
@@ -1023,7 +1023,7 @@ export function createProgram(): Command {
     if (opts.recoverablePercentage) body.recoverablePercentage = Number(opts.recoverablePercentage);
     if (opts.exemptionReasonCode) body.exemptionReasonCode = opts.exemptionReasonCode;
     if (opts.description) body.description = opts.description;
-    if (opts.exemptionReasonText) body.exemptionReasonText = opts.exemptionReasonText;
+    if (opts.invoiceReferenceText) body.invoiceReferenceText = opts.invoiceReferenceText;
     return body;
   }
   
@@ -1056,7 +1056,7 @@ export function createProgram(): Command {
     .option('--recoverable-percentage <percent>', 'Required (and only meaningful) when --recoverability-type=restricted — strictly between 0 and 100 (0 and 100 are already blocked/full)')
     .option('--exemption-reason-code <code>', 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum, max 30 characters')
     .option('--description <text>', 'Optional longer description')
-    .option('--exemption-reason-text <text>', 'Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code, never derived or auto-generated')
+    .option('--invoice-reference-text <text>', 'Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code, never derived or auto-generated')
     .option('--entity <entityId>', 'Entity to create the client tax code under (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
@@ -1064,7 +1064,7 @@ export function createProgram(): Command {
       customerType?: string; supplyType: string; rateBand?: string; reverseCharge?: boolean;
       useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string;
       recoverabilityType?: string; recoverablePercentage?: string; exemptionReasonCode?: string;
-      description?: string; exemptionReasonText?: string; entity?: string; pretty?: boolean;
+      description?: string; invoiceReferenceText?: string; entity?: string; pretty?: boolean;
     }) => {
       const body = taxCodeMutationBody(opts);
       const result = await api('POST', '/tax/client-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
@@ -1090,7 +1090,7 @@ export function createProgram(): Command {
     .option('--recoverable-percentage <percent>', 'See `tax-codes create`')
     .option('--exemption-reason-code <code>', 'Updated free-text exemption reason code — see `tax-codes create`')
     .option('--description <text>', 'Updated description')
-    .option('--exemption-reason-text <text>', 'Updated free-text exemption wording — see `tax-codes create`')
+    .option('--invoice-reference-text <text>', 'Updated free-text exemption wording — see `tax-codes create`')
     .option('--entity <entityId>', 'Entity the client tax code belongs to (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
@@ -1098,7 +1098,7 @@ export function createProgram(): Command {
       customerType?: string; supplyType?: string; rateBand?: string; reverseCharge?: boolean;
       useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string;
       recoverabilityType?: string; recoverablePercentage?: string; exemptionReasonCode?: string;
-      description?: string; exemptionReasonText?: string; entity?: string; pretty?: boolean;
+      description?: string; invoiceReferenceText?: string; entity?: string; pretty?: boolean;
     }) => {
       const body = taxCodeMutationBody(opts);
       const result = await api('PATCH', `/tax/client-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
