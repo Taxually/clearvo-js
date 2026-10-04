@@ -1875,7 +1875,7 @@ const TOOLS = [
       properties: {
         committed: { type: 'boolean', description: 'true = committed calculations only, false = commit=false quotes only' },
         differsFromQuote: { type: 'boolean', description: 'true = committed calculations whose tax-relevant result differs from the linked quote' },
-        outcome: { type: 'string', enum: ['ok', 'degraded', 'rejected', 'replayed'], description: 'Filter by outcome' },
+        outcome: { type: 'string', enum: ['ok', 'degraded', 'rejected', 'error', 'replayed'], description: 'Filter by outcome' },
         minStatus: { type: 'number', description: 'Only rows with an HTTP status >= this (e.g. 400 for rejections)' },
         endpoint: { type: 'string', description: 'tax_calculate, tax_calculate_partner, csv_import, integration or dashboard' },
         keyId: { type: 'string', description: 'Filter by API key id' },

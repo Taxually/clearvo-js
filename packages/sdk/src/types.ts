@@ -1749,7 +1749,7 @@ export interface ListTaxCalculationsResponse {
 
 // ── Calculation request ledger ───────────────────────────────────────────────
 
-export type CalculationLedgerOutcome = 'ok' | 'degraded' | 'rejected' | 'replayed';
+export type CalculationLedgerOutcome = 'ok' | 'degraded' | 'rejected' | 'error' | 'replayed';
 
 export interface CalculationLedgerQuoteLink {
   id: string;
