@@ -23,6 +23,46 @@ Backend: Taxually-Einvoicing customer references (typed per-customer reference v
 
 **2026-10-02 release: `@clearvo/sdk` 0.4.0, `@clearvo/mcp` 0.5.0, `@clearvo/cli` 0.4.0** (previous npm versions: 0.2.0, 0.3.0, 0.2.0). One combined release of every block below, each of which was gated on a backend change; all of those backend changes are deployed to production. The release includes breaking changes (classification codes replace `stripeTaxCode`, the `lines[]` tax-code and `vatRate`/`vatAmount` renames): read those blocks before upgrading.
 
+## Customs duties: estimated import duty, import VAT/GST and customs fees
+
+Backend branch: Taxually-Einvoicing `claude/duties-engine`. Until it is live, `POST /v1/duties/quote` returns 404, `duties`, `insurance` and the new line fields are ignored or rejected, and `dutiesEnabled` is not a known setting. Everything returned is an estimate and none of it is tax: it is never added to `totalTax`/`totalAmountWithTax`; `summary.importChargesAtCheckout` is the one amount a checkout may add, and `summary.totalAmountDue` (present only alongside it) is `totalAmountWithTax` plus that amount.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- New `quoteDuties(input: QuoteDutiesInput): Promise<DutiesResult>` (POST `/duties/quote`): the `calculateTax()` body without `commit`, `idempotencyKey`, `documentStage` or `transactionDirection`. Stateless; a duty failure is a normal result with `duties.status: 'degraded'`, never a thrown error.
+- New types `DutiesResult`, `DutiesRequest`, `DutiesBlock`, `DutiesSummary`, `DutyConsignment` (`QuotedDutyConsignment | DegradedDutyConsignment | NotApplicableDutyConsignment`, discriminated on `status`), `LineDuty`, `DutyMeasure`, `DutyRateExpression` (closed union: `ad_valorem_pct`, `top_up_to_pct`, `flat`, `specific`, `compound`, `alternative`, `min_max`), `DutyNotEvaluated`, and the closed enums `DutyEstimateReason`, `DutyPrecision`, `DutyCodeScheme`, `DutyCodeSource`, `DutyOriginSource`, `DutyDegradedReason`, `DutyNotApplicableReason`, `DutyCollectionReason`.
+- `TaxCalculateRequest`: added `importerOfRecord`, `insurance`, `duties`, and a richer `shipFrom` (`TaxCalcShipFrom`: `postalCode`, `customsStatus`, ...); `lineItems[]` gain `commodityCodeScheme`, `countryOfOrigin`, `weight` and a per-line `shipFrom`.
+- `TaxCalculateResponse`: added `duties`, `consignments`, `lineItems[].duty` and the duty fields of `summary` (`totalDuty`, `totalImportTax`, `totalImportFees`, `totalLandedCost`, `sellerBorneImportCosts`, `importChargesAtCheckout`, `totalAmountDue`). The IOSS `customsDuty` is the same EUR 3 that appears in the consignment `duty` (source `fee_rule`): never add the two together.
+
+### @clearvo/mcp (additive)
+
+- New `quote_duties` tool (read-only annotations), derived from `calculate_tax`'s input schema.
+- `calculate_tax` takes `duties`, `insurance`, `shipFrom` (with `customsStatus`), `incoterms`, `importerOfRecord` and per-line `commodityCodeScheme`, `countryOfOrigin`, `weight`; its description now explains duties and no longer limits duty estimates to IOSS.
+- `update_tax_settings` takes `dutiesEnabled`, `dutyRatePolicyForHs6` and `defaultCountryOfOrigin`.
+
+### @clearvo/cli (additive)
+
+- New `clearvo duties quote <file>` (`--entity`, `--pretty`): the same JSON file as `clearvo calculate`, without `commit`.
+
+## Duties estimate and import settlement (Unreleased — publish only AFTER the backend PR is deployed)
+
+Backend branch: Taxually-Einvoicing `claude/duties-estimate-settlement` (migration V20261005030000, new table `tax_calculation_import_settlements`). Until it is live, `POST /v1/duties/estimate`, `POST` and `GET /v1/tax/calculate/{id}/import-settlement` and `GET /v1/duties/settlement-variance` return 404. This branch also carries the customs-duties block above (`quoteDuties`, `quote_duties`, `duties quote`), which was not yet pushed. Everything an estimate returns is an estimate and none of it is tax; a settlement stores facts only and never changes a calculation or the entity's tax obligations.
+
+### @clearvo/sdk (additive, non-breaking)
+
+- New `estimateDuties(input: EstimateDutiesInput): Promise<DutiesEstimateResult>` (POST `/duties/estimate`): one product priced across up to 20 destinations. No commit, no calculation id, a read-only key is enough. Each destination has a `status` (`quoted`, `degraded`, `not_applicable`) and the same `duties`, `consignments`, `duty` and `summary` blocks as `quoteDuties()`; one bad destination never fails the call. The `product` block carries the resolved commodity code, scheme, `codeSource` and precision.
+- New `recordImportSettlement(calculationId, input, entityId?)` (POST `/tax/calculate/{id}/import-settlement`): the customs entry's actual duty, import tax and fees for a committed calculation with a quoted duties block. Append-only, idempotent on calculation + consignment + `entryNumber` (`replayed: true` on a replay, 409 `settlement_conflict` for different actuals), `actual.currency` must equal the calculation's currency (422 `currency_mismatch`). Returns estimated vs actual, variance amount and percent per component and `withinEstimate`.
+- New `getImportSettlements(calculationId, entityId?)` and `getImportSettlementVariance({ from, to, destination, precision }, entityId?)` (GET `/duties/settlement-variance`: count, mean and median variance percent by destination territory and precision tier).
+- New types `EstimateDutiesInput`, `DutiesEstimateProductInput`, `DutiesEstimateDestinationInput`, `DutiesEstimateResult`, `DutiesEstimateDestination`, `DutiesEstimateProduct`, `ImportSettlementInput`, `ImportSettlement`, `ImportSettlementResult`, `ImportSettlementList`, `ImportSettlementVariance`, `ImportSettlementVarianceParams`.
+
+### @clearvo/mcp (additive)
+
+- New tools `estimate_duties` (read-only annotations), `record_import_settlement` (write, idempotent, not destructive) and `get_import_settlement` (read-only).
+
+### @clearvo/cli (additive)
+
+- New `clearvo duties estimate <file>`, `clearvo duties settle <calculationId> <file>`, `clearvo duties settlements <calculationId>` and `clearvo duties variance [--from --to --destination --precision]`.
+
 ## France e-reporting alignment: optional idempotency key on POST /v1/send
 
 Until the backend is live, `x-idempotency-key` is still required and a request without it returns 400.

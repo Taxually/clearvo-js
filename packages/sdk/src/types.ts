@@ -826,7 +826,27 @@ export interface TaxCalculateRequest {
    * `SUPPLIER_TAX_ID_MISMATCH` on a mismatch).
    */
   supplier?: TaxCalcPartyInput;
-  shipFrom?: { country: string };
+  /**
+   * Where the goods are dispatched from. With duties on, a dispatch place in a
+   * different customs territory from the destination makes a customs crossing;
+   * a line-level `shipFrom` overrides it for that line. `customsStatus:
+   * 'bonded'` marks stock held under customs control.
+   */
+  shipFrom?: TaxCalcShipFrom;
+  /**
+   * Explicit importer of record on a customs-crossing shipment; wins over
+   * `incoterms`. With duties on it decides who bears the import charges.
+   */
+  importerOfRecord?: 'SELLER' | 'BUYER';
+  /** Consignment insurance, a customs-value component under CIF. Read only when duties are requested. */
+  insurance?: { amount: number; currency?: string };
+  /**
+   * Estimated import duty, import VAT/GST and customs fees for a cross-border
+   * consignment. Never included in `totalTax`/`totalAmountWithTax`; see
+   * `summary.importChargesAtCheckout` for the one amount a checkout may add.
+   * `include` overrides the account `dutiesEnabled` setting either way.
+   */
+  duties?: DutiesRequest;
   /**
    * Incoterms 2020 rule for the shipment. Does not gate IOSS eligibility
    * (applies whenever ship-from is non-EU, destination is EU, and value is
@@ -906,14 +926,27 @@ export interface TaxCalculateRequest {
     taxTreatmentOverride?: 'STANDARD' | 'MIDDLE' | 'REDUCED' | 'SUPER_REDUCED' | 'SPECIAL' | 'EXEMPT' | 'ZERO';
     /**
      * Optional tariff/customs classification code for this line (HS, CN, or
-     * UK Trade Tariff — no separate scheme field needed; matching is
-     * jurisdiction-scoped by the line's own resolved country). Looked up
+     * UK Trade Tariff). For rate-band lookup, matching is
+     * jurisdiction-scoped by the line's own resolved country. With duties on, this is the code the duty is priced at (see `commodityCodeScheme`). Looked up
      * hierarchy-aware (own digit precision, then progressively shorter
      * prefixes). Consulted only when taxTreatmentOverride is absent — a
      * total miss re-enters the ordinary taxCategory/classification cascade
      * exactly as if this field had never been supplied.
      */
     commodityCode?: string;
+    /**
+     * Scheme of `commodityCode`, read only when duties are requested. A
+     * national code is exact only in its own territory; anywhere else its
+     * first six digits are used. Omitted: inferred from the digit count and
+     * the destination (`schemeInferred` is then true on the duty block).
+     */
+    commodityCodeScheme?: DutyCodeScheme;
+    /** ISO 3166-1 alpha-2 country the goods were made in, read only when duties are requested. Never inferred from `shipFrom`. */
+    countryOfOrigin?: string;
+    /** Weight of ONE unit, for per-kilogram duties; the line weight is value x quantity. Read only when duties are requested. */
+    weight?: { value: number; unit: 'kg' | 'g' | 'lb' | 'oz' };
+    /** Per-line dispatch address; overrides the transaction `shipFrom` for this line (a second warehouse is a second consignment). */
+    shipFrom?: TaxCalcShipFrom;
     amountIncludesTax?: boolean;
     /**
      * When true, the customer claims exemption for this line item with no
@@ -1039,9 +1072,20 @@ export interface TaxCalculateResponse {
     totalAmount: number;
     totalTax: number;
     totalAmountWithTax: number;
-  };
+  } & Partial<DutiesSummary>;
+  /**
+   * Present when duties were requested (`duties.include`, or the account
+   * `dutiesEnabled` setting), or as status `'disabled'` when the cart carries
+   * duty inputs while duties are off. A duty failure sets `duties.status` to
+   * `'degraded'` here and never sets the calculation's own `degraded`.
+   */
+  duties?: DutiesBlock;
+  /** One entry per customs border crossing in the cart. Estimates, never tax. */
+  consignments?: DutyConsignment[];
   lineItems: Array<{
     id: string;
+    /** Estimated import duty for this line; present only when duties were quoted for it. Never part of the line's tax. */
+    duty?: LineDuty;
     taxCode: string;
     rate: number;
     rateBand: string;
@@ -3473,4 +3517,437 @@ export class ClearvoError extends Error {
     super(message);
     this.name = 'ClearvoError';
   }
+}
+
+// ── Customs duties (POST /v1/duties/quote and the duties block on calculate) ────
+
+/** Scheme of a customs commodity code. */
+export type DutyCodeScheme = 'HS6' | 'CN8' | 'TARIC10' | 'UK10' | 'HTS10';
+
+/** A dispatch address on a calculation. */
+export interface TaxCalcShipFrom {
+  country: string;
+  region?: string;
+  postalCode?: string;
+  line1?: string;
+  line2?: string;
+  city?: string;
+  /** `'bonded'`: goods held under customs control, so leaving them is a customs crossing even within one territory. Default `'free_circulation'`. */
+  customsStatus?: 'free_circulation' | 'bonded';
+}
+
+/** Request-side duty controls (`TaxCalculateRequest.duties`). */
+export interface DutiesRequest {
+  /** Quote duties on this call; false suppresses them even when `dutiesEnabled` is on. */
+  include: boolean;
+  /** Ask for the estimated import charges to be collected at checkout. Requires `include: true`. */
+  collectDeposit?: boolean;
+  /** ISO 3166-1 alpha-2 origin for lines that name none. */
+  defaultCountryOfOrigin?: string;
+  /** How a six-digit code spanning several national tariff lines is resolved. A collected deposit always uses the highest rate. */
+  ratePolicyForHs6?: 'modal' | 'highest';
+}
+
+/**
+ * How a duty measure is charged: a closed union discriminated by `type`.
+ * Ad valorem values are percent (16.5 = 16.5%). Nested nodes go at most six
+ * levels deep. The root node may carry `not_if_measure_type_in`.
+ */
+export type DutyRateExpression = (
+  | { type: 'ad_valorem_pct'; value: number }
+  | { type: 'top_up_to_pct'; value: number }
+  | { type: 'flat'; amount: number; currency: string }
+  | { type: 'specific'; amount: number; currency: string; per: string }
+  | { type: 'compound'; parts: DutyRateExpression[] }
+  | { type: 'alternative'; mode: 'greater_of' | 'lesser_of'; options: DutyRateExpression[] }
+  | { type: 'min_max'; base: DutyRateExpression; min?: DutyRateExpression; max?: DutyRateExpression }
+) & { not_if_measure_type_in?: string[] };
+
+/** Why `estimate` is true. Empty if and only if `estimate` is false. */
+export type DutyEstimateReason =
+  | 'precision_below_tariff_line' | 'origin_unknown' | 'origin_measures_apply' | 'fx_static' | 'measure_not_in_force'
+  | 'preference_not_considered' | 'entry_type_assumed' | 'regime_threshold_near_boundary' | 'tax_treatment_mismatch'
+  | 'quantity_missing' | 'b2c_personal_value_factor' | 'import_tax_rate_missing' | 'delegated_fee_missing';
+
+/** How exactly a line was priced. The last three are never collected from a buyer. */
+export type DutyPrecision =
+  | 'TARIFF_LINE' | 'HS6_EXACT' | 'HS6_AMBIGUOUS' | 'PLATFORM_CODE' | 'CATEGORY_PROXY' | 'CHAPTER_PROXY' | 'UNRESOLVED';
+
+export type DutyCodeSource = 'request' | 'catalogue' | 'platform_code' | 'category_proxy' | 'chapter_proxy' | 'none';
+export type DutyOriginSource = 'request' | 'catalogue' | 'entity_default' | 'unknown';
+export type DutyDegradedReason = 'fx_rate_missing' | 'territory_content_missing' | 'content_unavailable' | 'internal_error';
+export type DutyNotApplicableReason = 'no_customs_crossing' | 'ship_from_unknown';
+export type DutyCollectionReason =
+  | 'collected' | 'not_requested' | 'precision_too_low' | 'seller_responsible' | 'importer_of_record_unresolved'
+  | 'regime_vat_at_checkout' | 'measures_not_evaluated';
+
+/** Outcome of the duty calculation. */
+export interface DutiesBlock {
+  status: 'quoted' | 'not_applicable' | 'degraded' | 'disabled';
+  /** Present when `status` is not `'quoted'`. */
+  reason?: DutyNotApplicableReason | DutyDegradedReason | 'no_goods_lines' | 'credit_note' | 'classification_unresolved' | 'not_enabled';
+  /** The duty content version the quote was computed from; omitted when degraded or not applicable. */
+  contentVersion?: number;
+  /** Present when any amount used the static FX table, which is not live. */
+  fx?: { source: 'static' };
+}
+
+/** A measure family that exists but could not be evaluated; it blocks collection. */
+export interface DutyNotEvaluated {
+  familyCode: string;
+  measureType: string;
+  reason: 'not_in_force' | 'origin_unknown' | 'invalid_rate_expression';
+  legalStatus?: string;
+}
+
+/** One duty measure applied to a line. `type` is content-driven and open (MFN, SECTION_301_LIST_4A, ...). */
+export interface DutyMeasure {
+  type: string;
+  /** Decimal fraction (0.165 = 16.5%) for a pure ad valorem expression; null otherwise. */
+  rate: number | null;
+  rateExpression: DutyRateExpression;
+  /** In the transaction currency, rounded to its minor unit. */
+  amount: number;
+  legalBasis: string | null;
+  effectiveFrom: string;
+}
+
+/** Estimated duty for one line. Never part of the line's tax. */
+export interface LineDuty {
+  consignmentId: string;
+  commodityCode: string | null;
+  scheme: DutyCodeScheme | null;
+  /** Present (true) only when the scheme was inferred because the request omitted `commodityCodeScheme`. */
+  schemeInferred?: true;
+  codeSource: DutyCodeSource;
+  /** Null when a flat or zero regime set the duty. */
+  precision: DutyPrecision | null;
+  origin: string | null;
+  originSource: DutyOriginSource;
+  customsValue: number;
+  /** Sum of `measures[].amount`, or the regime's allocated flat amount. */
+  amount: number;
+  measures: DutyMeasure[];
+  notEvaluated: DutyNotEvaluated[];
+  policyApplied?: 'modal' | 'highest';
+  rateRange?: { min: number; max: number };
+  /** Inputs that would tighten the estimate, e.g. weight or quantity for a per-kilogram duty. */
+  missingInputs: string[];
+  estimateReasons: DutyEstimateReason[];
+}
+
+/** A priced consignment. Everything here is an estimate and none of it is tax. */
+export interface QuotedDutyConsignment {
+  id: string;
+  lineIds: string[];
+  status: 'quoted';
+  dispatchTerritory: string | null;
+  destinationTerritory: string | null;
+  customsStatus: 'free_circulation' | 'bonded';
+  valuation: { basis: 'FOB' | 'CIF'; goods: number; freight: number; insurance: number; customsValue: number; currency: string } | null;
+  /** The low-value regime that applied (EU IOSS or Special Arrangements up to EUR 150, UK GBP 135, ...), when one did. */
+  regime: {
+    code: string;
+    name: string;
+    basis: 'intrinsic_value' | 'consignment_value';
+    thresholdAmount: number;
+    thresholdCurrency: string;
+    comparedValue: number;
+    nearThreshold: boolean;
+    consequence: { vat: 'checkout' | 'border' | 'none'; duty: 'tariff' | 'zero' | 'flat_per_item' | 'flat_per_order' };
+    feeCode: string | null;
+    taxTreatmentMismatch: boolean;
+    mismatchReason?: 'shipping_in_tax_threshold' | 'fx_nominal_in_tax_threshold' | 'seller_not_ioss_registered';
+    notes: string[];
+  } | null;
+  duty: { total: number; source: 'tariff' | 'regime' | 'fee_rule'; feeCode?: string; estimate: boolean };
+  /** Import VAT/GST estimate. Under IOSS the VAT is already in `totalTax`, so `amount` is 0 with `collection: 'checkout'`. */
+  importTax: {
+    label: string | null;
+    collection: 'checkout' | 'border' | 'uncollected' | 'none';
+    base: number;
+    rate: number | null;
+    amount: number;
+    baseIncludes: string[];
+    sellerRegistrationRequired: boolean;
+    notes: string[];
+  } | null;
+  /** Customs-authority fees (US Merchandise Processing Fee, ...). A seller cost, never part of the buyer's amount due. */
+  fees: Array<{
+    code: string;
+    label: string;
+    amount: number;
+    currency: string;
+    basis: 'flat' | 'percent' | 'percent_minimum' | 'percent_maximum';
+    entryType: 'formal' | 'informal' | null;
+    entryTypeAssumed: boolean;
+    incidence: string;
+  }>;
+  /** Who is the importer of record: request, then incoterms (DDP seller, else buyer), then the account default, else unresolved. */
+  responsibleParty: 'seller' | 'buyer' | 'unresolved';
+  responsiblePartySource: 'request' | 'incoterms' | 'entityDefault' | 'regime' | 'unresolved';
+  /** Short form of `collection.collected`. */
+  collectedAtCheckout: boolean;
+  collection: { requested: boolean; collected: boolean; reason: DutyCollectionReason };
+  /** goods + freight + insurance + duty + import tax + fees. A pricing figure, never a charge. */
+  landedCost: number;
+  /** The buyer-payable estimate a checkout may add for this consignment; 0 unless `collectedAtCheckout`. */
+  importChargesAtCheckout: number;
+  sellerBorne: { duty: number; importTax: number; fees: number; total: number };
+  precision: DutyPrecision | null;
+  /** False means only "no modelled source of variance"; it is never a guarantee. */
+  estimate: boolean;
+  estimateReasons: DutyEstimateReason[];
+  notEvaluated: DutyNotEvaluated[];
+  fxSource: 'static' | null;
+  sellerRegistrationGap: boolean;
+}
+
+/** The consignment could not be priced. Tax is unaffected. */
+export interface DegradedDutyConsignment {
+  id: string;
+  lineIds: string[];
+  status: 'degraded';
+  reason: DutyDegradedReason;
+  dispatchTerritory: string | null;
+  destinationTerritory: string | null;
+  customsStatus: 'free_circulation' | 'bonded';
+  collectedAtCheckout: false;
+  estimate: true;
+}
+
+export interface NotApplicableDutyConsignment {
+  id: string;
+  lineIds: string[];
+  status: 'not_applicable';
+  reason: DutyNotApplicableReason;
+  dispatchTerritory: string | null;
+  destinationTerritory: string | null;
+}
+
+/** One consignment, discriminated by `status`. */
+export type DutyConsignment = QuotedDutyConsignment | DegradedDutyConsignment | NotApplicableDutyConsignment;
+
+/** Duty totals across the quoted consignments. Estimates; none of it is part of `totalTax` or `totalAmountWithTax`. */
+export interface DutiesSummary {
+  totalDuty: number;
+  totalImportTax: number;
+  totalImportFees: number;
+  /** goods + freight + insurance + duty + import tax + fees. A merchant pricing figure, never a charge. */
+  totalLandedCost: number;
+  /** Duty, import tax and fees the seller bears (seller-responsible consignments); never part of any amount due. */
+  sellerBorneImportCosts: number;
+  /** Present only when some consignment is `collectedAtCheckout`. Show it as its own line, "Estimated import charges"; never as tax. */
+  importChargesAtCheckout: number;
+  /** Present only alongside `importChargesAtCheckout`: `totalAmountWithTax` + `importChargesAtCheckout`. Charge this when present. */
+  totalAmountDue: number;
+}
+
+/**
+ * Estimated import duty, import VAT/GST and customs fees for a cross-border
+ * consignment. Never included in `totalTax`/`totalAmountWithTax`; see
+ * `summary.importChargesAtCheckout` for the one amount a checkout may add.
+ * The response of `quoteDuties()`; on `calculateTax()` the same blocks are
+ * `duties`, `consignments`, `lineItems[].duty` and the duty fields of
+ * `summary`. Every figure is an estimate and is not guaranteed: reconcile any
+ * difference with the carrier or broker invoice.
+ */
+export interface DutiesResult {
+  /** Every amount is in this currency (the request's currency). */
+  currency: string;
+  duties: DutiesBlock;
+  consignments?: DutyConsignment[];
+  /** Only the lines that carry a duty block. */
+  lineItems: Array<{ id: string; duty: LineDuty }>;
+  summary?: Partial<DutiesSummary>;
+}
+
+/**
+ * Body of `quoteDuties()`: the `calculateTax()` body without `commit`,
+ * credit-note fields, `transactionDirection: 'purchase'` and `idempotencyKey`.
+ * `duties.include` is implied.
+ */
+export type QuoteDutiesInput = Omit<TaxCalculateRequest, 'commit' | 'idempotencyKey' | 'transactionDirection' | 'documentStage' | 'duties'> & {
+  duties?: Omit<DutiesRequest, 'include'> & { include?: true };
+};
+
+// ── Duties estimate and import settlement ─────────────────────────────────────
+
+/** One product's identity and price for `estimateDuties()`. Identify it with at least one of `commodityCode`, `classificationCodes`, `productCode`/`sku`, `taxCategory`/`slug`; price it with `unitPrice` (times `quantity`) or `amount`. */
+export interface DutiesEstimateProductInput {
+  commodityCode?: string;
+  /** Scheme of `commodityCode`; inferred from its length when omitted. */
+  commodityCodeScheme?: DutyCodeScheme;
+  classificationCodes?: Array<{ system: string; code: string }>;
+  /** Catalogue product code: its stored commodity code and origin are used when the request carries none. */
+  productCode?: string;
+  /** Alias of `productCode`. */
+  sku?: string;
+  /** Tax category slug: a category-level proxy when no code resolves (lower precision). */
+  taxCategory?: string;
+  /** Alias of `taxCategory`. */
+  slug?: string;
+  productName?: string;
+  /** ISO 3166-1 alpha-2. Never inferred from `shipFrom`; a missing origin lowers precision. */
+  countryOfOrigin?: string;
+  /** Price of one unit, excluding tax. Use this or `amount`. */
+  unitPrice?: number;
+  quantity?: number;
+  /** Line total, excluding tax. Use this or `unitPrice`. */
+  amount?: number;
+  /** Per-UNIT weight. */
+  weight?: { value: number; unit: 'kg' | 'g' | 'lb' | 'oz' };
+}
+
+export interface DutiesEstimateDestinationInput {
+  country: string;
+  /** State or province; required for a US destination. */
+  region?: string;
+  postalCode?: string;
+}
+
+/** Body of `estimateDuties()` (POST /v1/duties/estimate): one product priced across up to 20 destinations. Unknown fields are rejected with 422. */
+export interface EstimateDutiesInput {
+  /** ISO 4217. The price, freight and insurance are in it and every amount returned is in it. */
+  currency: string;
+  product: DutiesEstimateProductInput;
+  shipFrom?: TaxCalcShipFrom;
+  incoterms?: 'EXW' | 'FCA' | 'FAS' | 'FOB' | 'CFR' | 'CIF' | 'CPT' | 'CIP' | 'DAP' | 'DPU' | 'DDP';
+  importerOfRecord?: 'SELLER' | 'BUYER';
+  insurance?: { amount: number; currency?: string };
+  /** Freight charged to the destination, in the request currency. */
+  freight?: { amount: number };
+  duties?: { defaultCountryOfOrigin?: string; ratePolicyForHs6?: 'modal' | 'highest' };
+  /** 1 to 20 destinations, without repeats. */
+  destinations: DutiesEstimateDestinationInput[];
+  /** partner_calc keys only (required there). */
+  supplier?: TaxCalcPartyInput;
+  /** partner_calc keys only (required there). */
+  sellerRegistrationContext?: Record<string, unknown>;
+  /** partner_calc keys only (required there). */
+  partnerMerchantId?: string;
+}
+
+/** What the product resolved to; taken from the first destination that produced a duty for it. */
+export interface DutiesEstimateProduct {
+  commodityCode: string | null;
+  scheme: string | null;
+  codeSource: DutyCodeSource;
+  precision: DutyPrecision | null;
+  countryOfOrigin: string | null;
+  originSource: DutyOriginSource | null;
+}
+
+/**
+ * One destination's estimate. `duties`, `consignments` and `summary` are exactly what `quoteDuties()` returns for the
+ * one-line cart. `status` `degraded` never fails the call: `reason` `destination_rejected` carries an `error`.
+ */
+export interface DutiesEstimateDestination {
+  destination: DutiesEstimateDestinationInput;
+  status: 'quoted' | 'degraded' | 'not_applicable';
+  /** Present unless `status` is `quoted`. */
+  reason?: string;
+  error?: string;
+  duties: DutiesBlock;
+  consignments?: DutyConsignment[];
+  /** The product line's duty. */
+  duty?: LineDuty;
+  summary?: Partial<DutiesSummary>;
+}
+
+export interface DutiesEstimateResult {
+  currency: string;
+  product: DutiesEstimateProduct;
+  /** In request order. */
+  destinations: DutiesEstimateDestination[];
+}
+
+/** Body of `recordImportSettlement()`: what customs or the carrier actually charged after clearance. */
+export interface ImportSettlementInput {
+  /** The customs entry or declaration number; with the calculation and consignment it is the idempotency key. */
+  entryNumber: string;
+  /** YYYY-MM-DD. */
+  entryDate?: string;
+  /** A consignment id from the calculation's duties block; optional when exactly one consignment was quoted. */
+  consignmentId?: string;
+  actual: {
+    duty: number;
+    /** Actual import VAT or GST. */
+    importTax: number;
+    /** Actual customs and authority fees. */
+    fees: number;
+    /** Must equal the calculation's currency. No conversion is performed. */
+    currency: string;
+  };
+  /** Per-line actual duty; each `lineId` must be a duty line of the consignment. */
+  lines?: Array<{ lineId: string; duty: number }>;
+  notes?: string;
+}
+
+export interface ImportSettlementAmounts { duty: number; importTax: number; fees: number; total: number }
+export interface ImportSettlementVarianceComponent {
+  /** actual minus estimated; positive means customs charged more. */
+  amount: number;
+  /** amount / estimate * 100; null when the estimate was 0. */
+  percent: number | null;
+}
+
+/** A stored settlement. Facts only: it never changes the calculation, its tax or the entity's tax obligations. */
+export interface ImportSettlement {
+  id: string;
+  calculationId: string;
+  consignmentId: string;
+  entryNumber: string;
+  entryDate: string | null;
+  currency: string;
+  destinationTerritory: string | null;
+  precisionAtQuote: string | null;
+  estimated: ImportSettlementAmounts;
+  actual: ImportSettlementAmounts;
+  variance: { duty: ImportSettlementVarianceComponent; importTax: ImportSettlementVarianceComponent; fees: ImportSettlementVarianceComponent; total: ImportSettlementVarianceComponent };
+  /** True when the actual total did not exceed the estimated total. */
+  withinEstimate: boolean;
+  lines?: Array<{ lineId: string; estimatedDuty: number; actualDuty: number; varianceDuty: number; variancePct: number | null }>;
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface ImportSettlementResult {
+  settlement: ImportSettlement;
+  /** True when the same entry was already recorded with the same actuals and the stored settlement is returned. */
+  replayed: boolean;
+}
+
+export interface ImportSettlementList {
+  calculationId: string;
+  currency: string | null;
+  settlements: ImportSettlement[];
+  summary: {
+    count: number;
+    /** Amounts are never added across currencies. */
+    byCurrency: Array<{ currency: string; count: number; estimated: number; actual: number; variance: number; variancePercent: number | null; withinEstimateCount: number }>;
+  };
+}
+
+export interface ImportSettlementVarianceParams {
+  /** YYYY-MM-DD, on the entry date. */
+  from?: string;
+  to?: string;
+  /** Destination customs territory id, e.g. `EU`, `GB`, `US`. */
+  destination?: string;
+  /** Precision tier at quote time, e.g. `TARIFF_LINE`. */
+  precision?: string;
+}
+
+export interface ImportSettlementVariance {
+  filters: { from: string | null; to: string | null; destination: string | null; precision: string | null };
+  groups: Array<{
+    destinationTerritory: string | null;
+    precision: string | null;
+    count: number;
+    withinEstimateCount: number;
+    meanVariancePercent: number | null;
+    medianVariancePercent: number | null;
+    byCurrency: Array<{ currency: string; count: number; estimated: number; actual: number; variance: number }>;
+  }>;
 }
