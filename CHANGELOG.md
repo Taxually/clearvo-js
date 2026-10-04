@@ -2,6 +2,14 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend billing/plans PR is deployed
+
+Backend: new `GET /v1/usage`, free-plan HTTP 402 `plan_required` on committed tax calculations, plan names `free | starter | growth | enterprise`. Not released.
+
+- @clearvo/sdk: `getUsage()` (types `UsageSummary`, `GetUsageResponse`, `Plan`, `BillingStatus`). `calculateTax()` throws the new `ClearvoPlanRequiredError` (a `ClearvoError` subclass, status 402, with `calculationId`, `monitorOnly`, `upgradeUrl`) for a committed calculation on a free plan; `commit: false` previews are unaffected.
+- @clearvo/cli: `clearvo usage`. `clearvo calculate` prints a plain upgrade message with the upgrade URL on a 402 `plan_required` and exits 1.
+- @clearvo/mcp: new read-only tool `get_usage`. `calculate_tax` documents the monitor-only result and declares an `outputSchema`; the 402 `plan_required` body is returned as the tool result instead of an error, with `structuredContent`.
+
 ## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
 
 **BREAKING**, no aliases: client tax code field `exemptionReasonText` is now `invoiceReferenceText` (SDK `ClientTaxCode`/request types, MCP `create_client_tax_code`/`update_client_tax_code`, CLI `tax-codes create|update --invoice-reference-text`, replacing `--exemption-reason-text`). Tax-calculation request `reportingCurrency` is now `taxReportingCurrency`.

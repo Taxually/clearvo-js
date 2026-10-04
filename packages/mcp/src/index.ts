@@ -92,6 +92,9 @@ async function callApi(
     body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
+  // Free-plan monitor-only calculation: the 402 body (calculationId, monitorOnly, upgradeUrl) is the tool's result
+  // (see calculate_tax's outputSchema), not an error to flatten into a message.
+  if (res.status === 402 && (data as Record<string, unknown>).error === 'plan_required') return data;
   if (!res.ok) {
     const err = data as Record<string, unknown>;
     const errorText = String(err.error ?? 'Unknown error');
@@ -812,8 +815,24 @@ const TOOLS = [
       'mismatch). seller is a deprecated alias for supplier, accepted on a sale only — rejected with 422 ' +
       'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
-      'which block is your own entity.',
+      'which block is your own entity. ' +
+      'On a free plan a commit=true call on a live key is recorded for Compliance Radar but returns no amounts: the result is ' +
+      '{ error: "plan_required", calculationId, monitorOnly: true, upgradeUrl } (HTTP 402 on the REST API) — do not apply any tax ' +
+      'from it; point the user at upgradeUrl. commit=false previews, paid plans and sandbox keys return the full calculation.',
     inputSchema: CALCULATE_TAX_INPUT_SCHEMA,
+    outputSchema: {
+      type: 'object' as const,
+      description: 'Either the full calculation, or — on a free plan with commit=true on a live key — the monitor-only result (monitorOnly true, no amounts).',
+      properties: {
+        calculationId: { type: 'string' },
+        committed: { type: 'boolean', description: 'Full calculation only.' },
+        summary: { type: 'object', description: 'Full calculation only: totalAmount, totalTax, totalAmountWithTax. Absent when monitorOnly is true.' },
+        lineItems: { type: 'array', description: 'Full calculation only. Absent when monitorOnly is true.', items: { type: 'object' } },
+        monitorOnly: { type: 'boolean', description: 'True when the plan does not include calculation results: the transaction was recorded for Compliance Radar and no amounts were returned.' },
+        error: { type: 'string', enum: ['plan_required'], description: 'Present only on the monitor-only result.' },
+        upgradeUrl: { type: 'string', description: 'Monitor-only result only: where the user changes plan.' },
+      },
+    },
   },
   {
     name: 'quote_duties',
@@ -1933,6 +1952,17 @@ const TOOLS = [
       type: 'object' as const,
       properties: {},
     },
+  },
+  {
+    name: 'get_usage',
+    description:
+      'Read billable tax-calculation usage against the plan allowance for the current billing period: plan, ' +
+      'billing status, period start/end, transactions used, transactions included, remaining, percentUsed, ' +
+      'overage (transactions beyond the allowance) and overageUsd (price per extra transaction). Only committed ' +
+      'live calculations count; previews (commit:false) and sandbox calls do not. Counts come from an hourly ' +
+      'ledger and can trail live traffic by up to an hour (see updatedAt). Calculations are never blocked at the ' +
+      'allowance. While inTrial is true nothing is charged.',
+    inputSchema: { type: 'object' as const, properties: {} },
   },
   {
     name: 'get_tax_settings',
@@ -3641,6 +3671,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_setup_status':
       return callApi('GET', '/setup/status');
 
+    case 'get_usage':
+      return callApi('GET', '/usage');
+
     case 'get_tax_settings':
       return callApi('GET', '/tax/settings');
 
@@ -4030,6 +4063,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       title,
       description: t.description,
       inputSchema: t.inputSchema,
+      ...('outputSchema' in t ? { outputSchema: t.outputSchema } : {}),
       annotations: { title, ...hints },
     };
   }),
@@ -4039,8 +4073,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   try {
     const result = await handleTool(name, (args ?? {}) as Record<string, unknown>);
+    // A tool that declares an outputSchema must also return structuredContent (MCP spec).
+    const hasOutputSchema = TOOLS.some(t => t.name === name && 'outputSchema' in t);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      ...(hasOutputSchema && result && typeof result === 'object' ? { structuredContent: result as Record<string, unknown> } : {}),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
