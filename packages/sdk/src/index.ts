@@ -275,4 +275,9 @@ export type {
   InboundValidation,
   ValidationOutcome,
   ReceivedInvoiceFields,
+  CalculationLedgerOutcome,
+  CalculationLedgerQuoteLink,
+  CalculationLedgerRow,
+  ListCalculationRequestsParams,
+  ListCalculationRequestsResponse,
 } from './types.js';

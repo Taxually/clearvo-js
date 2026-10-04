@@ -50,6 +50,8 @@ import type {
   UpdateRegistrationResponse,
   TaxCalculationSummary,
   ListTaxCalculationsParams,
+  ListCalculationRequestsParams,
+  ListCalculationRequestsResponse,
   ListTaxCalculationsResponse,
   ListReportingObligationsResponse,
   UpdateReportingObligationsInput,
@@ -497,6 +499,17 @@ export class ClearvoClient {
   }
 
   // ── Tax Calculation History ───────────────────────────────────────────────────
+
+  /**
+   * The calculation request ledger: every calculation request for the entity, including commit=false quotes and
+   * rejected requests, with each committed calculation's link to its last matching quote.
+   */
+  listCalculationRequests(params: ListCalculationRequestsParams = {}): Promise<ListCalculationRequestsResponse> {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined) qs.set(k, String(v));
+    const q = qs.toString();
+    return this.request('GET', `/tax/calculation-ledger${q ? `?${q}` : ''}`);
+  }
 
   listTaxCalculations(params: ListTaxCalculationsParams = {}): Promise<ListTaxCalculationsResponse> {
     const qs = new URLSearchParams();

@@ -13,6 +13,10 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 Totals behaviour change (input names unchanged: `statedPayableAmount`, `shipping`, `allowances`, `charges`, `prepaidAmount`): `statedPayableAmount` (now typed in the SDK) is authoritative and stored as stated; any difference from the lines-based recompute is the rounding amount (BT-114) with no cap. A gap over one minor unit is the WARNING `ROUNDING_RESIDUAL_OVER_TOLERANCE`, no longer a 422. New generator hold code `PAYABLE_AMOUNT_BR_CO_16` (invoice held when the stated amount would fail EN 16931 BR-CO-16 in the target format). The v1 invoice view always carries `totals.payableAmount`; allowance/charge entries gain `taxCode`, `taxCategory`, `taxRate`, `taxAmount`, `exemption`, `kind` (`freight`) and `carrier`; freight is a `totals.charges[]` entry; credit and debit notes use positive magnitudes. The SDK has no typed invoice-view or hold-code unions, so these are documentation only here.
 
+## Unreleased — publish only AFTER the backend calculation request ledger PR is deployed
+
+Additive: calculation request ledger (`GET /v1/tax/calculation-ledger`): every calculation request including commit=false quotes and rejections, with quote-to-final links. SDK `listCalculationRequests`, MCP `list_calculation_requests`, CLI `calculations requests`. Until the backend is live the endpoint 404s.
+
 ## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
 
 **BREAKING**, no aliases: client tax code field `exemptionReasonText` is now `invoiceReferenceText` (SDK `ClientTaxCode`/request types, MCP `create_client_tax_code`/`update_client_tax_code`, CLI `tax-codes create|update --invoice-reference-text`, replacing `--exemption-reason-text`). Tax-calculation request `reportingCurrency` is now `taxReportingCurrency`.
