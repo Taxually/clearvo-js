@@ -244,7 +244,7 @@ const TOOLS = [
       'Germany over Peppol: set countrySpecific.de.invoiceFormat=PEPPOL (or store PEPPOL as the customer\'s or ' +
       'entity\'s default de invoice format) to send a Peppol BIS Billing 3.0 invoice to the buyer over the Peppol network. ' +
       'It needs the seller\'s confirmed Peppol ID (else 422 MISSING_SELLER_PEPPOL_ID), an EXPLICIT Peppol address for the ' +
-      'customer (customer.endpointSchemeId + customer.endpointId, or a confirmed Peppol participant ID reference on the stored ' +
+      'customer (customer.electronicAddress with schemeId + value, or a confirmed Peppol participant ID reference on the stored ' +
       'customer — a German buyer\'s address is never derived from a VAT number), and a buyerReference or orderReference. ' +
       'The response carries documentFormat UBL_PEPPOL_BIS and delivery { channel: NETWORK, receiver, evidence }; status is ' +
       'PENDING (never ACCEPTED at generation) and becomes DELIVERED once the receiving access point confirms. ' +
@@ -259,8 +259,8 @@ const TOOLS = [
       'stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). dryRun=true on a German PEPPOL invoice runs the real content ' +
       'rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
       'For German XRechnung and Peppol invoices the customer\'s stored references fill in only when the request has no ' +
-      'explicit value: a stored confirmed Peppol participant ID supplies the customer Peppol address (when customer.endpointId + ' +
-      'endpointSchemeId are not sent) and a stored LEITWEG_ID supplies the Leitweg-ID (when neither countrySpecific.de.leitwegId nor ' +
+      'explicit value: a stored confirmed Peppol participant ID supplies the customer Peppol address (when customer.electronicAddress ' +
+      'is not sent) and a stored LEITWEG_ID supplies the Leitweg-ID (when neither countrySpecific.de.leitwegId nor ' +
       'buyerReference is sent). Both customer and seller need an electronic address (BT-49 / BT-34); without one the call fails ' +
       'before any XML is generated with MISSING_CUSTOMER_ELECTRONIC_ADDRESS or MISSING_SUPPLIER_ELECTRONIC_ADDRESS (ERROR severity). ' +
       'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
@@ -302,17 +302,17 @@ const TOOLS = [
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
-        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReportingAmounts below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
-        exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReportingAmounts — supply one or the other, never both.' },
-        taxReportingAmounts: {
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReporting — supply one or the other, never both.' },
+        taxReporting: {
           type: 'object',
-          description: 'Authoritative net/tax/gross totals in taxReportingCurrency, taken as-is rather than derived from a single exchange rate — use this instead of exchangeRate when your own books already have exact converted figures that must reconcile precisely (the tax amount especially often needs to match your records exactly). Mutually exclusive with exchangeRate.',
+          description: 'Authoritative tax-exclusive amount, tax total and total in taxReportingCurrency, taken as-is rather than derived from a single exchange rate — use this instead of exchangeRate when your own books already have exact converted figures that must reconcile precisely (the tax amount especially often needs to match your records exactly). Mutually exclusive with exchangeRate.',
           properties: {
-            netAmount: { type: 'number', description: 'Required.' },
-            taxAmount: { type: 'number', description: 'Required.' },
-            grossAmount: { type: 'number', description: 'Optional — computed as netAmount + taxAmount when omitted.' },
+            taxExclusiveAmount: { type: 'number', description: 'Required.' },
+            taxTotal: { type: 'number', description: 'Required.' },
+            total: { type: 'number', description: 'Optional — computed as taxExclusiveAmount + taxTotal when omitted.' },
           },
-          required: ['netAmount', 'taxAmount'],
+          required: ['taxExclusiveAmount', 'taxTotal'],
         },
         supplier: {
           type: 'object',
@@ -342,8 +342,8 @@ const TOOLS = [
           description: 'The customer receiving the invoice. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this is instead your OWN entity\'s identity (the buyer being self-billed for) — auto-derived when omitted, tax-ID-compared against your own registration the same way supplier normally is (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch), and its Peppol endpoint identity backfilled from your entity\'s own confirmed Peppol Participant ID when omitted.',
           properties: {
             name: { type: 'string', description: 'Customer name. Required everywhere except a Spain VeriFactu simplified invoice (F2/R5, no customer identification), where it is optional.' },
-            taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment. Spain VeriFactu: a full invoice (F1) must identify the customer here (Spanish NIF, EU VAT number, or a passport/residence document together with countrySpecific.es.customerIdType and customer.taxIdCountry); with none, an original invoice up to EUR 400 to a non-business customer is issued as a simplified invoice (F2).' },
-            taxIdCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country that issued customer.taxId. Spain VeriFactu: required with a passport/residence/other identifier (customerIdType).' },
+            taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment. Spain VeriFactu: a full invoice (F1) must identify the customer here (Spanish NIF, EU VAT number, or a passport/residence document together with countrySpecific.es.customerIdType and customer.establishmentCountry); with none, an original invoice up to EUR 400 to a non-business customer is issued as a simplified invoice (F2).' },
+            establishmentCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country that issued customer.taxId. Spain VeriFactu: required with a passport/residence/other identifier (customerIdType).' },
             address: {
               type: 'object',
               properties: {
@@ -361,8 +361,14 @@ const TOOLS = [
                 email: { type: 'string', description: 'Customer email — required if notifyCustomer is set (or your entity default is on) for a country where Clearvo does not deliver the invoice electronically.' },
               },
             },
-            endpointSchemeId: { type: 'string', description: 'Peppol participant scheme ID of the customer\'s Peppol address (e.g. "0204" Leitweg-ID, "9930" German VAT). Use together with endpointId. Required for Germany over Peppol unless the stored customer has a confirmed Peppol ID.' },
-            endpointId: { type: 'string', description: 'Peppol participant ID value of the customer\'s Peppol address. Use together with endpointSchemeId.' },
+            electronicAddress: {
+              type: 'object',
+              description: 'Peppol address of the customer (BT-49). Send value and schemeId together — one without the other is ignored. Required for Germany over Peppol unless the stored customer has a confirmed Peppol ID.',
+              properties: {
+                schemeId: { type: 'string', description: 'Peppol participant scheme ID (e.g. "0204" Leitweg-ID, "9930" German VAT).' },
+                value: { type: 'string', description: 'Peppol participant ID value for the scheme in schemeId.' },
+              },
+            },
             customerRef: {
               type: 'string',
               description: 'Your own reference for a previously-saved customer (see the dashboard\'s Customers page). When set, Clearvo fills in any of name/taxId/address you omit here from the saved record — fields you do supply still take precedence.',
@@ -475,7 +481,7 @@ const TOOLS = [
           type: 'string',
           description: 'PURCHASE documents only (transactionDirection: "purchase"), Spain SII, YYYY-MM-DD. The accounting-entry date (FechaRegContable) — anchors both the compliance-mandate effective-date gate and the received-book (LFR) submission deadline. Optional even for a purchase (falls back to issueDate when omitted), but the vendor\'s own issueDate is legally the wrong date for this gate, so supply it whenever the entity books on receipt.',
         },
-        deductibleVatAmount: {
+        deductibleTaxAmount: {
           type: 'number',
           description: 'PURCHASE documents only, Spain SII. CuotaDeducible — the deductible portion of input VAT on this purchase, always taken as given, never derived from the lines\' own charged amounts. An explicit 0 is a valid, distinct declaration (an exempt/non-deductible purchase) — NOT the same as omitting the field, which produces NEEDS_INFO naming this field.',
         },
@@ -515,6 +521,20 @@ const TOOLS = [
                 duaNumber: {
                   type: 'string',
                   description: 'NumeroDUA (Documento Único Administrativo) — required, and only meaningful, when this purchase\'s tipoFactura resolves to F5 (import). Missing on an import produces NEEDS_INFO naming countrySpecific.es.duaNumber.',
+                },
+              },
+            },
+            ro: {
+              type: 'object',
+              description: 'Romania e-Factura fields.',
+              properties: {
+                supplierTaxRegistered: {
+                  type: 'boolean',
+                  description: 'Whether the supplier genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF). Omit to default to whether the taxId you sent carried the "RO" prefix; an unresolved supplier fails with 422 RO_SUPPLIER_TAX_REGISTRATION_STATUS_UNKNOWN.',
+                },
+                customerTaxRegistered: {
+                  type: 'boolean',
+                  description: 'Whether the customer genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF, no registration) — decides whether RO emits cac:PartyTaxScheme or cac:PartyLegalEntity only. Omit to default to whether taxId carried the "RO" prefix; a bare id with no override on a B2B (or untyped) customer fails with 422 RO_CUSTOMER_TAX_REGISTRATION_STATUS_UNKNOWN. A customerType "B2C" customer safely defaults to unregistered instead.',
                 },
               },
             },
@@ -2420,7 +2440,7 @@ const TOOLS = [
         recoverablePercentage: { type: 'number', description: 'Required (and only meaningful) when recoverabilityType="restricted" — a percentage strictly between 0 and 100 (0 and 100 are already "blocked"/"full").' },
         exemptionReasonCode: { type: 'string', description: 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum, max 30 characters. See get_client_tax_code_exemption_reason_options for candidate values.' },
         description: { type: 'string' },
-        exemptionReasonText: { type: 'string', description: 'Free-text exemption wording, only meaningful for an exempt, out-of-scope, or reverse-charge code — passed through verbatim onto every invoice using this code, printed exactly as given. Never derived or auto-generated; omit if you have none.' },
+        invoiceReferenceText: { type: 'string', description: 'Free-text exemption wording, only meaningful for an exempt, out-of-scope, or reverse-charge code — passed through verbatim onto every invoice using this code, printed exactly as given. Never derived or auto-generated; omit if you have none.' },
         entityId: { type: 'string', description: 'Entity to create the client tax code under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['code', 'country', 'movement', 'taxability', 'supplyType'],
@@ -2449,7 +2469,7 @@ const TOOLS = [
         recoverablePercentage: { type: 'number' },
         exemptionReasonCode: { type: 'string', description: 'See create_client_tax_code. Send null to clear it.' },
         description: { type: 'string' },
-        exemptionReasonText: { type: 'string', description: 'Free-text exemption wording — see create_client_tax_code. Send null to clear it.' },
+        invoiceReferenceText: { type: 'string', description: 'Free-text exemption wording — see create_client_tax_code. Send null to clear it.' },
         entityId: { type: 'string', description: 'Entity the client tax code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['clientTaxCodeId'],

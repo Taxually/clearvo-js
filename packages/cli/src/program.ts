@@ -122,7 +122,7 @@ export function createProgram(): Command {
   // Invoice responses carry `totalTax` (never `totalVat`).
   program
     .command('send <file>')
-    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with 422 UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.endpointSchemeId + customer.endpointId (never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: 422 PEPPOL_CUSTOMER_UNREACHABLE with re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything')
+    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with 422 UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: 422 PEPPOL_CUSTOMER_UNREACHABLE with re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything')
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
     .option('--pretty', 'Pretty-print JSON output')
@@ -1004,7 +1004,7 @@ export function createProgram(): Command {
     movement?: string; taxability?: string; customerType?: string; supplyType?: string;
     rateBand?: string; reverseCharge?: boolean; useTaxSelfAssessed?: boolean;
     filingTag?: string; direction?: string; recoverabilityType?: string; recoverablePercentage?: string;
-    exemptionReasonCode?: string; description?: string; exemptionReasonText?: string;
+    exemptionReasonCode?: string; description?: string; invoiceReferenceText?: string;
   }): Record<string, unknown> {
     const body: Record<string, unknown> = {};
     if (opts.code)        body.code = opts.code;
@@ -1023,7 +1023,7 @@ export function createProgram(): Command {
     if (opts.recoverablePercentage) body.recoverablePercentage = Number(opts.recoverablePercentage);
     if (opts.exemptionReasonCode) body.exemptionReasonCode = opts.exemptionReasonCode;
     if (opts.description) body.description = opts.description;
-    if (opts.exemptionReasonText) body.exemptionReasonText = opts.exemptionReasonText;
+    if (opts.invoiceReferenceText) body.invoiceReferenceText = opts.invoiceReferenceText;
     return body;
   }
   
@@ -1056,7 +1056,7 @@ export function createProgram(): Command {
     .option('--recoverable-percentage <percent>', 'Required (and only meaningful) when --recoverability-type=restricted — strictly between 0 and 100 (0 and 100 are already blocked/full)')
     .option('--exemption-reason-code <code>', 'Free-text reason code for an exempt/out-of-scope row — pure metadata, never validated against an enum, max 30 characters')
     .option('--description <text>', 'Optional longer description')
-    .option('--exemption-reason-text <text>', 'Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code, never derived or auto-generated')
+    .option('--invoice-reference-text <text>', 'Free-text exemption wording, only meaningful for an exempt/out-of-scope/reverse-charge code — passed through verbatim onto every invoice using this code, never derived or auto-generated')
     .option('--entity <entityId>', 'Entity to create the client tax code under (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
@@ -1064,7 +1064,7 @@ export function createProgram(): Command {
       customerType?: string; supplyType: string; rateBand?: string; reverseCharge?: boolean;
       useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string;
       recoverabilityType?: string; recoverablePercentage?: string; exemptionReasonCode?: string;
-      description?: string; exemptionReasonText?: string; entity?: string; pretty?: boolean;
+      description?: string; invoiceReferenceText?: string; entity?: string; pretty?: boolean;
     }) => {
       const body = taxCodeMutationBody(opts);
       const result = await api('POST', '/tax/client-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
@@ -1090,7 +1090,7 @@ export function createProgram(): Command {
     .option('--recoverable-percentage <percent>', 'See `tax-codes create`')
     .option('--exemption-reason-code <code>', 'Updated free-text exemption reason code — see `tax-codes create`')
     .option('--description <text>', 'Updated description')
-    .option('--exemption-reason-text <text>', 'Updated free-text exemption wording — see `tax-codes create`')
+    .option('--invoice-reference-text <text>', 'Updated free-text exemption wording — see `tax-codes create`')
     .option('--entity <entityId>', 'Entity the client tax code belongs to (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
@@ -1098,7 +1098,7 @@ export function createProgram(): Command {
       customerType?: string; supplyType?: string; rateBand?: string; reverseCharge?: boolean;
       useTaxSelfAssessed?: boolean; filingTag?: string; direction?: string;
       recoverabilityType?: string; recoverablePercentage?: string; exemptionReasonCode?: string;
-      description?: string; exemptionReasonText?: string; entity?: string; pretty?: boolean;
+      description?: string; invoiceReferenceText?: string; entity?: string; pretty?: boolean;
     }) => {
       const body = taxCodeMutationBody(opts);
       const result = await api('PATCH', `/tax/client-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
