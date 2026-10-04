@@ -863,6 +863,15 @@ export interface TaxCalculateRequest {
   commit?: boolean;
   idempotencyKey?: string;
   /**
+   * True when a marketplace facilitator collected and remitted tax on this whole order (your assertion). US
+   * destinations only: where the state's law makes the facilitator, not the seller, responsible, the seller
+   * collects no tax on the line (tax 0, taxCode `O`) and `lineItems[].marketplaceFacilitator` explains the outcome,
+   * with `lineItems[].marketplaceFacilitatorTax` as a memo outside every total. Otherwise the seller collects and the
+   * line says why. A non-US destination returns 422 `marketplace_facilitator_unsupported_jurisdiction`. Omit for a
+   * direct sale. Not the same as the account setting `isMarketplaceFacilitator`.
+   */
+  isMarketplaceFacilitatedSale?: boolean;
+  /**
    * `'sale'` (default) — an outgoing transaction: the entity is the
    * supplier and `customer` (the counterparty) is required. `'purchase'`
    * — an incoming transaction: the entity is the customer and `supplier`
@@ -1138,6 +1147,13 @@ export interface TaxCalculateResponse {
   sandbox: boolean;
   degraded: boolean;
   degradedReason?: string;
+  /** Present only when the request set `isMarketplaceFacilitatedSale: true`. `marketplaceFacilitatorTax` is outside `summary.totalTax`. */
+  marketplaceFacilitator?: {
+    linesRelieved: number;
+    linesSellerCollects: number;
+    marketplaceFacilitatorTax: number;
+    feesSkipped?: Array<{ feeCode: string; region: string | null; name: string; reasonCode: 'MARKETPLACE_FACILITATOR_FEE_NOT_SELLERS' }>;
+  };
   currency: string;
   taxTreatment: string;
   taxCode: string;
@@ -1193,6 +1209,26 @@ export interface TaxCalculateResponse {
     taxableAmount: number;
     taxAmount: number;
     totalAmount: number;
+    /** Present only when the request set `isMarketplaceFacilitatedSale: true`: the explicit facilitator outcome for this line. */
+    marketplaceFacilitator?: {
+      outcome: 'FACILITATOR_COLLECTS' | 'FACILITATOR_COLLECTS_STATE_TAX' | 'SELLER_COLLECTS';
+      reasonCode: string;
+      statusLabel: string;
+      jurisdiction: { country: string; region: string | null };
+      citation: string | null;
+      lawEffectiveDate: string | null;
+      coverage: 'STATE_AND_LOCAL' | 'STATE_ONLY' | 'CONDITIONAL' | null;
+      sellerReporting: string | null;
+      reliefMode?: 'FULL' | 'CONDITIONAL_ASSERTED' | 'NOT_RELIEVED';
+      conditions?: string[];
+      sellerRemainsLiableCases?: string[];
+    };
+    /** Memo of the tax the marketplace facilitator collects on this line. Never part of `taxAmount` or any total. */
+    marketplaceFacilitatorTax?: {
+      amount: number;
+      rate: number;
+      jurisdictionBreakdown?: Array<{ level: string; name: string; taxType: string; rate: number; taxAmount: number }>;
+    };
     classification: {
       slug: string;
       confidence: number;

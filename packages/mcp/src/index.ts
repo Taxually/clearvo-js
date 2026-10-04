@@ -214,6 +214,10 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
   properties: {
     currency: { type: 'string', description: 'ISO 4217 currency code' },
     commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
+    isMarketplaceFacilitatedSale: {
+      type: 'boolean',
+      description: 'Set true when a marketplace (TikTok Shop, Amazon, ...) facilitated this whole order. US destinations only: where the state\'s marketplace-facilitator law makes the facilitator, not the seller, collect and remit, the seller collects no tax on that line (tax 0, taxCode O) and lineItems[].marketplaceFacilitator explains the outcome, with lineItems[].marketplaceFacilitatorTax as a memo of the tax the facilitator collects (never in totalTax). Where the law does not relieve the seller the seller collects as usual and marketplaceFacilitator.reasonCode names the reason; a missing or unconfirmed state rule also sets degraded. A non-US destination returns 422 marketplace_facilitator_unsupported_jurisdiction. A customer exemption already applying to a line takes precedence. Omit for a direct sale. Not the same as the account setting isMarketplaceFacilitator. On a credit note that omits it, the original calculation\'s value is inherited.',
+    },
     transactionDirection: {
       type: 'string',
       enum: ['sale', 'purchase'],
@@ -371,7 +375,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
   required: ['currency', 'lineItems'],
 };
 
-const { commit: _quoteOmitCommit, transactionDirection: _quoteOmitDirection, documentStage: _quoteOmitStage, ...QUOTE_DUTIES_PROPERTIES } = CALCULATE_TAX_INPUT_SCHEMA.properties as Record<string, unknown>;
+const { commit: _quoteOmitCommit, transactionDirection: _quoteOmitDirection, documentStage: _quoteOmitStage, isMarketplaceFacilitatedSale: _quoteOmitMarketplace, ...QUOTE_DUTIES_PROPERTIES } = CALCULATE_TAX_INPUT_SCHEMA.properties as Record<string, unknown>;
 
 const TOOLS = [
   {

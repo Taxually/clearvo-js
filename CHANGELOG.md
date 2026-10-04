@@ -78,6 +78,16 @@ Totals behaviour change (input names unchanged: `statedPayableAmount`, `shipping
 
 Additive: calculation request ledger (`GET /v1/tax/calculation-ledger`): every calculation request including commit=false quotes and rejections, with quote-to-final links. SDK `listCalculationRequests`, MCP `list_calculation_requests`, CLI `calculations requests`. Until the backend is live the endpoint 404s.
 
+## Unreleased — publish only AFTER the US marketplace-facilitator backend branch (`claude/us-marketplace-facilitator`) has merged and deployed
+
+### @clearvo/sdk (additive, non-breaking)
+
+- `TaxCalculateRequest.isMarketplaceFacilitatedSale?: boolean`. `TaxCalculateResponse.marketplaceFacilitator`, and per line `marketplaceFacilitator` (outcome, reasonCode, statusLabel, reliefMode, conditions, ...) and `marketplaceFacilitatorTax` (memo, outside every total). A non-US destination with the flag true returns 422 `marketplace_facilitator_unsupported_jurisdiction`.
+
+### @clearvo/mcp (additive, non-breaking)
+
+- `calculate_tax` accepts `isMarketplaceFacilitatedSale`.
+
 ## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
 
 **BREAKING**, no aliases: client tax code field `exemptionReasonText` is now `invoiceReferenceText` (SDK `ClientTaxCode`/request types, MCP `create_client_tax_code`/`update_client_tax_code`, CLI `tax-codes create|update --invoice-reference-text`, replacing `--exemption-reason-text`). Tax-calculation request `reportingCurrency` is now `taxReportingCurrency`.
