@@ -355,6 +355,62 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo duties estimate <file> ───────────────────────────────────────────
+  // POST /v1/duties/estimate: one product priced across up to 20 destinations.
+  // Nothing is recorded; a read-only key is enough.
+  duties
+    .command('estimate <file>')
+    .description('Estimate import duty, import VAT/GST, customs fees and landed cost for ONE product across up to 20 destinations, from a JSON file ({ currency, product, shipFrom, destinations[] }). Nothing is recorded. Each destination has a status (quoted, degraded, not_applicable); one bad destination never fails the call.')
+    .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
+      const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const result = await api('POST', '/duties/estimate', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo duties settle <calculationId> <file> ─────────────────────────────
+  // POST /v1/tax/calculate/{id}/import-settlement: what customs actually charged.
+  duties
+    .command('settle <calculationId> <file>')
+    .description('Record what customs actually charged for a committed calculation with a duties block, from a JSON file ({ entryNumber, actual: { duty, importTax, fees, currency }, entryDate?, consignmentId?, lines?, notes? }). Append-only and idempotent on the entry number; stores facts only. Returns estimated vs actual, variance and withinEstimate.')
+    .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (calculationId: string, file: string, opts: { entity?: string; pretty?: boolean }) => {
+      const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const result = await api('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo duties settlements <calculationId> ───────────────────────────────
+  duties
+    .command('settlements <calculationId>')
+    .description("List a calculation's import settlements and a per-currency summary")
+    .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (calculationId: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo duties variance ──────────────────────────────────────────────────
+  duties
+    .command('variance')
+    .description('Estimate-versus-entry variance of your import settlements, grouped by destination customs territory and precision tier')
+    .option('--from <date>', 'Earliest entry date, YYYY-MM-DD')
+    .option('--to <date>', 'Latest entry date, YYYY-MM-DD')
+    .option('--destination <territory>', 'Destination customs territory id, e.g. EU, GB, US')
+    .option('--precision <tier>', 'Precision tier at quote time, e.g. TARIFF_LINE')
+    .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { from?: string; to?: string; destination?: string; precision?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      for (const key of ['from', 'to', 'destination', 'precision'] as const) if (opts[key]) qs.set(key, opts[key] as string);
+      const q = qs.toString();
+      const result = await api('GET', `/duties/settlement-variance${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo validate-tin ─────────────────────────────────────────────────────
   program
     .command('validate-tin')

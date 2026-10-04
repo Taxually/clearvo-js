@@ -815,6 +815,94 @@ const TOOLS = [
     },
   },
   {
+    name: 'estimate_duties',
+    description:
+      'Estimate import duty, import VAT/GST, customs fees and landed cost for ONE product shipped to up to 20 destinations, ' +
+      'without committing anything (POST /v1/duties/estimate). A pricing call: use it to set delivered-duty-paid prices per market ' +
+      'or to answer "what would it cost to sell this into Australia". Identify the product with product.commodityCode (+ commodityCodeScheme), ' +
+      'product.classificationCodes, product.productCode/sku (resolved through the catalogue) or product.taxCategory/slug; give product.countryOfOrigin, ' +
+      'a price (product.unitPrice with an optional quantity, or product.amount), the currency and shipFrom.country. Optional: weight, incoterms, importerOfRecord, ' +
+      'insurance, freight. Nothing is stored and no key permission beyond read is needed. ' +
+      'Returns product (the resolved commodityCode, scheme, codeSource and precision) and destinations[]: per destination a status (quoted, degraded or not_applicable, with a reason), ' +
+      'the same duties, consignments (duty, importTax, fees, landedCost, precision, estimate, responsibleParty) and summary blocks quote_duties returns for a one-line cart, plus the product line\'s duty. ' +
+      'One bad destination is a degraded entry, never a failed call. It is an estimate: read each consignment\'s estimate/estimateReasons and the duty\'s missingInputs. ' +
+      'Fails closed with HTTP 503 code "tax_content_unavailable" when tax content is temporarily unavailable; retry after Retry-After.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        currency: { type: 'string', description: 'ISO 4217 currency of the price, freight and insurance, and of every amount returned.' },
+        product: {
+          type: 'object',
+          description: 'The product. Identify it with at least one of commodityCode, classificationCodes, productCode/sku, taxCategory/slug; price it with unitPrice (and quantity) or amount.',
+          properties: {
+            commodityCode: { type: 'string', description: 'HS/CN/TARIC/HTS code, e.g. "610910".' },
+            commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of commodityCode; inferred from its length when omitted.' },
+            classificationCodes: { type: 'array', description: 'Vendor classification codes, tried in order, e.g. [{ "system": "hs", "code": "610910" }].', items: { type: 'object', properties: { system: { type: 'string' }, code: { type: 'string' } }, required: ['system', 'code'] } },
+            productCode: { type: 'string', description: 'Catalogue product code; resolved through the catalogue ladder for its stored commodity code and origin.' },
+            sku: { type: 'string', description: 'Alias of productCode.' },
+            taxCategory: { type: 'string', description: 'Tax category slug, used as a category-level proxy when no code resolves (lower precision).' },
+            slug: { type: 'string', description: 'Alias of taxCategory.' },
+            productName: { type: 'string', description: 'Display name; also feeds classification when no code is given.' },
+            countryOfOrigin: { type: 'string', description: 'ISO 3166-1 alpha-2 country of origin. Never inferred from shipFrom; a missing origin lowers precision.' },
+            unitPrice: { type: 'number', description: 'Price of one unit, excluding tax. Use this or amount.' },
+            quantity: { type: 'number', description: 'Units; the line total is unitPrice x quantity (1 when omitted).' },
+            amount: { type: 'number', description: 'Line total excluding tax. Use this or unitPrice.' },
+            weight: { type: 'object', description: 'Per-UNIT weight.', properties: { value: { type: 'number' }, unit: { type: 'string', enum: ['kg', 'g', 'lb', 'oz'] } }, required: ['value', 'unit'] },
+          },
+        },
+        shipFrom: { type: 'object', description: 'Dispatch address: country (required for duties), optional postalCode and customsStatus (free_circulation or bonded).', properties: { country: { type: 'string' }, postalCode: { type: 'string' }, customsStatus: { type: 'string', enum: ['free_circulation', 'bonded'] } } },
+        incoterms: { type: 'string', enum: ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'] },
+        importerOfRecord: { type: 'string', enum: ['SELLER', 'BUYER'] },
+        insurance: { type: 'object', properties: { amount: { type: 'number' }, currency: { type: 'string' } }, required: ['amount'] },
+        freight: { type: 'object', description: 'Freight charged to the destination, in the request currency.', properties: { amount: { type: 'number' } }, required: ['amount'] },
+        duties: { type: 'object', description: 'Optional estimate policy.', properties: { defaultCountryOfOrigin: { type: 'string' }, ratePolicyForHs6: { type: 'string', enum: ['modal', 'highest'] } } },
+        destinations: {
+          type: 'array', description: 'Up to 20 destinations (no repeats).', maxItems: 20,
+          items: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2.' }, region: { type: 'string', description: 'State/province (required for a US destination).' }, postalCode: { type: 'string' } }, required: ['country'] },
+        },
+      },
+      required: ['currency', 'product', 'destinations'],
+    },
+  },
+  {
+    name: 'record_import_settlement',
+    description:
+      'Record what customs / the carrier ACTUALLY charged after clearance for a committed calculation that carries a duties block ' +
+      '(POST /v1/tax/calculate/{id}/import-settlement). Send the entryNumber and actual { duty, importTax, fees, currency } from the entry or the carrier\'s duty-and-tax invoice; ' +
+      'consignmentId is only needed when the calculation has more than one quoted consignment. actual.currency must equal the calculation\'s currency (no conversion is done; 422 otherwise). ' +
+      'The settlement is stored append-only next to the estimate, with the variance computed server-side: estimated vs actual, variance amount and percent per component, and withinEstimate (true when the actual total did not exceed the estimate). ' +
+      'Idempotent on (calculation, consignment, entryNumber): replaying the same actuals returns the stored settlement with replayed true; different actuals for the same entry are 409 (record a correction under a new entryNumber). ' +
+      'It stores facts only: it never changes the calculation or the entity\'s tax obligations. 404 if the calculation is not found for this entity; 422 if it is a credit note, not committed, has no quoted duties block, or the currency differs.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'The committed calculation id (cl_calc_...).' },
+        entryNumber: { type: 'string', description: 'The customs entry / declaration number (the idempotency key together with the calculation and consignment).' },
+        entryDate: { type: 'string', description: 'Entry date, YYYY-MM-DD.' },
+        consignmentId: { type: 'string', description: 'The consignment id from the calculation\'s duties block (e.g. "c1"); optional when there is exactly one quoted consignment.' },
+        actual: {
+          type: 'object', description: 'What was actually charged.',
+          properties: { duty: { type: 'number' }, importTax: { type: 'number', description: 'Actual import VAT/GST.' }, fees: { type: 'number', description: 'Actual customs/authority fees.' }, currency: { type: 'string', description: 'Must equal the calculation currency.' } },
+          required: ['duty', 'importTax', 'fees', 'currency'],
+        },
+        lines: { type: 'array', description: 'Optional per-line actual duty.', items: { type: 'object', properties: { lineId: { type: 'string' }, duty: { type: 'number' } }, required: ['lineId', 'duty'] } },
+        notes: { type: 'string', description: 'Free text, max 1000 characters.' },
+      },
+      required: ['calculationId', 'entryNumber', 'actual'],
+    },
+  },
+  {
+    name: 'get_import_settlement',
+    description:
+      'List the import settlements recorded against a calculation and a summary (GET /v1/tax/calculate/{id}/import-settlement): each settlement with estimated vs actual duty, import tax and fees, ' +
+      'variance amount and percent, and withinEstimate; the summary totals estimated vs actual and the variance per currency. 404 if the calculation is not found for this entity.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { calculationId: { type: 'string', description: 'The calculation id (cl_calc_...).' } },
+      required: ['calculationId'],
+    },
+  },
+  {
     name: 'validate_tax_number',
     description:
       'Validate a business tax number against the official authority for that country. ' +
@@ -3252,6 +3340,21 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'quote_duties':
       // Stateless estimate: nothing is recorded and no idempotency key is read.
       return callApi('POST', '/duties/quote', args);
+
+    case 'estimate_duties':
+      // One product x up to 20 destinations: nothing is recorded, no calculation id.
+      return callApi('POST', '/duties/estimate', args);
+
+    case 'record_import_settlement': {
+      // Append-only facts; idempotent on calculation + consignment + entryNumber. Never changes the calculation or tax.
+      const { calculationId, ...body } = args as { calculationId: string } & Record<string, unknown>;
+      return callApi('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, body);
+    }
+
+    case 'get_import_settlement': {
+      const { calculationId } = args as { calculationId: string };
+      return callApi('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`);
+    }
 
     case 'validate_tax_number': {
       const { country, taxNumber, registryType, force } = args as { country: string; taxNumber: string; registryType?: string; force?: boolean };

@@ -22,7 +22,7 @@ const SERVER = path.join(ROOT, 'dist', 'index.js');
 const SOURCE = path.join(ROOT, 'src', 'index.ts');
 
 // POST-verb tools that never write (verified against their routes).
-const READ_ONLY_POST_EXCEPTIONS = new Set(['query_data', 'simulate_rule', 'quote_duties']);
+const READ_ONLY_POST_EXCEPTIONS = new Set(['query_data', 'simulate_rule', 'quote_duties', 'estimate_duties']);
 
 // GET-dispatched tools whose route nevertheless writes (poll_status updates einvoicing_records and live-polls authorities).
 const GET_THAT_WRITES = new Set(['poll_status']);

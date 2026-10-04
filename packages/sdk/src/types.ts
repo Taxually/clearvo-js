@@ -3770,3 +3770,184 @@ export interface DutiesResult {
 export type QuoteDutiesInput = Omit<TaxCalculateRequest, 'commit' | 'idempotencyKey' | 'transactionDirection' | 'documentStage' | 'duties'> & {
   duties?: Omit<DutiesRequest, 'include'> & { include?: true };
 };
+
+// ── Duties estimate and import settlement ─────────────────────────────────────
+
+/** One product's identity and price for `estimateDuties()`. Identify it with at least one of `commodityCode`, `classificationCodes`, `productCode`/`sku`, `taxCategory`/`slug`; price it with `unitPrice` (times `quantity`) or `amount`. */
+export interface DutiesEstimateProductInput {
+  commodityCode?: string;
+  /** Scheme of `commodityCode`; inferred from its length when omitted. */
+  commodityCodeScheme?: DutyCodeScheme;
+  classificationCodes?: Array<{ system: string; code: string }>;
+  /** Catalogue product code: its stored commodity code and origin are used when the request carries none. */
+  productCode?: string;
+  /** Alias of `productCode`. */
+  sku?: string;
+  /** Tax category slug: a category-level proxy when no code resolves (lower precision). */
+  taxCategory?: string;
+  /** Alias of `taxCategory`. */
+  slug?: string;
+  productName?: string;
+  /** ISO 3166-1 alpha-2. Never inferred from `shipFrom`; a missing origin lowers precision. */
+  countryOfOrigin?: string;
+  /** Price of one unit, excluding tax. Use this or `amount`. */
+  unitPrice?: number;
+  quantity?: number;
+  /** Line total, excluding tax. Use this or `unitPrice`. */
+  amount?: number;
+  /** Per-UNIT weight. */
+  weight?: { value: number; unit: 'kg' | 'g' | 'lb' | 'oz' };
+}
+
+export interface DutiesEstimateDestinationInput {
+  country: string;
+  /** State or province; required for a US destination. */
+  region?: string;
+  postalCode?: string;
+}
+
+/** Body of `estimateDuties()` (POST /v1/duties/estimate): one product priced across up to 20 destinations. Unknown fields are rejected with 422. */
+export interface EstimateDutiesInput {
+  /** ISO 4217. The price, freight and insurance are in it and every amount returned is in it. */
+  currency: string;
+  product: DutiesEstimateProductInput;
+  shipFrom?: TaxCalcShipFrom;
+  incoterms?: 'EXW' | 'FCA' | 'FAS' | 'FOB' | 'CFR' | 'CIF' | 'CPT' | 'CIP' | 'DAP' | 'DPU' | 'DDP';
+  importerOfRecord?: 'SELLER' | 'BUYER';
+  insurance?: { amount: number; currency?: string };
+  /** Freight charged to the destination, in the request currency. */
+  freight?: { amount: number };
+  duties?: { defaultCountryOfOrigin?: string; ratePolicyForHs6?: 'modal' | 'highest' };
+  /** 1 to 20 destinations, without repeats. */
+  destinations: DutiesEstimateDestinationInput[];
+  /** partner_calc keys only (required there). */
+  supplier?: TaxCalcPartyInput;
+  /** partner_calc keys only (required there). */
+  sellerRegistrationContext?: Record<string, unknown>;
+  /** partner_calc keys only (required there). */
+  partnerMerchantId?: string;
+}
+
+/** What the product resolved to; taken from the first destination that produced a duty for it. */
+export interface DutiesEstimateProduct {
+  commodityCode: string | null;
+  scheme: string | null;
+  codeSource: DutyCodeSource;
+  precision: DutyPrecision | null;
+  countryOfOrigin: string | null;
+  originSource: DutyOriginSource | null;
+}
+
+/**
+ * One destination's estimate. `duties`, `consignments` and `summary` are exactly what `quoteDuties()` returns for the
+ * one-line cart. `status` `degraded` never fails the call: `reason` `destination_rejected` carries an `error`.
+ */
+export interface DutiesEstimateDestination {
+  destination: DutiesEstimateDestinationInput;
+  status: 'quoted' | 'degraded' | 'not_applicable';
+  /** Present unless `status` is `quoted`. */
+  reason?: string;
+  error?: string;
+  duties: DutiesBlock;
+  consignments?: DutyConsignment[];
+  /** The product line's duty. */
+  duty?: LineDuty;
+  summary?: Partial<DutiesSummary>;
+}
+
+export interface DutiesEstimateResult {
+  currency: string;
+  product: DutiesEstimateProduct;
+  /** In request order. */
+  destinations: DutiesEstimateDestination[];
+}
+
+/** Body of `recordImportSettlement()`: what customs or the carrier actually charged after clearance. */
+export interface ImportSettlementInput {
+  /** The customs entry or declaration number; with the calculation and consignment it is the idempotency key. */
+  entryNumber: string;
+  /** YYYY-MM-DD. */
+  entryDate?: string;
+  /** A consignment id from the calculation's duties block; optional when exactly one consignment was quoted. */
+  consignmentId?: string;
+  actual: {
+    duty: number;
+    /** Actual import VAT or GST. */
+    importTax: number;
+    /** Actual customs and authority fees. */
+    fees: number;
+    /** Must equal the calculation's currency. No conversion is performed. */
+    currency: string;
+  };
+  /** Per-line actual duty; each `lineId` must be a duty line of the consignment. */
+  lines?: Array<{ lineId: string; duty: number }>;
+  notes?: string;
+}
+
+export interface ImportSettlementAmounts { duty: number; importTax: number; fees: number; total: number }
+export interface ImportSettlementVarianceComponent {
+  /** actual minus estimated; positive means customs charged more. */
+  amount: number;
+  /** amount / estimate * 100; null when the estimate was 0. */
+  percent: number | null;
+}
+
+/** A stored settlement. Facts only: it never changes the calculation, its tax or the entity's tax obligations. */
+export interface ImportSettlement {
+  id: string;
+  calculationId: string;
+  consignmentId: string;
+  entryNumber: string;
+  entryDate: string | null;
+  currency: string;
+  destinationTerritory: string | null;
+  precisionAtQuote: string | null;
+  estimated: ImportSettlementAmounts;
+  actual: ImportSettlementAmounts;
+  variance: { duty: ImportSettlementVarianceComponent; importTax: ImportSettlementVarianceComponent; fees: ImportSettlementVarianceComponent; total: ImportSettlementVarianceComponent };
+  /** True when the actual total did not exceed the estimated total. */
+  withinEstimate: boolean;
+  lines?: Array<{ lineId: string; estimatedDuty: number; actualDuty: number; varianceDuty: number; variancePct: number | null }>;
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface ImportSettlementResult {
+  settlement: ImportSettlement;
+  /** True when the same entry was already recorded with the same actuals and the stored settlement is returned. */
+  replayed: boolean;
+}
+
+export interface ImportSettlementList {
+  calculationId: string;
+  currency: string | null;
+  settlements: ImportSettlement[];
+  summary: {
+    count: number;
+    /** Amounts are never added across currencies. */
+    byCurrency: Array<{ currency: string; count: number; estimated: number; actual: number; variance: number; variancePercent: number | null; withinEstimateCount: number }>;
+  };
+}
+
+export interface ImportSettlementVarianceParams {
+  /** YYYY-MM-DD, on the entry date. */
+  from?: string;
+  to?: string;
+  /** Destination customs territory id, e.g. `EU`, `GB`, `US`. */
+  destination?: string;
+  /** Precision tier at quote time, e.g. `TARIFF_LINE`. */
+  precision?: string;
+}
+
+export interface ImportSettlementVariance {
+  filters: { from: string | null; to: string | null; destination: string | null; precision: string | null };
+  groups: Array<{
+    destinationTerritory: string | null;
+    precision: string | null;
+    count: number;
+    withinEstimateCount: number;
+    meanVariancePercent: number | null;
+    medianVariancePercent: number | null;
+    byCurrency: Array<{ currency: string; count: number; estimated: number; actual: number; variance: number }>;
+  }>;
+}
