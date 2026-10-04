@@ -9,6 +9,15 @@ import type {
   ListInvoicesParams,
   ListInvoicesResponse,
   TaxCalculateRequest,
+  QuoteDutiesInput,
+  DutiesResult,
+  EstimateDutiesInput,
+  DutiesEstimateResult,
+  ImportSettlementInput,
+  ImportSettlementResult,
+  ImportSettlementList,
+  ImportSettlementVarianceParams,
+  ImportSettlementVariance,
   TaxCalculateResponse,
   TaxNumberValidateResponse,
   TaxNumberBatchItem,
@@ -244,6 +253,55 @@ export class ClearvoClient {
 
   calculateTax(input: TaxCalculateRequest): Promise<TaxCalculateResponse> {
     return this.request('POST', '/tax/calculate', input);
+  }
+
+  /**
+   * Estimate import duty, import VAT/GST and customs fees for a cross-border
+   * cart without recording a calculation (POST /v1/duties/quote). Stateless:
+   * nothing is stored and no idempotency key is read. A duty failure is a 200
+   * with `duties.status: 'degraded'`, never a thrown error. Nothing in the
+   * result is tax: it is never added to `totalTax`/`totalAmountWithTax`.
+   */
+  quoteDuties(input: QuoteDutiesInput): Promise<DutiesResult> {
+    return this.request('POST', '/duties/quote', input);
+  }
+
+  /**
+   * Estimate import duty, import VAT/GST, customs fees and landed cost for ONE product across up to 20 destinations
+   * (POST /v1/duties/estimate). A pricing call: nothing is recorded, there is no calculation id, and a read-only key is
+   * enough. Same engine and estimate/precision semantics as `quoteDuties()`; each destination carries a `status`
+   * (`quoted`, `degraded` or `not_applicable`) and one bad destination never fails the call.
+   */
+  estimateDuties(input: EstimateDutiesInput): Promise<DutiesEstimateResult> {
+    return this.request('POST', '/duties/estimate', input);
+  }
+
+  /**
+   * Record what customs or the carrier actually charged after clearance for a committed calculation that carries a
+   * quoted duties block (POST /v1/tax/calculate/{id}/import-settlement). Stored append-only next to the estimate, with
+   * the variance computed server-side. Idempotent on calculation + consignment + `entryNumber`: replaying the same
+   * actuals returns the stored settlement (`replayed: true`); different actuals for the same entry throw a 409
+   * `settlement_conflict`. `actual.currency` must equal the calculation's currency (422 `currency_mismatch`). Stores
+   * facts only: it never changes the calculation or the entity's tax obligations.
+   */
+  recordImportSettlement(calculationId: string, input: ImportSettlementInput, entityId?: string): Promise<ImportSettlementResult> {
+    return this.request('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, input, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** GET /tax/calculate/{id}/import-settlement: a calculation's settlements and a per-currency summary. */
+  getImportSettlements(calculationId: string, entityId?: string): Promise<ImportSettlementList> {
+    return this.request('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** GET /duties/settlement-variance: estimate-versus-entry variance grouped by destination territory and precision tier. */
+  getImportSettlementVariance(params: ImportSettlementVarianceParams = {}, entityId?: string): Promise<ImportSettlementVariance> {
+    const qs = new URLSearchParams();
+    if (params.from)        qs.set('from', params.from);
+    if (params.to)          qs.set('to', params.to);
+    if (params.destination) qs.set('destination', params.destination);
+    if (params.precision)   qs.set('precision', params.precision);
+    const q = qs.toString();
+    return this.request('GET', `/duties/settlement-variance${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Tax Number Validation ─────────────────────────────────────────────────────

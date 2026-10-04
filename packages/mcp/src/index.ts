@@ -198,6 +198,134 @@ const CLASSIFICATION_CODES_SCHEMA = {
   },
 };
 
+// calculate_tax's input schema, hoisted so quote_duties (POST /v1/duties/quote, the same body minus commit,
+// transactionDirection and documentStage) is derived from it and can never drift from it.
+const CALCULATE_TAX_INPUT_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    currency: { type: 'string', description: 'ISO 4217 currency code' },
+    commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
+    transactionDirection: {
+      type: 'string',
+      enum: ['sale', 'purchase'],
+      description: '"sale" (default) — an outgoing transaction: the entity is the supplier, customer (the counterparty) is required. "purchase" — an incoming transaction: the entity is the customer, supplier (the counterparty, the vendor) is required. See this tool\'s own description for the full rule, including the 422 error codes for each direction.',
+    },
+    seller: {
+      type: 'object',
+      deprecated: true,
+      description: 'Deprecated alias for `supplier`, accepted on a transactionDirection: "sale" calculation only (normalised to supplier before validation runs). Use `supplier` directly instead. Rejected with 422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE when sent alongside transactionDirection: "purchase".',
+      properties: {
+        address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
+        taxId: { type: 'string', description: 'Seller VAT number' },
+      },
+      required: ['address'],
+    },
+    supplier: {
+      type: 'object',
+      description: 'The supplier party. Required when transactionDirection is "purchase" — the actual vendor on the purchase invoice (422 SUPPLIER_REQUIRED if missing); only taxId and billingAddress.country are meaningful there. Optional when transactionDirection is "sale" or omitted — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 SUPPLIER_TAX_ID_MISMATCH on a mismatch). `ref` on a purchase resolves saved supplier master data (see list_suppliers/create_supplier), filling in name/taxId/address — unlike customer.ref on a sale, which does not resolve customer master data (see customer.ref\'s own description).',
+      properties: {
+        name: { type: 'string', description: 'Free-text display name. Accepted but unused for supplier resolution.' },
+        taxId: { type: 'string', description: 'Supplier VAT or tax ID — used to determine cross-border reverse-charge/import treatment on a purchase, or validated against the entity\'s own registration when supplier is the entity side on a sale.' },
+        ref: { type: 'string', description: 'Your own reference for this supplier (e.g. ERP vendor id). On a purchase, resolves saved supplier master data — see list_suppliers/create_supplier — filling in any of name/taxId/address you omit here. Ignored when supplier is the entity side (a sale).' },
+        billingAddress: {
+          type: 'object',
+          description: 'The supplier\'s own country/address — the real dispatch/origin signal for cross-border purchase treatment.',
+          properties: {
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code, when relevant.' },
+            postalCode: { type: 'string' },
+          },
+          required: ['country'],
+        },
+      },
+    },
+    customer: {
+      type: 'object',
+      description: 'The customer party. Required when transactionDirection is "sale" or omitted — the counterparty on a sale (422 CUSTOMER_REQUIRED if missing). Optional when transactionDirection is "purchase" — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch).',
+      properties: {
+        b2bOverride: { type: 'boolean', description: 'Set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the buyer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied.' },
+        taxId: { type: 'string', description: 'Customer VAT number — triggers B2B reverse charge or zero-rating for cross-border sales' },
+        ref: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP id). Unlike supplier.ref on a purchase, this does NOT resolve saved customer master data (name/taxId/address are not filled in). Its only effect: when the transaction\'s jurisdiction is the US and this entity uses Exemption Certificate Management (ECM), Clearvo looks up an active exemption certificate on file for this ref and auto-applies it. No effect outside the US or with no matching certificate.' },
+        billingAddress: {
+          type: 'object',
+          properties: {
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX"). Optional but recommended for Canada.' },
+            postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
+          },
+          required: ['country'],
+        },
+      },
+    },
+    shipFrom: {
+      type: 'object',
+      description: 'Where the goods are dispatched from. With duties on, a dispatch place in a different customs territory from the destination makes the consignment a customs crossing; a line-level shipFrom overrides it for that line (a second warehouse is a second consignment). customsStatus "bonded" marks stock held under customs control, so leaving it is a crossing even within one territory.',
+      properties: {
+        line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
+        region: { type: 'string', description: 'State/region code, e.g. "TX"' },
+        postalCode: { type: 'string' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+        customsStatus: { type: 'string', enum: ['free_circulation', 'bonded'], description: 'Default free_circulation.' },
+      },
+      required: ['country'],
+    },
+    insurance: {
+      type: 'object',
+      description: 'Consignment insurance, a customs-value component where the destination values goods CIF. Duties only; ignored otherwise.',
+      properties: {
+        amount: { type: 'number', description: 'Non-negative.' },
+        currency: { type: 'string', description: 'Defaults to the transaction currency; converted with the static FX table when different.' },
+      },
+      required: ['amount'],
+    },
+    duties: {
+      type: 'object',
+      description: 'Estimated import duty, import VAT/GST and customs fees for a cross-border consignment. Never included in totalTax/totalAmountWithTax; see summary.importChargesAtCheckout for the one amount a checkout may add, and summary.totalAmountDue (present only alongside it) for the amount to charge. A duty failure never sets degraded: read the response duties.status (quoted, not_applicable, degraded, disabled). include overrides the account/entity dutiesEnabled setting either way; a deposit can only be collected when include is true.',
+      properties: {
+        include: { type: 'boolean', description: 'true quotes duties on this call; false suppresses them even when dutiesEnabled is on.' },
+        collectDeposit: { type: 'boolean', description: 'true asks for the estimated import charges to be collected from the buyer at checkout. Honoured only when the buyer is the importer of record by an explicit request, incoterms or entity default, the code precision is good enough and no measure family went unevaluated; the consignment says why when it is not (collection.reason). Requires include: true.' },
+        defaultCountryOfOrigin: { type: 'string', description: 'Two-letter origin for lines that name none; overrides the setting for this call.' },
+        ratePolicyForHs6: { type: 'string', enum: ['modal', 'highest'], description: 'Estimates only; a collected deposit always uses the highest rate.' },
+      },
+      required: ['include'],
+    },
+    incoterms: { type: 'string', enum: ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'], description: 'Incoterms 2020 rule. Does not gate IOSS eligibility. On a B2C cross-border goods sale with no value-threshold scheme, DDP (seller imports) leaves tax unchanged and any other rule (buyer imports) makes the line out of scope (taxCode O, tax 0). With duties on it also decides who is responsible for the import charges: DDP is the seller, any other rule the buyer.' },
+    importerOfRecord: { type: 'string', enum: ['SELLER', 'BUYER'], description: 'Explicit importer of record on a customs-crossing shipment; wins over incoterms. With duties on it decides who bears the import charges and whether they can be collected at checkout.' },
+    lineItems: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Your line item ID' },
+          amount: { type: 'number', description: 'Line total in the transaction currency. Supply either amount, or unitPrice with quantity — not both.' },
+          unitPrice: { type: 'number', description: 'Per-unit price in the transaction currency. Alternative to amount: the line total is computed as unitPrice × quantity (rounded once), so you do not pre-multiply and absorb per-unit rounding. Requires quantity. Supply either amount, or unitPrice with quantity — not both.' },
+          quantity: { type: 'number', description: 'Number of units. Required when unitPrice is supplied (the two define the line total); informational when amount is supplied directly.' },
+          productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
+          productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
+          taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
+          classificationCodes: CLASSIFICATION_CODES_SCHEMA,
+          taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
+          commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff; for rate-band lookup, matching is jurisdiction-scoped by the line\'s own resolved country; with duties on, this is the code the duty is priced at, see commodityCodeScheme). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
+          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block). Not the AP fact customProperties.commodityCodeScheme.' },
+          countryOfOrigin: { type: 'string', description: 'Two-letter country the goods were made in, read only when duties are on. Never inferred from shipFrom. Falls back to the product catalogue, then defaultCountryOfOrigin.' },
+          weight: {
+            type: 'object',
+            description: 'Weight of ONE unit, for specific (per-kg) duty rates; the line weight is value x quantity.',
+            properties: { value: { type: 'number' }, unit: { type: 'string', enum: ['kg', 'g', 'lb', 'oz'] } },
+            required: ['value', 'unit'],
+          },
+          exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
+          exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
+        },
+        required: ['id', 'productName'],
+      },
+    },
+  },
+  required: ['currency', 'lineItems'],
+};
+
+const { commit: _quoteOmitCommit, transactionDirection: _quoteOmitDirection, documentStage: _quoteOmitStage, ...QUOTE_DUTIES_PROPERTIES } = CALCULATE_TAX_INPUT_SCHEMA.properties as Record<string, unknown>;
+
 const TOOLS = [
   {
     name: 'submit_invoice',
@@ -672,6 +800,9 @@ const TOOLS = [
       'to classify it from an external catalogue instead of by name; the response reports classificationSource "CODE_MAP". ' +
       'Each line item can also carry taxTreatmentOverride (force a rate band) or commodityCode (tariff-driven ' +
       'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain. ' +
+      'Duties (estimated import duty, import VAT/GST and customs fees for a cross-border consignment) are opt-in: pass duties.include true (or enable the account setting dutiesEnabled via update_tax_settings), and send commodityCode, countryOfOrigin and weight per line to tighten the estimate. ' +
+      'The response then carries duties (status quoted, not_applicable, degraded or disabled), consignments, lineItems[].duty and summary duty fields. Duties are never included in totalTax/totalAmountWithTax; summary.importChargesAtCheckout is the one amount a checkout may add, and summary.totalAmountDue (present only alongside it) is totalAmountWithTax plus that amount. Every figure is an estimate and a duty failure never changes the tax figures; to price a cart without recording it use quote_duties. ' +
+      'On an IOSS-treated calculation the response also carries customsDuty (the EUR 3 per-item duty on low-value consignments, includedInTotals false, owed by the IOSS holder); it is the same fee that appears in the consignment duty when duties are requested, so never add the two together. ' +
       'Direction rule (transactionDirection, default "sale"): on a sale, the entity is the supplier and the ' +
       'counterparty goes in customer, which is REQUIRED (422 CUSTOMER_REQUIRED if omitted) — supplier is optional ' +
       'and auto-filled from your entity\'s own master data, validated against it if you do supply it (422 ' +
@@ -682,86 +813,113 @@ const TOOLS = [
       'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
       'which block is your own entity.',
+    inputSchema: CALCULATE_TAX_INPUT_SCHEMA,
+  },
+  {
+    name: 'quote_duties',
+    description:
+      'Estimate import duty, import VAT/GST and customs fees for a cross-border cart WITHOUT committing a calculation ' +
+      '(POST /v1/duties/quote). Takes the calculate_tax body minus commit, transactionDirection and documentStage; ' +
+      'duties are always included, nothing is recorded, and no idempotency key is needed. Use it to show landed cost ' +
+      'before checkout. Returns currency, duties (status quoted, not_applicable or degraded, with a reason when not quoted), ' +
+      'consignments, lineItems[].duty and a summary (totalDuty, totalImportTax, totalImportFees, totalLandedCost, ' +
+      'sellerBorneImportCosts, and importChargesAtCheckout/totalAmountDue when the buyer pays at checkout). Nothing in it is tax: ' +
+      'it is never added to totalTax/totalAmountWithTax. It is an estimate: ' +
+      'read each consignment\'s estimate/estimateReasons and a line\'s missingInputs, and send commodityCode, countryOfOrigin and weight to tighten it. ' +
+      'A duty failure is a 200 with duties.status "degraded", never an error. Fails closed with HTTP 503 code "tax_content_unavailable" when tax content is temporarily unavailable; retry after Retry-After. ' +
+      'To record the calculation, call calculate_tax with the same body and duties.include true.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: QUOTE_DUTIES_PROPERTIES,
+      required: ['currency', 'lineItems'],
+    },
+  },
+  {
+    name: 'estimate_duties',
+    description:
+      'Estimate import duty, import VAT/GST, customs fees and landed cost for ONE product shipped to up to 20 destinations, ' +
+      'without committing anything (POST /v1/duties/estimate). A pricing call: use it to set delivered-duty-paid prices per market ' +
+      'or to answer "what would it cost to sell this into Australia". Identify the product with product.commodityCode (+ commodityCodeScheme), ' +
+      'product.classificationCodes, product.productCode/sku (resolved through the catalogue) or product.taxCategory/slug; give product.countryOfOrigin, ' +
+      'a price (product.unitPrice with an optional quantity, or product.amount), the currency and shipFrom.country. Optional: weight, incoterms, importerOfRecord, ' +
+      'insurance, freight. Nothing is stored and no key permission beyond read is needed. ' +
+      'Returns product (the resolved commodityCode, scheme, codeSource and precision) and destinations[]: per destination a status (quoted, degraded or not_applicable, with a reason), ' +
+      'the same duties, consignments (duty, importTax, fees, landedCost, precision, estimate, responsibleParty) and summary blocks quote_duties returns for a one-line cart, plus the product line\'s duty. ' +
+      'One bad destination is a degraded entry, never a failed call. It is an estimate: read each consignment\'s estimate/estimateReasons and the duty\'s missingInputs. ' +
+      'Fails closed with HTTP 503 code "tax_content_unavailable" when tax content is temporarily unavailable; retry after Retry-After.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        currency: { type: 'string', description: 'ISO 4217 currency code' },
-        commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
-        transactionDirection: {
-          type: 'string',
-          enum: ['sale', 'purchase'],
-          description: '"sale" (default) — an outgoing transaction: the entity is the supplier, customer (the counterparty) is required. "purchase" — an incoming transaction: the entity is the customer, supplier (the counterparty, the vendor) is required. See this tool\'s own description for the full rule, including the 422 error codes for each direction.',
-        },
-        seller: {
+        currency: { type: 'string', description: 'ISO 4217 currency of the price, freight and insurance, and of every amount returned.' },
+        product: {
           type: 'object',
-          deprecated: true,
-          description: 'Deprecated alias for `supplier`, accepted on a transactionDirection: "sale" calculation only (normalised to supplier before validation runs). Use `supplier` directly instead. Rejected with 422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE when sent alongside transactionDirection: "purchase".',
+          description: 'The product. Identify it with at least one of commodityCode, classificationCodes, productCode/sku, taxCategory/slug; price it with unitPrice (and quantity) or amount.',
           properties: {
-            address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
-            taxId: { type: 'string', description: 'Seller VAT number' },
-          },
-          required: ['address'],
-        },
-        supplier: {
-          type: 'object',
-          description: 'The supplier party. Required when transactionDirection is "purchase" — the actual vendor on the purchase invoice (422 SUPPLIER_REQUIRED if missing); only taxId and billingAddress.country are meaningful there. Optional when transactionDirection is "sale" or omitted — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 SUPPLIER_TAX_ID_MISMATCH on a mismatch). `ref` on a purchase resolves saved supplier master data (see list_suppliers/create_supplier), filling in name/taxId/address — unlike customer.ref on a sale, which does not resolve customer master data (see customer.ref\'s own description).',
-          properties: {
-            name: { type: 'string', description: 'Free-text display name. Accepted but unused for supplier resolution.' },
-            taxId: { type: 'string', description: 'Supplier VAT or tax ID — used to determine cross-border reverse-charge/import treatment on a purchase, or validated against the entity\'s own registration when supplier is the entity side on a sale.' },
-            ref: { type: 'string', description: 'Your own reference for this supplier (e.g. ERP vendor id). On a purchase, resolves saved supplier master data — see list_suppliers/create_supplier — filling in any of name/taxId/address you omit here. Ignored when supplier is the entity side (a sale).' },
-            billingAddress: {
-              type: 'object',
-              description: 'The supplier\'s own country/address — the real dispatch/origin signal for cross-border purchase treatment.',
-              properties: {
-                country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
-                region: { type: 'string', description: 'State/province code, when relevant.' },
-                postalCode: { type: 'string' },
-              },
-              required: ['country'],
-            },
+            commodityCode: { type: 'string', description: 'HS/CN/TARIC/HTS code, e.g. "610910".' },
+            commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of commodityCode; inferred from its length when omitted.' },
+            classificationCodes: { type: 'array', description: 'Vendor classification codes, tried in order, e.g. [{ "system": "hs", "code": "610910" }].', items: { type: 'object', properties: { system: { type: 'string' }, code: { type: 'string' } }, required: ['system', 'code'] } },
+            productCode: { type: 'string', description: 'Catalogue product code; resolved through the catalogue ladder for its stored commodity code and origin.' },
+            sku: { type: 'string', description: 'Alias of productCode.' },
+            taxCategory: { type: 'string', description: 'Tax category slug, used as a category-level proxy when no code resolves (lower precision).' },
+            slug: { type: 'string', description: 'Alias of taxCategory.' },
+            productName: { type: 'string', description: 'Display name; also feeds classification when no code is given.' },
+            countryOfOrigin: { type: 'string', description: 'ISO 3166-1 alpha-2 country of origin. Never inferred from shipFrom; a missing origin lowers precision.' },
+            unitPrice: { type: 'number', description: 'Price of one unit, excluding tax. Use this or amount.' },
+            quantity: { type: 'number', description: 'Units; the line total is unitPrice x quantity (1 when omitted).' },
+            amount: { type: 'number', description: 'Line total excluding tax. Use this or unitPrice.' },
+            weight: { type: 'object', description: 'Per-UNIT weight.', properties: { value: { type: 'number' }, unit: { type: 'string', enum: ['kg', 'g', 'lb', 'oz'] } }, required: ['value', 'unit'] },
           },
         },
-        customer: {
-          type: 'object',
-          description: 'The customer party. Required when transactionDirection is "sale" or omitted — the counterparty on a sale (422 CUSTOMER_REQUIRED if missing). Optional when transactionDirection is "purchase" — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch).',
-          properties: {
-            b2bOverride: { type: 'boolean', description: 'Set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the buyer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied.' },
-            taxId: { type: 'string', description: 'Customer VAT number — triggers B2B reverse charge or zero-rating for cross-border sales' },
-            ref: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP id). Unlike supplier.ref on a purchase, this does NOT resolve saved customer master data (name/taxId/address are not filled in). Its only effect: when the transaction\'s jurisdiction is the US and this entity uses Exemption Certificate Management (ECM), Clearvo looks up an active exemption certificate on file for this ref and auto-applies it. No effect outside the US or with no matching certificate.' },
-            billingAddress: {
-              type: 'object',
-              properties: {
-                country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
-                region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX"). Optional but recommended for Canada.' },
-                postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
-              },
-              required: ['country'],
-            },
-          },
-        },
-        lineItems: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string', description: 'Your line item ID' },
-              amount: { type: 'number', description: 'Line total in the transaction currency. Supply either amount, or unitPrice with quantity — not both.' },
-              unitPrice: { type: 'number', description: 'Per-unit price in the transaction currency. Alternative to amount: the line total is computed as unitPrice × quantity (rounded once), so you do not pre-multiply and absorb per-unit rounding. Requires quantity. Supply either amount, or unitPrice with quantity — not both.' },
-              quantity: { type: 'number', description: 'Number of units. Required when unitPrice is supplied (the two define the line total); informational when amount is supplied directly.' },
-              productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
-              productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
-              taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
-              classificationCodes: CLASSIFICATION_CODES_SCHEMA,
-              taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
-              commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff — no separate scheme field needed, matching is jurisdiction-scoped by the line\'s own resolved country). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
-              exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
-              exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
-            },
-            required: ['id', 'productName'],
-          },
+        shipFrom: { type: 'object', description: 'Dispatch address: country (required for duties), optional postalCode and customsStatus (free_circulation or bonded).', properties: { country: { type: 'string' }, postalCode: { type: 'string' }, customsStatus: { type: 'string', enum: ['free_circulation', 'bonded'] } } },
+        incoterms: { type: 'string', enum: ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'] },
+        importerOfRecord: { type: 'string', enum: ['SELLER', 'BUYER'] },
+        insurance: { type: 'object', properties: { amount: { type: 'number' }, currency: { type: 'string' } }, required: ['amount'] },
+        freight: { type: 'object', description: 'Freight charged to the destination, in the request currency.', properties: { amount: { type: 'number' } }, required: ['amount'] },
+        duties: { type: 'object', description: 'Optional estimate policy.', properties: { defaultCountryOfOrigin: { type: 'string' }, ratePolicyForHs6: { type: 'string', enum: ['modal', 'highest'] } } },
+        destinations: {
+          type: 'array', description: 'Up to 20 destinations (no repeats).', maxItems: 20,
+          items: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2.' }, region: { type: 'string', description: 'State/province (required for a US destination).' }, postalCode: { type: 'string' } }, required: ['country'] },
         },
       },
-      required: ['currency', 'lineItems'],
+      required: ['currency', 'product', 'destinations'],
+    },
+  },
+  {
+    name: 'record_import_settlement',
+    description:
+      'Record what customs / the carrier ACTUALLY charged after clearance for a committed calculation that carries a duties block ' +
+      '(POST /v1/tax/calculate/{id}/import-settlement). Send the entryNumber and actual { duty, importTax, fees, currency } from the entry or the carrier\'s duty-and-tax invoice; ' +
+      'consignmentId is only needed when the calculation has more than one quoted consignment. actual.currency must equal the calculation\'s currency (no conversion is done; 422 otherwise). ' +
+      'The settlement is stored append-only next to the estimate, with the variance computed server-side: estimated vs actual, variance amount and percent per component, and withinEstimate (true when the actual total did not exceed the estimate). ' +
+      'Idempotent on (calculation, consignment, entryNumber): replaying the same actuals returns the stored settlement with replayed true; different actuals for the same entry are 409 (record a correction under a new entryNumber). ' +
+      'It stores facts only: it never changes the calculation or the entity\'s tax obligations. 404 if the calculation is not found for this entity; 422 if it is a credit note, not committed, has no quoted duties block, or the currency differs.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'The committed calculation id (cl_calc_...).' },
+        entryNumber: { type: 'string', description: 'The customs entry / declaration number (the idempotency key together with the calculation and consignment).' },
+        entryDate: { type: 'string', description: 'Entry date, YYYY-MM-DD.' },
+        consignmentId: { type: 'string', description: 'The consignment id from the calculation\'s duties block (e.g. "c1"); optional when there is exactly one quoted consignment.' },
+        actual: {
+          type: 'object', description: 'What was actually charged.',
+          properties: { duty: { type: 'number' }, importTax: { type: 'number', description: 'Actual import VAT/GST.' }, fees: { type: 'number', description: 'Actual customs/authority fees.' }, currency: { type: 'string', description: 'Must equal the calculation currency.' } },
+          required: ['duty', 'importTax', 'fees', 'currency'],
+        },
+        lines: { type: 'array', description: 'Optional per-line actual duty.', items: { type: 'object', properties: { lineId: { type: 'string' }, duty: { type: 'number' } }, required: ['lineId', 'duty'] } },
+        notes: { type: 'string', description: 'Free text, max 1000 characters.' },
+      },
+      required: ['calculationId', 'entryNumber', 'actual'],
+    },
+  },
+  {
+    name: 'get_import_settlement',
+    description:
+      'List the import settlements recorded against a calculation and a summary (GET /v1/tax/calculate/{id}/import-settlement): each settlement with estimated vs actual duty, import tax and fees, ' +
+      'variance amount and percent, and withinEstimate; the summary totals estimated vs actual and the variance per currency. 404 if the calculation is not found for this entity.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { calculationId: { type: 'string', description: 'The calculation id (cl_calc_...).' } },
+      required: ['calculationId'],
     },
   },
   {
@@ -1813,6 +1971,9 @@ const TOOLS = [
         defaultPriceIncludesTax: { type: 'boolean', description: 'Whether prices sent to calculate_tax already include tax (true) or are tax-exclusive (false).' },
         defaultTaxCategorySlug: { type: ['string', 'null'], description: 'RECOMMENDED to set explicitly rather than leaving unset — the tax category applied when no product name/category is supplied on a line item. Unset silently falls back to a generic physical-goods category, which mistaxes a catalogue that is mostly one non-physical type (e.g. all SaaS). Pass null to clear it back to that fallback.' },
         usAddressPrecision: { type: 'string', enum: ['rooftop', 'zip'], description: "'rooftop' resolves the full street address for the most accurate US rate (recommended); 'zip' uses ZIP code only." },
+        dutiesEnabled: { type: 'boolean', description: "Estimated import duty, import VAT/GST and customs fees on cross-border carts, returned as a separate estimate that is never added to totalTax or totalAmountWithTax. Default false; a calculate_tax request's duties.include overrides it either way." },
+        dutyRatePolicyForHs6: { type: 'string', enum: ['modal', 'highest'], description: "Which rate to show when a product code is only known to six digits and the national tariff has several rates under it: 'modal' (most common, the default) or 'highest' (conservative). Estimates only; a deposit collected from the buyer always uses the highest rate." },
+        defaultCountryOfOrigin: { type: ['string', 'null'], description: 'Two-letter country the goods are made in, used for a duty estimate when neither the line item nor the product catalogue states one. Never inferred from the ship-from address. null clears it.' },
         apTolerance: {
           type: ['object', 'null'],
           description: 'Purchase-side (AP) vendor-charged-tax verification tolerance. Set to { absoluteAmount, percent } (both non-negative), or null to clear it back to the platform default (zero tolerance).',
@@ -3196,6 +3357,25 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       // commit: false explicitly to get a preview instead.
       return callApi('POST', '/tax/calculate', args);
 
+    case 'quote_duties':
+      // Stateless estimate: nothing is recorded and no idempotency key is read.
+      return callApi('POST', '/duties/quote', args);
+
+    case 'estimate_duties':
+      // One product x up to 20 destinations: nothing is recorded, no calculation id.
+      return callApi('POST', '/duties/estimate', args);
+
+    case 'record_import_settlement': {
+      // Append-only facts; idempotent on calculation + consignment + entryNumber. Never changes the calculation or tax.
+      const { calculationId, ...body } = args as { calculationId: string } & Record<string, unknown>;
+      return callApi('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, body);
+    }
+
+    case 'get_import_settlement': {
+      const { calculationId } = args as { calculationId: string };
+      return callApi('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`);
+    }
+
     case 'validate_tax_number': {
       const { country, taxNumber, registryType, force } = args as { country: string; taxNumber: string; registryType?: string; force?: boolean };
       return callApi('POST', '/tax-numbers/validate', { countryCode: country, taxNumber, ...(registryType && { registryType }), ...(force && { force }) });
@@ -3465,8 +3645,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/tax/settings');
 
     case 'update_tax_settings': {
-      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, apTolerance, apPoDisposition, confirmed } = args;
-      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, apTolerance, apPoDisposition, confirmed });
+      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, confirmed } = args;
+      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, confirmed });
     }
 
     case 'get_reporting_obligations':
