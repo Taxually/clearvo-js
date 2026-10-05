@@ -1747,6 +1747,72 @@ export interface ListTaxCalculationsResponse {
   pagination: { page: number; limit: number; total: number };
 }
 
+// ── Calculation request ledger ───────────────────────────────────────────────
+
+export type CalculationLedgerOutcome = 'ok' | 'degraded' | 'rejected' | 'error' | 'replayed';
+
+export interface CalculationLedgerQuoteLink {
+  id: string;
+  match: 'inputs_hash' | 'transaction_ref';
+  quotesInWindow: number | null;
+  differsFromQuote: boolean | null;
+  inputsChanged: boolean | null;
+  taxDelta: number | null;
+  amountDelta: number | null;
+}
+
+export interface CalculationLedgerRow {
+  id: string;
+  createdAt: string;
+  entityId: string | null;
+  apiKeyId: string | null;
+  endpoint: 'tax_calculate' | 'tax_calculate_partner' | 'csv_import' | 'integration' | 'dashboard';
+  partnerMerchantId: string | null;
+  calculationId: string | null;
+  transactionRef: string | null;
+  committed: boolean;
+  sandbox: boolean;
+  transactionType: string | null;
+  currency: string | null;
+  lineCount: number | null;
+  origin: { country: string | null; region: string | null };
+  destination: { country: string | null; region: string | null };
+  totalAmount: number | null;
+  totalTax: number | null;
+  inputsHash: string | null;
+  resultHash: string | null;
+  degraded: boolean;
+  outcome: CalculationLedgerOutcome;
+  statusCode: number;
+  errorCode: string | null;
+  durationMs: number | null;
+  contentVersion: string | null;
+  sourceIpHash: string | null;
+  userAgentHash: string | null;
+  quote: CalculationLedgerQuoteLink | null;
+}
+
+export interface ListCalculationRequestsParams {
+  committed?: boolean;
+  differsFromQuote?: boolean;
+  outcome?: CalculationLedgerOutcome;
+  minStatus?: number;
+  endpoint?: CalculationLedgerRow['endpoint'];
+  keyId?: string;
+  from?: string;
+  to?: string;
+  summary?: 'key' | 'entity';
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ListCalculationRequestsResponse {
+  rows?: CalculationLedgerRow[];
+  nextCursor?: string | null;
+  /** Present instead of rows when `summary` is set. */
+  groups?: Array<Record<string, unknown>>;
+}
+
 // ── Tax Reporting obligations ────────────────────────────────────────────────
 
 /** Customer-toggleable reporting regimes surfaced by GET /tax/reporting-obligations. */

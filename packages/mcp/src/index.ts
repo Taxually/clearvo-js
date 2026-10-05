@@ -1863,6 +1863,31 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_calculation_requests',
+    description:
+      'List the calculation request ledger for the key\'s entity: one row per tax-calculation request, INCLUDING commit=false quotes and rejected requests (4xx/422 with an error code). ' +
+      'Each row has the endpoint, whether it committed, currency, origin/destination, total amount and tax, a hash of the tax-relevant inputs and of the result, duration, and the HTTP outcome. ' +
+      'A committed calculation also carries a quote object linking it to the last matching commit=false quote (same inputs, else same merchantRef) with differsFromQuote, inputsChanged and the tax/amount deltas. ' +
+      'Use it to monitor usage, find abandoned-cart quote volume, spot rejected requests, or verify that a final calculation matched the quote the customer saw (differsFromQuote=true). ' +
+      'Rows are kept 13 months. Pass summary=key to get per-key request counts instead of rows.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        committed: { type: 'boolean', description: 'true = committed calculations only, false = commit=false quotes only' },
+        differsFromQuote: { type: 'boolean', description: 'true = committed calculations whose tax-relevant result differs from the linked quote' },
+        outcome: { type: 'string', enum: ['ok', 'degraded', 'rejected', 'error', 'replayed'], description: 'Filter by outcome' },
+        minStatus: { type: 'number', description: 'Only rows with an HTTP status >= this (e.g. 400 for rejections)' },
+        endpoint: { type: 'string', description: 'tax_calculate, tax_calculate_partner, csv_import, integration or dashboard' },
+        keyId: { type: 'string', description: 'Filter by API key id' },
+        from: { type: 'string', description: 'ISO 8601 start (inclusive)' },
+        to: { type: 'string', description: 'ISO 8601 end (exclusive)' },
+        summary: { type: 'string', enum: ['key', 'entity'], description: 'Return per-group request counts instead of rows' },
+        limit: { type: 'number', description: 'Rows per page (default 50, max 200)' },
+        cursor: { type: 'string', description: 'nextCursor from the previous response' },
+      },
+    },
+  },
+  {
     name: 'get_query_fields',
     description:
       'Discover the allowlisted fields, operators, enum values, and limits for query_data, per dataset ' +
@@ -3698,6 +3723,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.page)     qs.set('page',     String(args.page));
       const q = qs.toString();
       return callApi('GET', `/tax/calculate${q ? `?${q}` : ''}`);
+    }
+
+    case 'list_calculation_requests': {
+      const qs = new URLSearchParams();
+      for (const k of ['committed', 'differsFromQuote', 'outcome', 'minStatus', 'endpoint', 'keyId', 'from', 'to', 'summary', 'limit', 'cursor'] as const) {
+        if (args[k] !== undefined) qs.set(k, String(args[k]));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/tax/calculation-ledger${q ? `?${q}` : ''}`);
     }
 
     case 'get_query_fields':

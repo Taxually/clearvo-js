@@ -1378,6 +1378,38 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  calculations
+    .command('requests')
+    .description('List the calculation request ledger: every calculation request incl. commit=false quotes and rejections, with quote-to-final links')
+    .option('--committed <bool>', 'true = committed only, false = quotes only')
+    .option('--differs', 'Only committed calculations whose result differs from the linked quote')
+    .option('--outcome <outcome>', 'ok | degraded | rejected | replayed')
+    .option('--min-status <code>', 'Only rows with HTTP status >= this (e.g. 400)')
+    .option('--endpoint <endpoint>', 'tax_calculate | tax_calculate_partner | csv_import | integration | dashboard')
+    .option('--key <keyId>', 'Filter by API key id')
+    .option('--from <iso>', 'ISO 8601 start (inclusive)')
+    .option('--to <iso>', 'ISO 8601 end (exclusive)')
+    .option('--summary <by>', 'key | entity: per-group counts instead of rows')
+    .option('--limit <n>', 'Rows per page', '50')
+    .option('--cursor <cursor>', 'nextCursor from the previous page')
+    .option('--entity <entityId>', 'Entity (organisation keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { committed?: string; differs?: boolean; outcome?: string; minStatus?: string; endpoint?: string; key?: string; from?: string; to?: string; summary?: string; limit: string; cursor?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams({ limit: opts.limit });
+      if (opts.committed !== undefined) qs.set('committed', opts.committed);
+      if (opts.differs)   qs.set('differsFromQuote', 'true');
+      if (opts.outcome)   qs.set('outcome', opts.outcome);
+      if (opts.minStatus) qs.set('minStatus', opts.minStatus);
+      if (opts.endpoint)  qs.set('endpoint', opts.endpoint);
+      if (opts.key)       qs.set('keyId', opts.key);
+      if (opts.from)      qs.set('from', opts.from);
+      if (opts.to)        qs.set('to', opts.to);
+      if (opts.summary)   qs.set('summary', opts.summary);
+      if (opts.cursor)    qs.set('cursor', opts.cursor);
+      const result = await api('GET', `/tax/calculation-ledger?${qs}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo query ────────────────────────────────────────────────────────────
   // Ad-hoc filtered/paginated query over einvoicing_records or tax_calculations —
   // the same engine behind the dashboard's "Explore" page. Run `query fields`
