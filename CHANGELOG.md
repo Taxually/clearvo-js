@@ -2,6 +2,17 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — Canonical Invoice v1 pass 2 S3 (payment) and S4 (totals): backend PRs 17021 and 17034 are deployed to production, so this block can be published; it is NOT published yet
+
+**BREAKING**, no aliases: the send `payment` object is now `payment.means[]` (SDK `PaymentInput`, MCP `submit_invoice`). The old names return 422 `UNKNOWN_FIELD_RENAMED` naming the replacement.
+
+- `payment.method|iban|bic|reference|mandateReference|creditorId|debitedIban` are now `payment.means[].<same name>` (an array, one entry per way of paying). Validation error paths read `payment.means[i].mandateReference` and `payment.means[i].debitedIban`.
+- `payment.terms` (string) is now `payment.terms.text`; `payment.skonto.{days,percentOff,baseAmount}` is now `payment.terms.earlyPayment.{days,percent,baseAmount}`; `payment.dueDate` is removed (use the top-level `dueDate`). `payment.prepaid` is removed from the SDK and MCP types (the backend never read it; use `prepaidAmount`).
+- SDK: new `PaymentMeansInput` and `PaymentTermsInput`; `PaymentInput` is `{ means?, terms?, installments? }`. MCP `submit_invoice` exposes `payment.means[]` only (as the backend tool does).
+- Admin invoice-content-requirements paths are `payment.means[].method|mandateReference|creditorId|debitedIban`.
+
+Totals behaviour change (input names unchanged: `statedPayableAmount`, `shipping`, `allowances`, `charges`, `prepaidAmount`): `statedPayableAmount` (now typed in the SDK) is authoritative and stored as stated; any difference from the lines-based recompute is the rounding amount (BT-114) with no cap. A gap over one minor unit is the WARNING `ROUNDING_RESIDUAL_OVER_TOLERANCE`, no longer a 422. New generator hold code `PAYABLE_AMOUNT_BR_CO_16` (invoice held when the stated amount would fail EN 16931 BR-CO-16 in the target format). The v1 invoice view always carries `totals.payableAmount`; allowance/charge entries gain `taxCode`, `taxCategory`, `taxRate`, `taxAmount`, `exemption`, `kind` (`freight`) and `carrier`; freight is a `totals.charges[]` entry; credit and debit notes use positive magnitudes. The SDK has no typed invoice-view or hold-code unions, so these are documentation only here.
+
 ## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
 
 **BREAKING**, no aliases: client tax code field `exemptionReasonText` is now `invoiceReferenceText` (SDK `ClientTaxCode`/request types, MCP `create_client_tax_code`/`update_client_tax_code`, CLI `tax-codes create|update --invoice-reference-text`, replacing `--exemption-reason-text`). Tax-calculation request `reportingCurrency` is now `taxReportingCurrency`.
