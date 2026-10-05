@@ -4,24 +4,22 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 ## Unreleased — publish only AFTER the Tax Calculation CSV bulk import backend PR has merged and deployed
 
-Backend PR: Taxually-Einvoicing `claude/tax-calc-csv-import`, `POST /v1/tax/calculate/import` + its `{batchId}`/`{batchId}/confirm`/`{batchId}/errors` siblings. Until it is live in production, these SDK/MCP/CLI calls 404. A dedicated, calc-only CSV bulk import path — deliberately separate from the existing e-invoicing bulk-send methods (`submitInvoicesBulk`/`submit_invoices_bulk`/`send-bulk`, which submit real invoices/reports) — for recording historical/backdated transactions or loading a batch of current data into the tax calculation audit trail. Always async and two-phase: upload queues a preview (`commit:false`, nothing persisted), then a separate confirm call commits only the transactions that came back clean.
+Backend PR: Taxually-Einvoicing `claude/tax-calc-csv-import`, `POST /v1/tax/calculate/import` + its `{batchId}`/`{batchId}/errors` siblings. Until it is live in production, these SDK/MCP/CLI calls 404. A dedicated, calc-only CSV bulk import path — deliberately separate from the existing e-invoicing bulk-send methods (`submitInvoicesBulk`/`submit_invoices_bulk`/`send-bulk`, which submit real invoices/reports) — for recording historical/backdated transactions or loading a batch of current data into the tax calculation audit trail. Always async and two-phase: upload queues a preview (`commit:false`, nothing persisted), then a separate confirm call commits only the transactions that came back clean.
 
 ### @clearvo/sdk 0.4.0 (additive, non-breaking)
 
 - New `importTaxCalculations(input: ImportTaxCalculationsInput): Promise<ImportTaxCalculationsResponse>` — uploads a CSV (raw text, not base64) and returns `{ batchId, status: 'UPLOADED' }` immediately.
-- New `getTaxCalculationImportStatus(batchId: string, params?: GetTaxCalculationImportStatusParams): Promise<GetTaxCalculationImportStatusResponse>` — polls the batch plus a paginated page of its transaction groups (`TaxCalcImportBatch`/`TaxCalcImportTransaction`), each carrying a backend-supplied `statusLabel`/`previewStatusLabel`/`confirmStatusLabel` alongside its enum.
-- New `confirmTaxCalculationImport(batchId: string, entityId?: string): Promise<ConfirmTaxCalculationImportResponse>` — commits every CLEAN transaction group; only valid from `READY_FOR_REVIEW`.
-- New `listTaxCalculationImportErrors(batchId: string, entityId?: string): Promise<ListTaxCalculationImportErrorsResponse>` — every ERROR-preview transaction group, for fixing and re-uploading just the affected rows.
+- New `getTaxCalculationImportStatus(batchId: string, params?: GetTaxCalculationImportStatusParams): Promise<GetTaxCalculationImportStatusResponse>` — polls the batch plus a paginated page of its transaction groups (`TaxCalcImportBatch`/`TaxCalcImportTransaction`), each carrying a backend-supplied `statusLabel`/`outcomeLabel` alongside its enum (`TaxCalcImportOutcome`: `COMMITTED` | `ERROR`). Every import is final: there is no preview or confirm step — clean transactions are committed immediately, errored ones are reported and never committed.
+- New `listTaxCalculationImportErrors(batchId: string, entityId?: string): Promise<ListTaxCalculationImportErrorsResponse>` — every transaction group that was not committed, for fixing and re-uploading just the affected rows.
 
 ### @clearvo/mcp 0.5.0 (additive, non-breaking)
 
-- New `import_tax_calculations` / `get_tax_calculation_import_status` / `confirm_tax_calculation_import` / `list_tax_calculation_import_errors` tools, matching the SDK methods above one-for-one.
+- New `import_tax_calculations` / `get_tax_calculation_import_status` / `list_tax_calculation_import_errors` tools, matching the SDK methods above one-for-one.
 
 ### @clearvo/cli 0.4.0 (additive, non-breaking)
 
 - New `clearvo import-tax-calculations <file> [--entity <entityId>]`.
-- New `clearvo tax-calculation-import-status <batchId> [--page <n>] [--limit <n>] [--status CLEAN|ERROR] [--entity <entityId>]`.
-- New `clearvo tax-calculation-import-confirm <batchId> [--entity <entityId>]`.
+- New `clearvo tax-calculation-import-status <batchId> [--page <n>] [--limit <n>] [--status COMMITTED|ERROR] [--entity <entityId>]`.
 - New `clearvo tax-calculation-import-errors <batchId> [--entity <entityId>]`.
 
 ## Unreleased — publish only AFTER the IT/ES profile-field backend PR has merged and deployed

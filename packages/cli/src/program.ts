@@ -193,13 +193,13 @@ export function createProgram(): Command {
   // ── clearvo import-tax-calculations <file> ───────────────────────────────
   // MCP twin: import_tax_calculations. A dedicated, calc-only ingestion path —
   // deliberately separate from send-bulk*/bulk-upload-* above, which are
-  // e-invoicing commands. Always async, two-phase: this command lands the
-  // file and queues a preview (commit:false); tax-calculation-import-confirm
-  // commits the clean transactions (commit:true).
+  // e-invoicing commands. Always async. Every import is a FINAL calculation:
+  // no preview or confirm step — clean transactions are committed immediately,
+  // errored ones are reported and never committed.
 
   program
     .command('import-tax-calculations <file>')
-    .description('Upload a CSV of historical or current transactions to be tax-calculated in bulk and recorded as real tax calculations — always async, queues a preview only; see `clearvo tax-calculation-import-status`')
+    .description('Upload a CSV of historical or current transactions to be tax-calculated in bulk and recorded as real tax calculations — every import is final (no preview or confirm step), always async; see `clearvo tax-calculation-import-status`')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
@@ -214,7 +214,7 @@ export function createProgram(): Command {
     .description('Poll one tax calculation import batch, created via `import-tax-calculations`')
     .option('--page <page>', 'Page number for the transactions list, 1-based')
     .option('--limit <limit>', 'Transactions per page (default 25, max 100)')
-    .option('--status <status>', 'Filter the transactions page to CLEAN or ERROR')
+    .option('--status <status>', 'Filter the transactions page to COMMITTED or ERROR')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (batchId: string, opts: { page?: string; limit?: string; status?: string; entity?: string; pretty?: boolean }) => {
@@ -228,18 +228,8 @@ export function createProgram(): Command {
     });
 
   program
-    .command('tax-calculation-import-confirm <batchId>')
-    .description('Commit every CLEAN transaction group from a previewed tax calculation import batch — only valid from status READY_FOR_REVIEW, async')
-    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
-    .option('--pretty', 'Pretty-print JSON output')
-    .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {
-      const result = await api('POST', `/tax/calculate/import/${encodeURIComponent(batchId)}/confirm`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
-      print(result, !!opts.pretty);
-    });
-
-  program
     .command('tax-calculation-import-errors <batchId>')
-    .description('Every ERROR-preview transaction group for a tax calculation import batch — row range, transaction ref, error code, and message')
+    .description('Every transaction group of a tax calculation import batch that was NOT committed — row range, transaction ref, error code, and message')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {

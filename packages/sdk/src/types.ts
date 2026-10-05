@@ -2240,14 +2240,13 @@ export interface ListBulkUploadErrorsResponse {
 // ── Tax Calculation CSV bulk import (POST /v1/tax/calculate/import) ────────
 // A dedicated, calc-only ingestion path — deliberately separate from
 // submitInvoicesBulk*/getBulkUploadStatus above, which are e-invoicing
-// methods. Always async, two-phase: importTaxCalculations lands the file and
-// previews it (commit:false); confirmTaxCalculationImport commits the clean
-// transactions (commit:true). Poll getTaxCalculationImportStatus between the
-// two.
+// methods. Always async. Every import is a FINAL calculation: there is no
+// preview or confirm step — clean transactions are committed immediately and
+// errored ones are reported, never committed. Poll getTaxCalculationImportStatus.
 
-export type TaxCalcImportBatchStatus = 'UPLOADED' | 'PREVIEWING' | 'READY_FOR_REVIEW' | 'CONFIRMING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
-export type TaxCalcImportPreviewStatus = 'PENDING' | 'CLEAN' | 'ERROR';
-export type TaxCalcImportConfirmStatus = 'PENDING' | 'COMMITTED' | 'SKIPPED' | 'FAILED';
+export type TaxCalcImportBatchStatus = 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+/** COMMITTED = a final tax calculation was recorded; ERROR = nothing was committed for this transaction. */
+export type TaxCalcImportOutcome = 'COMMITTED' | 'ERROR';
 
 export interface ImportTaxCalculationsInput {
   /** The raw CSV text (not base64) — required columns transactionRef, transactionDate, currency, customerCountry, productName. One or more adjacent rows sharing the same transactionRef become one multi-line transaction. */
@@ -2257,7 +2256,7 @@ export interface ImportTaxCalculationsInput {
   entityId?: string;
 }
 
-/** Returned immediately — this call only lands the file and queues a preview; it never calculates anything in-request. */
+/** Returned immediately — this call only lands the file and queues it; it never calculates anything in-request. */
 export interface ImportTaxCalculationsResponse {
   ok: boolean;
   batchId: string;
@@ -2275,15 +2274,12 @@ export interface TaxCalcImportBatch {
   statusLabel: string;
   blobPath: string | null;
   contentHash: string | null;
+  /** Transactions processed so far (final once status is COMPLETED). */
   total: number;
-  cleanCount: number;
-  errorCount: number;
   committedCount: number;
-  skippedCount: number;
+  errorCount: number;
   structuralError: string | null;
   createdAt: string;
-  previewedAt: string | null;
-  confirmedAt: string | null;
   completedAt: string | null;
 }
 
@@ -2295,18 +2291,13 @@ export interface TaxCalcImportTransaction {
   rowStart: number;
   rowEnd: number;
   requestJson: unknown;
-  previewStatus: TaxCalcImportPreviewStatus;
-  /** Ready-to-render label for `previewStatus`. */
-  previewStatusLabel: string;
-  previewResponseJson: unknown;
-  previewErrorCode: string | null;
-  previewErrorMessage: string | null;
-  confirmStatus: TaxCalcImportConfirmStatus;
-  /** Ready-to-render label for `confirmStatus`. */
-  confirmStatusLabel: string;
+  outcome: TaxCalcImportOutcome;
+  /** Ready-to-render label for `outcome`. */
+  outcomeLabel: string;
+  /** The committed calculation's id; null for ERROR rows. */
   calculationId: string | null;
-  confirmErrorCode: string | null;
-  confirmErrorMessage: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
   createdAt: string;
 }
 
@@ -2315,8 +2306,8 @@ export interface GetTaxCalculationImportStatusParams {
   page?: number;
   /** Transactions per page (default 25, max 100). */
   limit?: number;
-  /** Filter the transactions page to only this preview outcome. */
-  status?: 'CLEAN' | 'ERROR';
+  /** Filter the transactions page to only this outcome. */
+  status?: TaxCalcImportOutcome;
   entityId?: string;
 }
 
@@ -2325,13 +2316,6 @@ export interface GetTaxCalculationImportStatusResponse {
   batch: TaxCalcImportBatch;
   transactions: TaxCalcImportTransaction[];
   pagination: { total: number; page: number; limit: number; pages: number };
-}
-
-/** Returned immediately — async, poll getTaxCalculationImportStatus for the final COMPLETED status. */
-export interface ConfirmTaxCalculationImportResponse {
-  ok: boolean;
-  batchId: string;
-  status: 'CONFIRMING';
 }
 
 export interface TaxCalcImportErrorRow {
