@@ -1633,8 +1633,6 @@ const TOOLS = [
       'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
       '(the Spain SII reporting-batch reminder ladder for es_sii batch_auto/batch_review — payload carries batchId, book, recordCount, reportBy, daysOverdue; submissionId is the batch UUID), ' +
       'ap.decision (rules-engine B7 — a purchase calculation\'s ACCEPTED_AS_CHARGED/OVERCHARGED/UNDERCHARGED/HELD outcome; filtered so a clean, in-tolerance ACCEPTED_AS_CHARGED with no warning never fires — payload carries outcome, reasonCode, legalDelta, appliedDelta), ' +
-      'manual_adjustment.proposed / manual_adjustment.confirmed / manual_adjustment.reverted / manual_adjustment.rejected ' +
-      '(rules-engine B7 — a FORCED_INPUT or POST_CALCULATION_OVERRIDE manual adjustment\'s lifecycle; see propose_manual_adjustment), ' +
       '* (all events).',
     inputSchema: {
       type: 'object' as const,
@@ -1643,7 +1641,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected',
+          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision',
         },
       },
       required: ['url'],
@@ -2937,70 +2935,6 @@ const TOOLS = [
       },
     },
   },
-  // AP manual adjustments (lib/ap/manual-adjustments.ts on the backend) —
-  // propose/list/read-options only. There is no confirm/revert/reject tool,
-  // here or on the hosted connector: confirming is a dedicated, admin-only,
-  // dashboard-only action.
-  {
-    name: 'propose_manual_adjustment',
-    description:
-      'Propose a manual adjustment against an already-calculated transaction (lib/ap/manual-adjustments.ts) — always ' +
-      'creates a DRAFT; you can never confirm one (only a human dashboard admin can, via a separate, dedicated ' +
-      'permission — this tool has no confirm counterpart). Two modes: FORCED_INPUT (the default, preferred mode) ' +
-      're-runs the ORIGINAL calculation with one or more genuine input facts pinned — call ' +
-      'get_manual_adjustment_options first to see the exact closed set of pinnable properties for a header-level ' +
-      '(no targetLineId) vs. a line-level (targetLineId set) adjustment; anything outside that set (e.g. total_tax, ' +
-      'document_stage — a derived result or an identity/stage/direction column) is rejected 422. ' +
-      'POST_CALCULATION_OVERRIDE directly replaces one or more of the calculation\'s own result columns with a flat, ' +
-      'non-recalculated figure (e.g. an auditor\'s ruling) — narrower and requires documentUrl (upload one first via ' +
-      'the dashboard, or via a POST /tax-calculations/{id}/adjustment-documents call if you have one). ' +
-      'originalValue must capture what the engine actually computed for the field(s) you are changing, for audit ' +
-      'comparison. reason is mandatory. A target that already has legal effect (a terminal e-invoice, or a ' +
-      'Compliance Mandate resolution past PENDING/NEEDS_INFO/HELD_*) is refused 409 with availableActions pointing ' +
-      'at the corrections flow instead.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        calculationId: { type: 'string', description: 'The tax_calculations id this adjustment targets (or, with targetType set to a different value, still the id used to route the request — see targetId).' },
-        mode: { type: 'string', enum: ['FORCED_INPUT', 'POST_CALCULATION_OVERRIDE'] },
-        forcedInputs: { type: 'object', description: 'FORCED_INPUT only — {property: value}, keyed by catalog property name (e.g. taxCategory, customerType) — see get_manual_adjustment_options for the exact allowed set.' },
-        overrides: { type: 'object', description: 'POST_CALCULATION_OVERRIDE only — {column: value}, keyed by DB column name (e.g. total_tax, tax_code) — see get_manual_adjustment_options for the exact allowed set.' },
-        originalValue: { type: 'object', description: 'What the engine actually computed for the field(s) being changed — captured for audit comparison.' },
-        reason: { type: 'string', description: 'Mandatory — why this adjustment is being made.' },
-        documentUrl: { type: 'string', description: 'Supporting document URL — effectively required for POST_CALCULATION_OVERRIDE.' },
-        targetType: { type: 'string', enum: ['tax_calculation', 'tax_calculation_line', 'einvoicing_record'], description: 'Default tax_calculation.' },
-        targetId: { type: 'string', description: 'Overrides calculationId as the actual target id — only needed when targeting something other than the calculation named by calculationId.' },
-        targetLineId: { type: 'string', description: 'Set for a line-level FORCED_INPUT adjustment — the line\'s own wire id from the original calculate request.' },
-        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
-      },
-      required: ['calculationId', 'mode', 'originalValue', 'reason'],
-    },
-  },
-  {
-    name: 'list_manual_adjustments',
-    description: 'List manual adjustments proposed against a tax calculation, newest first — optionally narrowed by status.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        calculationId: { type: 'string', description: 'The tax_calculations id to list adjustments for.' },
-        status: { type: 'string', enum: ['DRAFT', 'CONFIRMED', 'REJECTED', 'REVERTED'] },
-        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
-      },
-      required: ['calculationId'],
-    },
-  },
-  {
-    name: 'get_manual_adjustment_options',
-    description: 'The backend-owned closed option lists for propose_manual_adjustment — modes, target types, and the exact set of catalog properties/columns a forcedInputs/overrides key may name. Call before propose_manual_adjustment rather than guessing a property name.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        calculationId: { type: 'string', description: 'Any tax_calculations id — the option lists are not target-specific today, but the endpoint is scoped under one for future narrowing.' },
-        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
-      },
-      required: ['calculationId'],
-    },
-  },
   // Rules engine (RE-4, docs/features/rules-engine/discovery.md) — MCP twins of
   // GET /rules-engine/schema, GET/POST /rules-engine/rules, GET/PATCH
   // /rules-engine/rules/{id}, POST .../activate, .../move, POST/DELETE
@@ -3988,20 +3922,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'list_tax_calculation_import_errors': {
       const { batchId, entityId } = args as { batchId: string; entityId?: string };
       return callApi('GET', `/tax/calculate/import/${encodeURIComponent(batchId)}/errors?format=json`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
-    }
-
-    case 'propose_manual_adjustment': {
-      const { calculationId, entityId, ...body } = args as { calculationId: string; entityId?: string } & Record<string, unknown>;
-      return callApi('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
-    }
-    case 'list_manual_adjustments': {
-      const { calculationId, entityId, status } = args as { calculationId: string; entityId?: string; status?: string };
-      const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-      return callApi('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments${qs}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
-    }
-    case 'get_manual_adjustment_options': {
-      const { calculationId, entityId } = args as { calculationId: string; entityId?: string };
-      return callApi('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustment-options`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'get_rules_engine_schema': {

@@ -3,10 +3,10 @@
 
 // B7 propagation (docs/features/rules-engine/discovery.md, focus-eng-lead.md
 // §1.N.4) — asserts this stdio server's tools/list carries a stdio twin of
-// every one of the hosted MCP connector's rules-engine + manual-adjustment
+// every one of the hosted MCP connector's rules-engine
 // tools (Taxually-Einvoicing lib/mcp/tools.ts). HOSTED_RULES_ENGINE_TOOL_NAMES
-// below is a hand-duplicated fixture of that hosted list's own rules-engine/
-// manual-adjustment tool names (same "separate repos, no shared import"
+// below is a hand-duplicated fixture of that hosted list's own rules-engine
+// tool names (same "separate repos, no shared import"
 // convention as the hosted connector's own tests/unit/mcp-tools-parity.test.ts)
 // — keep it in sync by hand whenever either side adds/removes one of these
 // tools. Deliberately scoped to this story's own surface, not every tool on
@@ -30,8 +30,6 @@ if (!fs.existsSync(SERVER)) {
 }
 
 const HOSTED_RULES_ENGINE_TOOL_NAMES = [
-  // AP manual adjustments — propose/list/read-options only, never confirm/revert/reject.
-  'propose_manual_adjustment', 'list_manual_adjustments', 'get_manual_adjustment_options',
   // Rules engine core (RE-4): schema, rule CRUD, activate/move/simulate.
   'get_rules_engine_schema', 'list_rules', 'get_rule', 'create_rule', 'update_rule',
   'activate_rule', 'move_rule', 'simulate_rule',
@@ -85,14 +83,7 @@ const timeout = setTimeout(() => fail('Timed out waiting for a tools/list respon
 
   const missing = HOSTED_RULES_ENGINE_TOOL_NAMES.filter(name => !names.has(name));
   if (missing.length) {
-    return fail(`Missing rules-engine/manual-adjustment tools from tools/list: ${missing.join(', ')}`);
-  }
-
-  // Never confirm/revert/reject a manual adjustment — that stays a
-  // dedicated, admin-only, dashboard-only action with no MCP tool anywhere.
-  const forbidden = ['confirm_manual_adjustment', 'revert_manual_adjustment', 'reject_manual_adjustment'].filter(name => names.has(name));
-  if (forbidden.length) {
-    return fail(`Manual-adjustment tool(s) that must never exist on this stdio server: ${forbidden.join(', ')}`);
+    return fail(`Missing rules-engine tools from tools/list: ${missing.join(', ')}`);
   }
 
   // Duplicate-name guard, same regression class the hosted connector's own
@@ -103,7 +94,7 @@ const timeout = setTimeout(() => fail('Timed out waiting for a tools/list respon
     return fail(`Duplicate tool name(s): ${duplicates.join(', ')}`);
   }
 
-  console.log(`OK — all ${HOSTED_RULES_ENGINE_TOOL_NAMES.length} rules-engine/manual-adjustment tools present, no confirm/revert/reject tool, no duplicates.`);
+  console.log(`OK — all ${HOSTED_RULES_ENGINE_TOOL_NAMES.length} rules-engine tools present, no duplicates.`);
   child.kill();
   process.exit(0);
 })();

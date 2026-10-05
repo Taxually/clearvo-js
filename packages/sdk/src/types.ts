@@ -1295,8 +1295,7 @@ export interface TaxCalculateResponse {
    */
   warnings?: Array<{ ruleCode: string; scopeLevel: string }>;
   /**
-   * Present only on a calculation replayed by a CONFIRMED FORCED_INPUT
-   * manual adjustment (proposeManualAdjustment) — names the id of the
+   * Present only on a calculation that has been superseded by a replay — names the id of the
    * superseding calculation; re-fetch/re-poll that id rather than trust this
    * replayed figure. Absent on a fresh (non-replay) calculation and on a
    * replay that hasn't been superseded.
@@ -3032,8 +3031,7 @@ export interface FrInboundPollResponse {
 
 // ── Rules Engine (B7 propagation, docs/features/rules-engine/discovery.md) ──
 // SDK twins of every /v1/rules-engine/* operation (docs/openapi/rules-engine.yaml
-// on the backend) plus the AP manual-adjustments surface
-// (/v1/tax/calculate/{id}/adjustments, /adjustment-options). Scope (Entity vs
+// on the backend). Scope (Entity vs
 // Organisation) is always derived server-side from the API key — never a
 // request field here.
 
@@ -3637,80 +3635,6 @@ export interface RulesEngineSchema {
       coverage: Record<string, 'full' | 'partial'>;
     };
   };
-}
-
-// ── AP manual adjustments (lib/ap/manual-adjustments.ts on the backend) ────
-// Propose/list/read-options only — there is no SDK method (or MCP tool) to
-// confirm/revert/reject: confirming is a dedicated, admin-only, dashboard-
-// only action.
-
-export type ManualAdjustmentMode = 'FORCED_INPUT' | 'POST_CALCULATION_OVERRIDE';
-export type ManualAdjustmentTargetType = 'tax_calculation' | 'tax_calculation_line' | 'einvoicing_record';
-export type ManualAdjustmentStatus = 'DRAFT' | 'CONFIRMED' | 'REJECTED' | 'REVERTED';
-
-export interface ProposeManualAdjustmentInput {
-  /** FORCED_INPUT only — {property: value}, keyed by catalog property name (e.g. taxCategory, customerType). See getManualAdjustmentOptions() for the exact allowed set. */
-  forcedInputs?: Record<string, unknown>;
-  /** POST_CALCULATION_OVERRIDE only — {column: value}, keyed by DB column name (e.g. total_tax, tax_code). See getManualAdjustmentOptions() for the exact allowed set. */
-  overrides?: Record<string, unknown>;
-  mode: ManualAdjustmentMode;
-  /** What the engine actually computed for the field(s) being changed — captured for audit comparison. */
-  originalValue: Record<string, unknown>;
-  /** Mandatory — why this adjustment is being made. */
-  reason: string;
-  /** Effectively required for POST_CALCULATION_OVERRIDE. */
-  documentUrl?: string;
-  /** Default 'tax_calculation'. */
-  targetType?: ManualAdjustmentTargetType;
-  /** Overrides the calculationId path segment as the actual target id — only needed when targeting something other than the calculation itself. */
-  targetId?: string;
-  /** Set for a line-level FORCED_INPUT adjustment — the line's own wire id from the original calculateTax() request. */
-  targetLineId?: string;
-  entityId?: string;
-}
-
-export interface ProposeManualAdjustmentResponse {
-  ok: true;
-  adjustmentId: string;
-}
-
-export interface ManualAdjustment {
-  id: string;
-  entityId: string;
-  targetType: ManualAdjustmentTargetType;
-  targetId: string;
-  targetLineId: string | null;
-  mode: ManualAdjustmentMode;
-  forcedInputs: Record<string, unknown> | null;
-  overrides: Record<string, unknown> | null;
-  originalValue: Record<string, unknown>;
-  resultingRecordId: string | null;
-  status: ManualAdjustmentStatus;
-  reason: string | null;
-  documentUrl: string | null;
-  createdBy: string | null;
-  confirmedBy: string | null;
-  confirmedAt: string | null;
-  revertedBy: string | null;
-  revertedAt: string | null;
-  rejectedBy: string | null;
-  rejectedAt: string | null;
-}
-
-export interface ListManualAdjustmentsResponse {
-  ok?: true;
-  adjustments: ManualAdjustment[];
-}
-
-/** The backend-owned closed option lists for proposeManualAdjustment() — call before proposing rather than guessing a property name. */
-export interface ManualAdjustmentOptions {
-  modes: ManualAdjustmentMode[];
-  targetTypes: ManualAdjustmentTargetType[];
-  forcedInputProperties: {
-    header: string[];
-    line: string[];
-  };
-  overrideColumns: string[];
 }
 
 export class ClearvoError extends Error {

@@ -31,7 +31,7 @@ export interface McpToolAnnotations {
 }
 
 const READ_ONLY = new Set<string>([
-  'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
+  'list_client_tax_codes',
   'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_entities',
   'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements',
   'list_invoices', 'get_invoice', 'list_products', 'list_webhooks', 'list_registrations',
@@ -62,7 +62,7 @@ const DESTRUCTIVE = new Set<string>([
 ]);
 
 const NON_IDEMPOTENT = new Set<string>([
-  'calculate_tax', 'propose_manual_adjustment', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
+  'calculate_tax', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
   'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
   'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch',
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account',

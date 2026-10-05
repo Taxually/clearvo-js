@@ -147,11 +147,6 @@ import type {
   ListPlatformRuleChangesParams,
   ListPlatformRuleChangesResponse,
   RulesEngineSchema,
-  ProposeManualAdjustmentInput,
-  ProposeManualAdjustmentResponse,
-  ListManualAdjustmentsResponse,
-  ManualAdjustmentStatus,
-  ManualAdjustmentOptions,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -1118,27 +1113,5 @@ export class ClearvoClient {
     const { entityId, limit } = params;
     const qs = limit != null ? `?${new URLSearchParams({ limit: String(limit) }).toString()}` : '';
     return this.request('GET', `/rules-engine/platform-changes${qs}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
-  }
-
-  // ── AP manual adjustments ─────────────────────────────────────────────────
-  // Propose/list/read-options only — confirming is a dedicated, admin-only,
-  // dashboard-only action with no SDK method.
-
-  /** Propose a manual adjustment against an already-calculated transaction — always creates a DRAFT. Call getManualAdjustmentOptions() first for the exact allowed forcedInputs/overrides keys. */
-  proposeManualAdjustment(calculationId: string, input: ProposeManualAdjustmentInput): Promise<ProposeManualAdjustmentResponse> {
-    const { entityId, ...body } = input;
-    return this.request('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments`, body, entityId ? { 'x-entity-id': entityId } : undefined);
-  }
-
-  /** Manual adjustments proposed against a tax calculation, newest first. */
-  listManualAdjustments(calculationId: string, params: { status?: ManualAdjustmentStatus; entityId?: string } = {}): Promise<ListManualAdjustmentsResponse> {
-    const { entityId, status } = params;
-    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-    return this.request('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustments${qs}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
-  }
-
-  /** The backend-owned closed option lists for proposeManualAdjustment() — call before proposing rather than guessing a property name. */
-  getManualAdjustmentOptions(calculationId: string, entityId?: string): Promise<ManualAdjustmentOptions> {
-    return this.request('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustment-options`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 }
