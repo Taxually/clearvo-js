@@ -103,7 +103,6 @@ import type {
   ImportTaxCalculationsResponse,
   GetTaxCalculationImportStatusParams,
   GetTaxCalculationImportStatusResponse,
-  ConfirmTaxCalculationImportResponse,
   ListTaxCalculationImportErrorsResponse,
   ListRulesParams,
   ListRulesResponse,
@@ -818,19 +817,18 @@ export class ClearvoClient {
 
   // ── Tax Calculation CSV bulk import ──────────────────────────────────────
   // A dedicated, calc-only ingestion path — deliberately separate from the
-  // e-invoicing bulk methods above. Always async, two-phase:
-  // importTaxCalculations lands the file and previews it (commit:false);
-  // confirmTaxCalculationImport commits the clean transactions
-  // (commit:true). Poll getTaxCalculationImportStatus between the two.
+  // e-invoicing bulk methods above. Always async. Every import is a FINAL
+  // calculation: no preview or confirm step. Poll getTaxCalculationImportStatus.
 
   /**
    * Uploads a CSV of transactions to be tax-calculated in bulk — for recording historical/backdated
    * transactions, or loading a batch of current data, into the tax calculation audit trail. This
    * never sends an invoice or reports to any tax authority — it only produces committed
-   * tax_calculations rows, the same as calling calculateTax many times. Always async — this call
-   * only lands the file and queues a preview; it never calculates anything in-request. Poll
-   * getTaxCalculationImportStatus with the returned batchId until status is READY_FOR_REVIEW, then
-   * call confirmTaxCalculationImport to commit the clean transactions.
+   * tax_calculations rows, the same as calling calculateTax many times. Every import is FINAL:
+   * there is no preview or confirm step. Always async — this call only lands the file and queues
+   * it; it never calculates anything in-request. A background job then commits each clean
+   * transaction immediately; transactions that error are NOT committed and are reported. Poll
+   * getTaxCalculationImportStatus with the returned batchId until status is COMPLETED.
    */
   importTaxCalculations(input: ImportTaxCalculationsInput): Promise<ImportTaxCalculationsResponse> {
     const { csvContent, filename, entityId } = input;
@@ -839,9 +837,9 @@ export class ClearvoClient {
 
   /**
    * Poll one tax calculation import batch, created via importTaxCalculations. Returns the batch
-   * plus a paginated page of its transaction groups, each with its preview outcome (CLEAN or
-   * ERROR with a reason) once READY_FOR_REVIEW, and its confirm outcome (COMMITTED/SKIPPED/FAILED
-   * with a real calculationId once committed) once CONFIRMING/COMPLETED.
+   * (status UPLOADED/PROCESSING/COMPLETED/FAILED/CANCELLED; total/committedCount/errorCount advance
+   * while PROCESSING) plus a paginated page of its transaction groups, each with its final outcome:
+   * COMMITTED (with the real calculationId) or ERROR (nothing committed, with a reason).
    */
   getTaxCalculationImportStatus(batchId: string, params: GetTaxCalculationImportStatusParams = {}): Promise<GetTaxCalculationImportStatusResponse> {
     const { entityId, ...query } = params;
@@ -854,19 +852,7 @@ export class ClearvoClient {
   }
 
   /**
-   * Commits every CLEAN transaction group from a previewed tax calculation import batch — each is
-   * re-run with commit:true (never a promotion of the cached preview result). Transaction groups
-   * that errored in preview are skipped, never re-attempted. Only valid from status
-   * READY_FOR_REVIEW. Async: returns immediately with status CONFIRMING — poll
-   * getTaxCalculationImportStatus for the final COMPLETED status and per-transaction confirm
-   * outcome.
-   */
-  confirmTaxCalculationImport(batchId: string, entityId?: string): Promise<ConfirmTaxCalculationImportResponse> {
-    return this.request('POST', `/tax/calculate/import/${encodeURIComponent(batchId)}/confirm`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
-  }
-
-  /**
-   * Every ERROR-preview transaction group for a tax calculation import batch — row range,
+   * Every transaction group of a tax calculation import batch that was NOT committed — row range,
    * transaction ref, error code, and message — so the source file can be fixed and re-uploaded
    * for just the affected transactions.
    */
