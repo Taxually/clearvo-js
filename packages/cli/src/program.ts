@@ -86,6 +86,12 @@ export function createProgram(): Command {
         console.error('Use --dry-run to preview a calculation without recording it.');
         process.exit(1);
       }
+      // Plan lacks Explore (growth and above) or the rules API (enterprise only): HTTP 403 <feature>_not_included.
+      if (res.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included')) {
+        console.error(String(data.message ?? 'Your plan does not include this feature.'));
+        if (data.upgradeUrl) console.error(`Upgrade your plan: ${data.upgradeUrl}`);
+        process.exit(1);
+      }
       const parts = [`HTTP ${res.status}: ${data.error ?? 'Unknown error'}`];
       if (data.hint) parts.push(`Hint: ${data.hint}`);
       if (data.field) parts.push(`Field: ${data.field}`);

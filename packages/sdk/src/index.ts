@@ -1,5 +1,5 @@
 export { ClearvoClient } from './client.js';
-export { ClearvoError, ClearvoPlanRequiredError } from './types.js';
+export { ClearvoError, ClearvoPlanRequiredError, ClearvoPlanNotIncludedError } from './types.js';
 export type {
   Plan,
   BillingStatus,

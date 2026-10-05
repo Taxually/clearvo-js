@@ -3,7 +3,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ClearvoClient } from '../src/client';
-import { ClearvoError, ClearvoPlanRequiredError } from '../src/types';
+import { ClearvoError, ClearvoPlanRequiredError, ClearvoPlanNotIncludedError } from '../src/types';
 import type { GetUsageResponse } from '../src/types';
 
 describe('ClearvoClient.getUsage', () => {
@@ -89,5 +89,42 @@ describe('ClearvoClient.calculateTax on a free plan', () => {
     expect(err).toBeInstanceOf(ClearvoError);
     expect(err).not.toBeInstanceOf(ClearvoPlanRequiredError);
     expect((err as ClearvoError).message).toBe('payment_failed');
+  });
+});
+
+describe('ClearvoClient plan-not-included 403', () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it.each([
+    ['explore_not_included', 'explore'],
+    ['rules_not_included', 'rules'],
+  ] as const)('throws ClearvoPlanNotIncludedError for a 403 %s', async (code, feature) => {
+    const body = { error: code, message: 'Your plan does not include this feature.', upgradeUrl: 'https://app.clearvo.io/settings/billing' };
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => body }) as unknown as typeof fetch;
+
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    const err = await client.getUsage().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ClearvoPlanNotIncludedError);
+    expect(err).toBeInstanceOf(ClearvoError);
+    const e = err as ClearvoPlanNotIncludedError;
+    expect(e.status).toBe(403);
+    expect(e.message).toBe(code);
+    expect(e.feature).toBe(feature);
+    expect(e.upgradeUrl).toBe(body.upgradeUrl);
+    expect(e.hint).toBe(body.message);
+  });
+
+  it('leaves any other 403 as a generic ClearvoError', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({ error: 'forbidden' }) }) as unknown as typeof fetch;
+
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    const err = await client.getUsage().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ClearvoError);
+    expect(err).not.toBeInstanceOf(ClearvoPlanNotIncludedError);
   });
 });

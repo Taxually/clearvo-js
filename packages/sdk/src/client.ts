@@ -147,7 +147,7 @@ import type {
   ManualAdjustmentOptions,
   GetUsageResponse,
 } from './types.js';
-import { ClearvoError, ClearvoPlanRequiredError } from './types.js';
+import { ClearvoError, ClearvoPlanRequiredError, ClearvoPlanNotIncludedError } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
 
@@ -208,6 +208,15 @@ export class ClearvoClient {
           String(data.calculationId ?? ''),
           String(data.upgradeUrl ?? ''),
           'plan_required',
+          typeof data.message === 'string' ? data.message : undefined
+        );
+      }
+      // Plan lacks Explore (growth and above) or the rules API (enterprise only): a typed error, not a generic one.
+      if (response.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included')) {
+        throw new ClearvoPlanNotIncludedError(
+          data.error === 'explore_not_included' ? 'explore' : 'rules',
+          String(data.upgradeUrl ?? ''),
+          data.error,
           typeof data.message === 'string' ? data.message : undefined
         );
       }

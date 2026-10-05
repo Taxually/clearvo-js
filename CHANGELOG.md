@@ -6,9 +6,9 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 Backend: new `GET /v1/usage`, free-plan HTTP 402 `plan_required` on committed tax calculations, plan names `free | starter | growth | enterprise`. Not released.
 
-- @clearvo/sdk: `getUsage()` (types `UsageSummary`, `GetUsageResponse`, `Plan`, `BillingStatus`). `calculateTax()` throws the new `ClearvoPlanRequiredError` (a `ClearvoError` subclass, status 402, with `calculationId`, `monitorOnly`, `upgradeUrl`) for a committed calculation on a free plan; `commit: false` previews are unaffected.
-- @clearvo/cli: `clearvo usage`. `clearvo calculate` prints a plain upgrade message with the upgrade URL on a 402 `plan_required` and exits 1.
-- @clearvo/mcp: new read-only tool `get_usage`. `calculate_tax` documents the monitor-only result and declares an `outputSchema`; the 402 `plan_required` body is returned as the tool result instead of an error, with `structuredContent`.
+- @clearvo/sdk: `getUsage()` (types `UsageSummary`, `GetUsageResponse`, `Plan`, `BillingStatus`). `calculateTax()` throws the new `ClearvoPlanRequiredError` (a `ClearvoError` subclass, status 402, with `calculationId`, `monitorOnly`, `upgradeUrl`) for a committed calculation on a free plan; `commit: false` previews are unaffected. Also throws `ClearvoPlanNotIncludedError` (status 403, `feature: 'explore' | 'rules'`, `upgradeUrl`, `hint` = plan sentence) on HTTP 403 `explore_not_included` (Explore: query, query fields, export; Growth and above) or `rules_not_included` (rules API; Enterprise only); other 403s stay generic.
+- @clearvo/cli: `clearvo usage`. `clearvo calculate` prints a plain upgrade message with the upgrade URL on a 402 `plan_required` and exits 1; on a 403 `explore_not_included` / `rules_not_included` it prints the plan sentence and the upgrade URL and exits 1.
+- @clearvo/mcp: new read-only tool `get_usage`. `calculate_tax` documents the monitor-only result and declares an `outputSchema`; the 402 `plan_required` body is returned as the tool result instead of an error, with `structuredContent`. A 403 `*_not_included` error renders as `HTTP 403: <plan sentence>`, `Code: <code>`, `Upgrade: <url>`.
 
 ## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
 

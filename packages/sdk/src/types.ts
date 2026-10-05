@@ -3548,6 +3548,23 @@ export class ClearvoPlanRequiredError extends ClearvoError {
   readonly monitorOnly = true as const;
 }
 
+/**
+ * Thrown when the plan does not include a feature: HTTP 403 `explore_not_included` (Explore: `queryData`, `getQueryFields`,
+ * `exportData`; Growth and above) or `rules_not_included` (the rules API; Enterprise only). `hint` is the plan sentence
+ * from the API; send the user to `upgradeUrl`. Any other 403 stays a generic `ClearvoError`. Catch it with `instanceof`.
+ */
+export class ClearvoPlanNotIncludedError extends ClearvoError {
+  constructor(
+    public readonly feature: 'explore' | 'rules',
+    public readonly upgradeUrl: string,
+    message: string,
+    hint?: string
+  ) {
+    super(403, message, hint);
+    this.name = 'ClearvoPlanNotIncludedError';
+  }
+}
+
 // ── Plans and usage (GET /v1/usage) ──────────────────────────────────────────
 
 /** Plan names. `free` is monitor-only: committed calculations are recorded for Compliance Radar but return no amounts. */

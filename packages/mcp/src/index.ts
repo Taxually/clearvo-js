@@ -105,10 +105,15 @@ async function callApi(
         'Run the list_entities tool to find your entity ID, then add it to the env config and restart.'
       );
     }
+    // A plan gate (explore_not_included, rules_not_included) answers { error, message: <plan sentence>, upgradeUrl }:
+    // surface the sentence, the code and the upgrade link.
+    const planGate = res.status === 403 && errorText.endsWith('_not_included') && typeof err.message === 'string';
     const msg = [
-      `HTTP ${res.status}: ${errorText}`,
+      `HTTP ${res.status}: ${planGate ? err.message : errorText}`,
+      planGate ? `Code: ${errorText}` : null,
       err.hint ? `Hint: ${err.hint}` : null,
       err.field ? `Field: ${err.field}` : null,
+      planGate && typeof err.upgradeUrl === 'string' ? `Upgrade: ${err.upgradeUrl}` : null,
     ].filter(Boolean).join('\n');
     throw new Error(msg);
   }

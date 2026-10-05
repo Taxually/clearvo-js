@@ -65,7 +65,7 @@ npm install @clearvo/sdk
 ```
 
 ```typescript
-import { ClearvoClient, ClearvoPlanRequiredError } from '@clearvo/sdk';
+import { ClearvoClient, ClearvoPlanRequiredError, ClearvoPlanNotIncludedError } from '@clearvo/sdk';
 
 const client = new ClearvoClient({ apiKey: process.env.CLEARVO_API_KEY! });
 
@@ -99,6 +99,9 @@ try {
     // err.calculationId, err.monitorOnly (true), err.upgradeUrl
   }
 }
+
+// Explore (query/export) needs Growth and above, the rules API needs Enterprise: a 403 throws ClearvoPlanNotIncludedError
+// (err.feature: 'explore' | 'rules', err.upgradeUrl, err.hint is the plan sentence).
 
 // Plan and billable usage against the allowance for the current billing period
 const { usage } = await client.getUsage();

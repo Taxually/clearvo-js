@@ -67,4 +67,25 @@ describe('clearvo usage / plan_required', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     exitSpy.mockRestore();
   });
+
+  it('prints the plan sentence and upgrade URL on a 403 explore_not_included and exits 1', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'explore_not_included', message: 'Explore is available on Growth and above.', upgradeUrl: 'https://app.clearvo.io/settings/billing' }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((): never => {
+      throw new Error('process.exit called');
+    }) as never);
+
+    await expect(createProgram().parseAsync(['usage'], { from: 'user' })).rejects.toThrow('process.exit called');
+
+    const printed = errorSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(printed).toContain('Explore is available on Growth and above.');
+    expect(printed).toContain('https://app.clearvo.io/settings/billing');
+    expect(printed).not.toContain('HTTP 403');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    exitSpy.mockRestore();
+  });
 });
