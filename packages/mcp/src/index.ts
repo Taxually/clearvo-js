@@ -686,16 +686,11 @@ const TOOLS = [
             },
             de: {
               type: 'object',
-              description: 'Germany ZUGFeRD/XRechnung fields, plus per-invoice overrides of the invoice-content-field-registry company-law facts (each falls back to the matching de_* extra_fields value on the entity\'s own DE tax registration when omitted — see update_registration).',
+              description: 'Germany ZUGFeRD/XRechnung fields. Company-law disclosure facts (Handelsregisternummer/Registergericht/Sitz/managing-director names) are entity-level — see update_entity\'s entityFacts, never set per-invoice.',
               properties: {
                 invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD). PEPPOL delivers a Peppol BIS Billing 3.0 invoice over the Peppol network (DE-NRS).' },
                 leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference, then to the customer\'s stored LEITWEG_ID reference (see create_customer references), when omitted. Missing all three on a resolved-XRechnung invoice fails 422 MISSING_LEITWEG_ID. The Leitweg-ID is only used as the customer electronic address if it passes check-digit validation.' },
-                legalForm: { type: 'string', description: 'DE legal-form select vocabulary (e.g. GMBH, UG, AG, SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER, FOREIGN_BRANCH, OTHER) — case-sensitive. Gates whether the register-identity and managing-directors disclosure tiers below apply at all.' },
-                handelsregisternummer: { type: 'string', description: 'BT-30. HGB § 37a commercial-register number (e.g. "HRB 12345"). Required once legalForm is a Handelsregister-registered form — missing this, registergericht, or registeredSeat never blocks the send, it returns a non-terminal errorCode MISSING_DE_COMPANY_REGISTER_DETAILS (WARNING severity).' },
-                registergericht: { type: 'string', description: 'HGB § 37a register court (e.g. "Amtsgericht München") — see handelsregisternummer above for the shared MISSING_DE_COMPANY_REGISTER_DETAILS gate.' },
-                registeredSeat: { type: 'string', description: 'HGB § 37a Sitz (registered seat city) — may differ from the invoice/delivery address. See handelsregisternummer above for the shared gate.' },
-                geschaeftsfuehrer: { type: 'string', description: 'GmbHG § 35a / AktG § 80 managing-director or board-member names, one per line, for a legal form owing the "names tier" disclosure. Missing this never blocks the send — errorCode MISSING_DE_MANAGING_DIRECTORS, WARNING severity.' },
-                kleinunternehmer: { type: 'boolean', description: '§ 19 UStG small-business exemption flag. When true, no invoice line may carry a positive tax rate — a line that does fails 422 DE_KLEINUNTERNEHMER_CHARGES_VAT (a real VAT-invoice defect, unlike the company-law WARNINGs above).' },
+                kleinunternehmer: { type: 'boolean', description: '§ 19 UStG small-business exemption flag. When true, no invoice line may carry a positive tax rate — a line that does fails 422 DE_KLEINUNTERNEHMER_CHARGES_VAT (a real VAT-invoice defect).' },
               },
             },
           },
@@ -996,13 +991,14 @@ const TOOLS = [
       'Also handles Germany\'s defaultDeInvoiceFormat (ZUGFERD | XRECHNUNG | PEPPOL | null) — see that property. ' +
       'entityFacts sets facts about the entity itself (not any one country registration) — e.g. legalForm, the ' +
       'DE legal-form code (GMBH/UG/AG/SE/KGAA/EG/GMBH_CO_KG/AG_CO_KG/OHG/KG/EK/GBR/FREIBERUFLER/SOLE_TRADER/' +
-      'FOREIGN_BRANCH/OTHER — see get_entity_fact_definitions for the full option list), which gates whether ' +
-      'Germany\'s Handelsregister disclosures (Sitz/Handelsregisternummer/Registergericht/managing-director ' +
-      'names, set via update_registration\'s extraFields) are applicable. entityFacts is a MERGE, per key, same ' +
-      '3-state contract as update_registration\'s extraFields: a string sets that key, an explicit null deletes ' +
-      'it, an omitted key is left unchanged. Unlike a registration\'s extraFields, entityFacts applies to the ' +
-      'entity regardless of which country it\'s registered in — set legalForm here, not via ' +
-      'update_registration, even for a German entity.',
+      'FOREIGN_BRANCH/OTHER — see get_entity_fact_definitions for the full option list), plus the company-law ' +
+      'disclosure facts that legalForm gates (Germany\'s Handelsregisternummer/Registergericht/registeredSeat/ ' +
+      'managingDirectors, and the FR/IT/PT/ES equivalents — also set here, never via update_registration\'s ' +
+      'extraFields: the same disclosure must render on every invoice the entity issues regardless of which ' +
+      'country\'s clearance rules a given invoice resolves to). entityFacts is a MERGE, per key, same 3-state ' +
+      'contract as update_registration\'s extraFields: a string sets that key, an explicit null deletes it, an ' +
+      'omitted key is left unchanged. Unlike a registration\'s extraFields, entityFacts applies to the entity ' +
+      'regardless of which country it\'s registered in.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1776,22 +1772,19 @@ const TOOLS = [
   {
     name: 'update_registration',
     description:
-      'Edit an existing tax registration\'s number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s ' +
-      'Steuernummer, Handelsregisternummer, Registergericht, Sitz, managing-director names, or Kleinunternehmer ' +
-      'flag) in place. Use this instead of deleting and re-adding a registration when only the number ' +
-      'was wrong, missing, or a jurisdiction-specific secondary identifier needs to be added. ' +
+      'Edit an existing tax registration\'s number and/or secondary identifiers (e.g. Germany\'s Steuernummer or ' +
+      'Kleinunternehmer flag) in place. Use this instead of deregister_registration + add_registration when only ' +
+      'the number was wrong, missing, or a jurisdiction-specific secondary identifier needs to be added. ' +
+      'Company-law disclosure facts (registration number, registry office, share capital, directors — France\'s ' +
+      'SIRET, Germany\'s Handelsregisternummer/Registergericht/Sitz/managing-director names, and each other ' +
+      'country\'s equivalent) are entity-level, NOT registration extraFields — set them via update_entity\'s ' +
+      'entityFacts instead (see get_entity_fact_definitions for the current keys), since they are facts about ' +
+      'the entity\'s own one place of establishment, not any one country registration. ' +
       'Country/type cannot be changed this way. extraFields is a MERGE, not a replace, per key: a string value ' +
-      'overwrites that key, an explicit null deletes it (e.g. clearing de_handelsregisternummer after changing ' +
-      'the entity\'s legalForm — see update_entity\'s entityFacts — to one that no longer requires it), and an ' +
-      'omitted key is left untouched. Germany (DE) accepts, in addition to de_steuernummer: de_registered_seat ' +
-      '(Sitz — the city the company is legally seated in), de_handelsregisternummer (e.g. ' +
-      '"HRB 12345"), de_registergericht (e.g. "Amtsgericht München"), de_geschaeftsfuehrer (managing-director/' +
-      'board names, one per line), and de_kleinunternehmer ("true"/"false" — the §19 UStG small-business ' +
-      'exemption flag). None of these are required to save the registration — they become required only at ' +
-      'send/validate time, once the entity\'s legalForm (set via update_entity, NOT here — legal form is an ' +
-      'entity-level fact, not scoped to any one country registration) makes them applicable (e.g. ' +
-      'de_handelsregisternummer/de_registergericht/de_registered_seat once a Handelsregister-registered legal ' +
-      'form like GmbH is set). Spain (ES) accepts es_tax_territory (mainland | canary_islands | both) — which part of ' +
+      'overwrites that key, an explicit null deletes it, and an omitted key is left untouched. Germany (DE) ' +
+      'accepts de_steuernummer and de_kleinunternehmer ("true"/"false" — the §19 UStG small-business exemption ' +
+      'flag). Use get_registration_field_definitions to see which of these currently apply and why, before ' +
+      'writing them. Spain (ES) also accepts es_tax_territory (mainland | canary_islands | both) — which part of ' +
       'Spain the entity sells from; Clearvo registers Canary Islands (IGIC) invoices with the AEAT VeriFactu system ' +
       'under the same Spanish tax number, and an IGIC line without this field fails VERIFACTU_TAX_TERRITORY_REQUIRED.',
     inputSchema: {
@@ -1802,7 +1795,7 @@ const TOOLS = [
           description: 'The tax number ID or obligation ID of the registration (from list_registrations — use taxNumberId or obligationId field)',
         },
         taxNumber: { type: ['string', 'null'], description: 'New registration/VAT number. Pass null or an empty string to clear it. Omit entirely to leave it unchanged.' },
-        extraFields: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Secondary identifiers to merge in, e.g. { "fr_siret": "12345678901234" } or { "de_handelsregisternummer": "HRB 12345" }. A string value overwrites that key; an explicit null deletes it; an omitted key is left unchanged.' },
+        extraFields: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Secondary identifiers to merge in, e.g. { "de_steuernummer": "21/815/08155" }. A string value overwrites that key; an explicit null deletes it; an omitted key is left unchanged. See list_registrations\' response secondaryIdentifiers field, or get_registration_field_definitions, for which keys apply to a given country.' },
       },
       required: ['registrationId'],
     },

@@ -61,12 +61,16 @@ export interface UpdateEntityInput {
   mxIngestionStartDate?: string | null;
   /**
    * Facts about the entity itself (not any one country registration) — e.g.
-   * `{ legalForm: 'GMBH' }`. A MERGE, per key, same 3-state contract as
-   * UpdateRegistrationInput.extraFields: a string sets that key, an explicit
-   * null deletes it, an omitted key is left unchanged. legalForm gates
-   * whether Germany's Handelsregister disclosures (set via
-   * UpdateRegistrationInput.extraFields) are applicable — set it here, not
-   * on a registration, even for a German entity.
+   * `{ legalForm: 'GMBH' }`, plus the entity's company-law disclosure facts
+   * (Handelsregister number, register court, Sitz, managing directors for a
+   * German entity; the equivalent facts for FR/IT/PT/ES). A MERGE, per key,
+   * same 3-state contract as UpdateRegistrationInput.extraFields: a string
+   * sets that key, an explicit null deletes it, an omitted key is left
+   * unchanged. These are always entity-level, never set via a registration's
+   * extraFields — the same disclosure must render on every invoice the
+   * entity issues, regardless of which country's rules a given invoice
+   * resolves to. See GET /v1/entities/fact-definitions for the full key
+   * list and their per-country labels.
    */
   entityFacts?: Record<string, string | null>;
 }
@@ -537,31 +541,15 @@ export interface SubmitInvoiceInput {
    *   `MISSING_SUPPLIER_ELECTRONIC_ADDRESS` before any XML is generated. The
    *   SDK has no typed customer methods; customer `references` are managed
    *   through the REST API and MCP tools.
-   * - `de.legalForm` — per-invoice override of the entity's own legal form
-   *   (DE legal-form select vocabulary, e.g. GMBH, UG, AG, SE, KGAA, EG,
-   *   GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER,
-   *   FOREIGN_BRANCH, OTHER; case-sensitive) — gates whether the
-   *   register-identity and managing-directors disclosure fields below
-   *   apply at all (invoice-content-field-registry). Defaults from the
-   *   entity's own stored `entityFacts.legalForm` (see
-   *   `UpdateEntityInput.entityFacts`) when omitted; rarely needed
-   *   per-invoice.
-   * - `de.handelsregisternummer` — BT-30, HGB § 37a commercial-register
-   *   number (e.g. "HRB 12345"). Required once `legalForm` is a
-   *   Handelsregister-registered form; missing this/`registergericht`/
-   *   `registeredSeat` never blocks the send — returns non-terminal
-   *   `errorCode: MISSING_DE_COMPANY_REGISTER_DETAILS` (WARNING severity).
-   * - `de.registergericht` / `de.registeredSeat` — HGB § 37a register court
-   *   / Sitz. See `de.handelsregisternummer` for the shared gate.
-   * - `de.geschaeftsfuehrer` — GmbHG § 35a / AktG § 80 managing-director or
-   *   board-member names, one per line. Missing this when applicable
-   *   returns `errorCode: MISSING_DE_MANAGING_DIRECTORS` (WARNING).
    * - `de.kleinunternehmer` — boolean, § 19 UStG small-business exemption
    *   flag. `true` with any line carrying a positive tax rate fails 422
-   *   `DE_KLEINUNTERNEHMER_CHARGES_VAT` (a real VAT-invoice defect, unlike
-   *   the company-law WARNINGs above).
-   * - Each `de.*` field above falls back to the matching `de_*` extraFields
-   *   value on the entity's own DE tax registration when omitted.
+   *   `DE_KLEINUNTERNEHMER_CHARGES_VAT` (a real VAT-invoice defect).
+   * - Germany's company-law disclosure (Handelsregister number, register
+   *   court, Sitz, managing directors) is NOT a per-invoice override — it's
+   *   an entity-level fact (`entityFacts.legalForm` and related keys, see
+   *   `UpdateEntityInput.entityFacts`), since the same disclosure must
+   *   render on every invoice the entity issues regardless of which
+   *   country's clearance rules a given invoice resolves to.
    * - `peppol.selfBilling` (boolean, default false) — marks this as a
    *   self-billing document (the customer issues on the seller's behalf),
    *   switching to a self-billing CustomizationID/ProfileID and UNTDID
@@ -1696,18 +1684,17 @@ export interface UpdateRegistrationInput {
   /**
    * Secondary identifiers to merge in, per key: a string value overwrites
    * that key, an explicit `null` deletes it, an omitted key is left
-   * unchanged — e.g. { fr_siret: '12345678901234' } or
-   * { de_handelsregisternummer: 'HRB 12345' }. Germany (DE) accepts, in
-   * addition to `de_steuernummer`: `de_registered_seat`,
-   * `de_handelsregisternummer`, `de_registergericht`, `de_geschaeftsfuehrer`,
-   * and `de_kleinunternehmer` ('true'/'false') — see
+   * unchanged — e.g. { de_steuernummer: '21/815/08155' }. Germany (DE)
+   * accepts `de_steuernummer` and `de_kleinunternehmer` ('true'/'false') — see
    * `SubmitInvoiceInput.countrySpecific`'s `de.*` doc comments for what each
-   * one means and when it's enforced. Legal form is NOT here — it's an
-   * entity-level fact, not scoped to any one country registration; set it
-   * via `UpdateEntityInput.entityFacts.legalForm` instead. Spain (ES)
-   * accepts `es_tax_territory` (`mainland`, `canary_islands` or `both`) —
-   * which part of Spain you sell from; an IGIC (Canary Islands) line cannot
-   * be registered with VeriFactu until it is set.
+   * one means and when it's enforced. Company-law disclosure facts
+   * (Handelsregister number, register court, Sitz, managing directors,
+   * legal form, and the FR/IT/PT/ES equivalents) are NOT here — they're
+   * entity-level, not scoped to any one country registration; set them via
+   * `UpdateEntityInput.entityFacts` instead. Spain (ES) accepts
+   * `es_tax_territory` (`mainland`, `canary_islands` or `both`) — which
+   * part of Spain you sell from; an IGIC (Canary Islands) line cannot be
+   * registered with VeriFactu until it is set.
    */
   extraFields?: Record<string, string | null>;
 }
