@@ -2787,6 +2787,70 @@ const TOOLS = [
       required: ['batchId'],
     },
   },
+  // Tax Calculation CSV bulk import (a dedicated, calc-only ingestion path —
+  // deliberately separate from submit_invoices_bulk*/get_bulk_upload_status
+  // above, which are e-invoicing tools). Always async. Every import is a FINAL
+  // calculation: no preview or confirm step — clean transactions are committed
+  // immediately, errored ones are reported and never committed.
+  {
+    name: 'import_tax_calculations',
+    description:
+      'Uploads a CSV of transactions to be tax-calculated in bulk — for recording historical/backdated transactions, or ' +
+      'loading a batch of current data, into the tax calculation audit trail. This never sends an invoice or reports to ' +
+      'any tax authority — it only produces committed tax_calculations rows, the same as calling calculate_tax ' +
+      'many times. csvContent is the raw CSV text (not base64): required columns transactionRef, transactionDate, ' +
+      'currency, customerCountry, productName; one or more adjacent rows sharing the same transactionRef become one ' +
+      'multi-line transaction. Every import is FINAL: there is no preview or confirm step. Always async — this call only ' +
+      'lands the file and queues it; it never calculates anything in this request. Returns { batchId, status: \'UPLOADED\' } ' +
+      'immediately. A background job then calculates each transaction with commit:true: clean transactions are committed ' +
+      'right away, transactions that error are NOT committed and are reported, and the batch never fails as a whole for a ' +
+      'partially-clean file. Poll get_tax_calculation_import_status with that batchId until status is COMPLETED, then ' +
+      'call list_tax_calculation_import_errors when errorCount is greater than zero.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — see this tool\'s own description for the required columns.' },
+        filename: { type: 'string', description: 'Optional filename to record against the batch.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['csvContent'],
+    },
+  },
+  {
+    name: 'get_tax_calculation_import_status',
+    description:
+      'Poll one tax calculation import batch, created via import_tax_calculations. Returns the batch (status: ' +
+      'UPLOADED/PROCESSING/COMPLETED/FAILED/CANCELLED, plus total/committedCount/errorCount, which advance while ' +
+      'PROCESSING) and a paginated page of its transaction groups, each with its final outcome: COMMITTED (with the real ' +
+      'calculationId) or ERROR (nothing committed, with a reason). FAILED means the file itself could not be parsed ' +
+      '(structuralError); transactions before the problem stay committed. Call list_tax_calculation_import_errors ' +
+      'afterward when errorCount is greater than zero.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by import_tax_calculations.' },
+        page: { type: 'number', description: 'Page number for the transactions list, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Transactions per page (default 25, max 100)' },
+        status: { type: 'string', enum: ['COMMITTED', 'ERROR'], description: 'Filter the transactions page to only this outcome.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'list_tax_calculation_import_errors',
+    description:
+      'Every transaction group of a tax calculation import batch that was NOT committed — row range, transaction ref, error ' +
+      'code, and message — so the source file can be fixed and re-uploaded for just the affected transactions.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by import_tax_calculations.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
   // Monthly SAF-T (PT) 1.04_01 billing file — MCP twin of GET /v1/pt/saft. Only ever requests a
   // JSON shape (format=summary by default, or format=status): callApi() parses every response as
   // JSON, so the raw XML file body itself is never a fit shape for this transport — a caller who
@@ -3870,6 +3934,26 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (limit != null) qs.set('limit', String(limit));
       const q = qs.toString();
       return callApi('GET', `/send/bulk/${encodeURIComponent(batchId)}/errors${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'import_tax_calculations': {
+      const { csvContent, filename, entityId } = args as { csvContent: string; filename?: string; entityId?: string };
+      return callApi('POST', '/tax/calculate/import', csvFormData(csvContent, filename || 'tax-calculations.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'get_tax_calculation_import_status': {
+      const { batchId, page, limit, status, entityId } = args as { batchId: string; page?: number; limit?: number; status?: string; entityId?: string };
+      const qs = new URLSearchParams();
+      if (page != null) qs.set('page', String(page));
+      if (limit != null) qs.set('limit', String(limit));
+      if (status) qs.set('status', status);
+      const q = qs.toString();
+      return callApi('GET', `/tax/calculate/import/${encodeURIComponent(batchId)}${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+    }
+
+    case 'list_tax_calculation_import_errors': {
+      const { batchId, entityId } = args as { batchId: string; entityId?: string };
+      return callApi('GET', `/tax/calculate/import/${encodeURIComponent(batchId)}/errors?format=json`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
     }
 
     case 'propose_manual_adjustment': {

@@ -2655,6 +2655,100 @@ export interface ListBulkUploadErrorsResponse {
   errors: BulkUploadStructuralErrorRow[];
 }
 
+// ── Tax Calculation CSV bulk import (POST /v1/tax/calculate/import) ────────
+// A dedicated, calc-only ingestion path — deliberately separate from
+// submitInvoicesBulk*/getBulkUploadStatus above, which are e-invoicing
+// methods. Always async. Every import is a FINAL calculation: there is no
+// preview or confirm step — clean transactions are committed immediately and
+// errored ones are reported, never committed. Poll getTaxCalculationImportStatus.
+
+export type TaxCalcImportBatchStatus = 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+/** COMMITTED = a final tax calculation was recorded; ERROR = nothing was committed for this transaction. */
+export type TaxCalcImportOutcome = 'COMMITTED' | 'ERROR';
+
+export interface ImportTaxCalculationsInput {
+  /** The raw CSV text (not base64) — required columns transactionRef, transactionDate, currency, customerCountry, productName. One or more adjacent rows sharing the same transactionRef become one multi-line transaction. */
+  csvContent: string;
+  /** Optional filename to record against the batch. */
+  filename?: string;
+  entityId?: string;
+}
+
+/** Returned immediately — this call only lands the file and queues it; it never calculates anything in-request. */
+export interface ImportTaxCalculationsResponse {
+  ok: boolean;
+  batchId: string;
+  status: 'UPLOADED';
+}
+
+export interface TaxCalcImportBatch {
+  id: string;
+  entityId: string;
+  accountId: string;
+  uploadedBy: string | null;
+  filename: string | null;
+  status: TaxCalcImportBatchStatus;
+  /** Ready-to-render label for `status`. */
+  statusLabel: string;
+  blobPath: string | null;
+  contentHash: string | null;
+  /** Transactions processed so far (final once status is COMPLETED). */
+  total: number;
+  committedCount: number;
+  errorCount: number;
+  structuralError: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface TaxCalcImportTransaction {
+  id: string;
+  batchId: string;
+  entityId: string;
+  transactionRef: string;
+  rowStart: number;
+  rowEnd: number;
+  requestJson: unknown;
+  outcome: TaxCalcImportOutcome;
+  /** Ready-to-render label for `outcome`. */
+  outcomeLabel: string;
+  /** The committed calculation's id; null for ERROR rows. */
+  calculationId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface GetTaxCalculationImportStatusParams {
+  /** Page number for the transactions list, 1-based (default 1). */
+  page?: number;
+  /** Transactions per page (default 25, max 100). */
+  limit?: number;
+  /** Filter the transactions page to only this outcome. */
+  status?: TaxCalcImportOutcome;
+  entityId?: string;
+}
+
+export interface GetTaxCalculationImportStatusResponse {
+  ok: boolean;
+  batch: TaxCalcImportBatch;
+  transactions: TaxCalcImportTransaction[];
+  pagination: { total: number; page: number; limit: number; pages: number };
+}
+
+export interface TaxCalcImportErrorRow {
+  transactionRef: string;
+  rowStart: number;
+  rowEnd: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface ListTaxCalculationImportErrorsResponse {
+  ok: boolean;
+  errors: TaxCalcImportErrorRow[];
+}
+
 // ── France platform credentials (POST/GET /v1/fr/credentials) ──────────────
 // No secret is stored here — this is a status-visibility endpoint for the
 // entity's own French VAT number (numéro de TVA intracommunautaire), not a
