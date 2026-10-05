@@ -1741,13 +1741,33 @@ const TOOLS = [
   {
     name: 'list_registrations',
     description:
-      'List the tax registrations and obligations for an entity: VAT registrations by country, ' +
+      'List the tax registrations for an entity: VAT registrations by country, ' +
       'OSS/IOSS scheme registrations, and compliance threshold status. ' +
+      'For the full threshold-monitoring view, including the EU-wide consumer-sales row, use list_obligations. ' +
       'Use this to see where an entity is registered and whether it is compliant, approaching threshold, or exposed.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         entityId: { type: 'string', description: 'Entity ID to query. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'list_obligations',
+    description:
+      'List where an entity must or may need to register for tax: threshold monitoring by country and state, plus ' +
+      'e-invoicing mandates. Each row has a status (registration required, approaching threshold, monitoring, ' +
+      'registered), the current sales figure against the threshold, and a plain-language commentary. ' +
+      'On a live key the list includes an EU-wide row (country "EU", id "eu-distance-sales") that tracks consumer ' +
+      'sales to other EU countries against the EU distance-sales limit; it is calculated from your sales and cannot ' +
+      'be edited. A sandbox key also accepts includePreview=true to return that row built from sandbox test data in ' +
+      'previewObligations (isPreview true, not counted in total); a live key ignores includePreview.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code to filter by; use "EU" for the EU-wide consumer-sales row.' },
+        status: { type: 'string', description: 'Filter by obligation status, e.g. BREACH, APPROACHING, MONITORING, COMPLIANT.' },
+        includePreview: { type: 'boolean', description: 'Sandbox keys only: also return the EU consumer-sales row built from sandbox test data in previewObligations.' },
       },
     },
   },
@@ -3792,6 +3812,13 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.entityId) qs.set('entityId', args.entityId as string);
       const q = qs.toString();
       return callApi('GET', `/tax/registrations${q ? `?${q}` : ''}`);
+    }
+
+    case 'list_obligations': {
+      const qs = new URLSearchParams();
+      for (const k of ['country', 'status', 'includePreview'] as const) if (args[k] !== undefined) qs.set(k, String(args[k]));
+      const q = qs.toString();
+      return callApi('GET', `/tax/obligations${q ? `?${q}` : ''}`);
     }
 
     case 'add_registration':

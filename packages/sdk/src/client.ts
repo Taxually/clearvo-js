@@ -44,6 +44,8 @@ import type {
   ListWebhooksResponse,
   TaxRegistration,
   ListRegistrationsResponse,
+  ListObligationsParams,
+  ListObligationsResponse,
   AddRegistrationInput,
   SetCollectionInput,
   SetCollectionResponse,
@@ -484,6 +486,18 @@ export class ClearvoClient {
   listRegistrations(entityId?: string): Promise<ListRegistrationsResponse> {
     const qs = entityId ? `?entityId=${encodeURIComponent(entityId)}` : '';
     return this.request('GET', `/tax/registrations${qs}`);
+  }
+
+  /**
+   * Threshold monitoring by country and state plus e-invoicing mandates. A live key's list includes the EU-wide
+   * consumer-sales row (`id` "eu-distance-sales"); a sandbox key receives it in `previewObligations` when
+   * `includePreview` is true.
+   */
+  listObligations(params: ListObligationsParams = {}): Promise<ListObligationsResponse> {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined) qs.set(k, String(v));
+    const q = qs.toString();
+    return this.request('GET', `/tax/obligations${q ? `?${q}` : ''}`);
   }
 
   addRegistration(input: AddRegistrationInput): Promise<{ ok: boolean; registration?: object }> {
