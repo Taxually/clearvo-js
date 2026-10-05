@@ -552,14 +552,22 @@ const TOOLS = [
           type: 'object',
           description: 'Payment details.',
           properties: {
-            method: { type: 'string', enum: ['bank_transfer', 'direct_debit', 'credit_card', 'cash', 'check', 'other'], description: '"direct_debit" renders SEPA payment means (UBL/CII PaymentMeansCode 59) and REQUIRES mandateReference (BT-89) — Germany also requires creditorId and debitedIban (BT-90/91). Omit for a plain credit-transfer invoice (bank_transfer, the default).' },
-            iban: { type: 'string', description: 'Seller\'s IBAN for a bank_transfer invoice.' },
-            bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the call fails with 422 DE_XRECHNUNG_BIC_FORBIDDEN.' },
-            reference: { type: 'string', description: 'Payment reference/remittance information.' },
-            prepaid: { type: 'boolean', description: 'True if the invoice has already been paid.' },
-            mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the call fails 422 MANDATE_REFERENCE_TOO_LONG.' },
-            creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
-            debitedIban: { type: 'string', description: 'The CUSTOMER\'s own IBAN the SEPA direct debit draws from (BT-91). Must be a real IBAN (checksum-validated) — malformed input fails 422 INVALID_DEBITED_IBAN. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-31). Distinct from `iban` above, which is the seller\'s own account for a bank_transfer payment.' },
+            means: {
+              type: 'array',
+              description: 'Payment instructions (BG-16), one entry per way of paying. Validation errors name the paths payment.means[i].mandateReference / payment.means[i].debitedIban.',
+              items: {
+                type: 'object',
+                properties: {
+                  method: { type: 'string', enum: ['bank_transfer', 'direct_debit', 'credit_card', 'cash', 'check', 'other'], description: '"direct_debit" renders SEPA payment means (UBL/CII PaymentMeansCode 59) and REQUIRES mandateReference (BT-89) — Germany also requires creditorId and debitedIban (BT-90/91). Omit for a plain credit-transfer invoice (bank_transfer, the default).' },
+                  iban: { type: 'string', description: 'Seller\'s IBAN for a bank_transfer invoice.' },
+                  bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the call fails with 422 DE_XRECHNUNG_BIC_FORBIDDEN.' },
+                  reference: { type: 'string', description: 'Payment reference/remittance information.' },
+                  mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the call fails 422 MANDATE_REFERENCE_TOO_LONG.' },
+                  creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
+                  debitedIban: { type: 'string', description: 'The CUSTOMER\'s own IBAN the SEPA direct debit draws from (BT-91). Must be a real IBAN (checksum-validated) — malformed input fails 422 INVALID_DEBITED_IBAN. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-31). Distinct from `iban` above, which is the seller\'s own account for a bank_transfer payment.' },
+                },
+              },
+            },
           },
         },
         delivery: {
@@ -2451,9 +2459,9 @@ const TOOLS = [
     name: 'list_bank_accounts',
     description:
       'List an entity\'s stored bank-account master data (IBAN/BIC), one per currency plus an optional ' +
-      'entity-wide DEFAULT (no currency). When a call to submit_invoice/send_invoice omits payment.iban, this ' +
+      'entity-wide DEFAULT (no currency). When a call to submit_invoice/send_invoice omits payment.means[].iban, this ' +
       'master data is used as a fallback: the account matching the invoice\'s own currency first, then the ' +
-      'DEFAULT account, in that order. A payment.iban given directly on the invoice always wins outright.',
+      'DEFAULT account, in that order. A payment.means[].iban given directly on the invoice always wins outright.',
     inputSchema: {
       type: 'object' as const,
       properties: {

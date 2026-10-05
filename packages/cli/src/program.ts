@@ -714,7 +714,7 @@ export function createProgram(): Command {
   // ── clearvo bank-accounts ───────────────────────────────────────────────────
   // Entity-owned IBAN/BIC master data (one per currency, plus an optional
   // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // an invoice's own payment.iban always wins outright; this is a fallback.
+  // an invoice's own payment.means[].iban always wins outright; this is a fallback.
   const bankAccounts = program.command('bank-accounts').description('Manage bank-account master data');
 
   bankAccounts

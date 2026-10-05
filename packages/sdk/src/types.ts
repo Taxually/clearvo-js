@@ -307,26 +307,55 @@ export interface AllowanceChargeInput {
 }
 
 /**
- * Payment details for a `SubmitInvoiceInput`. `method: 'direct_debit'`
+ * One way of paying an invoice (BG-16), an entry of `PaymentInput.means`. `method: 'direct_debit'`
  * renders SEPA payment means (UBL/CII PaymentMeansCode 59, BG-19) and
  * requires `mandateReference` (BT-89) — Germany's KoSIT XRechnung-CII
  * overlay additionally requires `creditorId` and `debitedIban` (BT-90/91,
- * BR-DE-30/31). Country-agnostic — not Germany-specific.
+ * BR-DE-30/31). Country-agnostic — not Germany-specific. Validation errors name
+ * the paths `payment.means[i].mandateReference` / `payment.means[i].debitedIban`.
  */
-export interface PaymentInput {
+export interface PaymentMeansInput {
   method?: 'bank_transfer' | 'direct_debit' | 'credit_card' | 'cash' | 'check' | 'other';
   /** Seller's IBAN for a `bank_transfer` invoice. */
   iban?: string;
   /** BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit for DE or the call fails 422 `DE_XRECHNUNG_BIC_FORBIDDEN`. */
   bic?: string;
+  /** Payment reference / remittance information (BT-83). */
   reference?: string;
-  prepaid?: boolean;
   /** BT-89. SEPA mandate reference identifier. Required whenever `method` is `'direct_debit'` — max 35 characters, or 422 `MANDATE_REFERENCE_TOO_LONG`. */
   mandateReference?: string;
   /** BT-90. SEPA bank-assigned creditor identifier (Gläubiger-ID) — the SELLER's own identifier, never the customer's. Germany additionally requires this whenever `method` is `'direct_debit'` (KoSIT BR-DE-30). */
   creditorId?: string;
   /** BT-91. The CUSTOMER's own IBAN the direct debit draws from — distinct from `iban` above (the seller's own account). Must be a real IBAN (checksum-validated) — malformed input fails 422 `INVALID_DEBITED_IBAN`. Germany additionally requires this whenever `method` is `'direct_debit'` (KoSIT BR-DE-31). */
   debitedIban?: string;
+}
+
+/** Payment terms of a `SubmitInvoiceInput`. */
+export interface PaymentTermsInput {
+  /** Free-text payment terms, e.g. "Net 30" (BT-20). */
+  text?: string;
+  /** Early-payment discount (Skonto) as structured data. */
+  earlyPayment?: {
+    days: number;
+    percent: number;
+    /** Defaults to the invoice's tax-exclusive amount. */
+    baseAmount?: number;
+  };
+}
+
+/**
+ * Payment details for a `SubmitInvoiceInput`. The earlier flat shape is refused with 422 `UNKNOWN_FIELD_RENAMED`
+ * naming the replacement: `payment.method|iban|bic|reference|mandateReference|creditorId|debitedIban` are now
+ * `payment.means[].<same name>`, a string `payment.terms` is now `payment.terms.text`,
+ * `payment.skonto.days|percentOff|baseAmount` are now `payment.terms.earlyPayment.days|percent|baseAmount`, and
+ * `payment.dueDate` is removed (use the top-level `dueDate`).
+ */
+export interface PaymentInput {
+  /** Payment instructions (BG-16), one entry per way of paying. */
+  means?: PaymentMeansInput[];
+  terms?: PaymentTermsInput;
+  /** Installment schedule; the amounts should sum to the invoice total. */
+  installments?: Array<{ dueDate: string; amount: number; description?: string }>;
 }
 
 /** Words for `countrySpecific.es.customerIdType` (Spain VeriFactu buyer identification; AEAT IDType 03 to 07). */
@@ -432,7 +461,16 @@ export interface SubmitInvoiceInput {
    * HELD_UNMAPPED_TAX_CODE outcome).
    */
   dryRun?: boolean;
+  /** Amount already paid (BT-113). Without `statedPayableAmount`, the payable amount is the total less this. */
   prepaidAmount?: number;
+  /**
+   * The amount due for payment your own system computed. Authoritative: stored as the invoice's payable amount
+   * (BT-115) exactly as stated; the difference from the lines total less `prepaidAmount` is stored as the rounding
+   * amount (BT-114), with no cap. A difference of more than one minor unit of `currency` is the warning
+   * `ROUNDING_RESIDUAL_OVER_TOLERANCE` (no longer a 422). A format that cannot carry the figure consistently
+   * (EN 16931 BR-CO-16) holds the invoice with `PAYABLE_AMOUNT_BR_CO_16`.
+   */
+  statedPayableAmount?: number;
   originalInvoiceRef?: { invoiceNumber: string; issueDate: string };
   /**
    * Id (from a prior submit response) of the invoice this submission corrects
@@ -1522,10 +1560,10 @@ export interface ListSuppliersResponse {
 // ── Bank Account Master Data ─────────────────────────────────────────────────
 //
 // Entity-owned IBAN/BIC master data, one row per currency plus an optional
-// entity-wide DEFAULT (currency omitted). When an invoice's payment.iban is
+// entity-wide DEFAULT (currency omitted). When an invoice's payment.means[].iban is
 // omitted, submitInvoice/calculateTax's send step falls back to the account
 // matching the invoice's own currency, then to the DEFAULT account, in that
-// order — a payment.iban given directly on the invoice always wins outright.
+// order — a payment.means[].iban given directly on the invoice always wins outright.
 
 export interface BankAccount {
   id: string;
