@@ -194,7 +194,7 @@ Backend PR: Taxually-Einvoicing `claude/entity-bank-accounts`, `GET`/`POST /v1/b
 ## IT/ES profile fields
 ## Unreleased — publish only AFTER the Tax Calculation CSV bulk import backend PR has merged and deployed
 
-Backend PR: Taxually-Einvoicing `claude/tax-calc-csv-import`, `POST /v1/tax/calculate/import` + its `{batchId}`/`{batchId}/errors` siblings. Until it is live in production, these SDK/MCP/CLI calls 404. A dedicated, calc-only CSV bulk import path — deliberately separate from the existing e-invoicing bulk-send methods (`submitInvoicesBulk`/`submit_invoices_bulk`/`send-bulk`, which submit real invoices/reports) — for recording historical/backdated transactions or loading a batch of current data into the tax calculation audit trail. Always async and two-phase: upload queues a preview (`commit:false`, nothing persisted), then a separate confirm call commits only the transactions that came back clean.
+Backend PR: Taxually-Einvoicing `claude/tax-calc-csv-import`, `POST /v1/tax/calculate/import` + its `{batchId}`/`{batchId}/errors` siblings. Until it is live in production, these SDK/MCP/CLI calls 404. A dedicated, calc-only CSV bulk import path — deliberately separate from the existing e-invoicing bulk-send methods (`submitInvoicesBulk`/`submit_invoices_bulk`/`send-bulk`, which submit real invoices/reports) — for recording historical/backdated transactions or loading a batch of current data into the tax calculation audit trail. Always async: upload queues the batch, every clean transaction is committed immediately, and errored transactions are reported and never committed.
 
 ### @clearvo/sdk 0.4.0 (additive, non-breaking)
 
