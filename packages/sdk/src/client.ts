@@ -145,8 +145,9 @@ import type {
   ListManualAdjustmentsResponse,
   ManualAdjustmentStatus,
   ManualAdjustmentOptions,
+  GetUsageResponse,
 } from './types.js';
-import { ClearvoError } from './types.js';
+import { ClearvoError, ClearvoPlanRequiredError, ClearvoPlanNotIncludedError } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
 
@@ -201,6 +202,24 @@ export class ClearvoClient {
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+      // Free-plan monitor-only calculation (POST /tax/calculate, commit: true): a typed error, not a generic one.
+      if (response.status === 402 && data.error === 'plan_required') {
+        throw new ClearvoPlanRequiredError(
+          String(data.calculationId ?? ''),
+          String(data.upgradeUrl ?? ''),
+          'plan_required',
+          typeof data.message === 'string' ? data.message : undefined
+        );
+      }
+      // Plan lacks Explore (growth and above) or the rules API (enterprise only): a typed error, not a generic one.
+      if (response.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included')) {
+        throw new ClearvoPlanNotIncludedError(
+          data.error === 'explore_not_included' ? 'explore' : 'rules',
+          String(data.upgradeUrl ?? ''),
+          data.error,
+          typeof data.message === 'string' ? data.message : undefined
+        );
+      }
       throw new ClearvoError(
         response.status,
         String(data.error ?? `HTTP ${response.status}`),
@@ -251,6 +270,11 @@ export class ClearvoClient {
 
   // ── Tax Calculation ───────────────────────────────────────────────────────────
 
+  /**
+   * On a free plan a committed calculation (`commit: true`, the default) is recorded for Compliance Radar but returns
+   * no amounts: it throws `ClearvoPlanRequiredError` (HTTP 402 `plan_required`) carrying `calculationId`, `monitorOnly`
+   * and `upgradeUrl`. `commit: false` previews, paid plans and sandbox keys return the full calculation.
+   */
   calculateTax(input: TaxCalculateRequest): Promise<TaxCalculateResponse> {
     return this.request('POST', '/tax/calculate', input);
   }
@@ -302,6 +326,17 @@ export class ClearvoClient {
     if (params.precision)   qs.set('precision', params.precision);
     const q = qs.toString();
     return this.request('GET', `/duties/settlement-variance${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Usage ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /usage: plan, billing status and billable transaction usage against the plan allowance for the current billing
+   * period. Organisation-wide (no entity needed). Counts come from an hourly ledger and can trail live traffic by up to
+   * an hour (see `usage.updatedAt`); sandbox calls are never counted.
+   */
+  getUsage(): Promise<GetUsageResponse> {
+    return this.request('GET', '/usage');
   }
 
   // ── Tax Number Validation ─────────────────────────────────────────────────────

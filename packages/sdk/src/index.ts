@@ -1,6 +1,10 @@
 export { ClearvoClient } from './client.js';
-export { ClearvoError } from './types.js';
+export { ClearvoError, ClearvoPlanRequiredError, ClearvoPlanNotIncludedError } from './types.js';
 export type {
+  Plan,
+  BillingStatus,
+  UsageSummary,
+  GetUsageResponse,
   ClearvoClientOptions,
   Entity,
   CreateEntityInput,

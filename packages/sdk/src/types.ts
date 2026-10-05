@@ -3527,6 +3527,77 @@ export class ClearvoError extends Error {
   }
 }
 
+/**
+ * Thrown by `calculateTax()` for a committed calculation (`commit: true`, the default) on a free plan: HTTP 402
+ * `plan_required`. The transaction WAS recorded for Compliance Radar (`calculationId`), but the plan does not include
+ * calculation results, so there are no tax amounts: do not apply any tax from it. Send the user to `upgradeUrl`.
+ * `commit: false` previews, paid plans and sandbox keys are unaffected. Catch it with `instanceof`.
+ */
+export class ClearvoPlanRequiredError extends ClearvoError {
+  constructor(
+    public readonly calculationId: string,
+    public readonly upgradeUrl: string,
+    message = 'plan_required',
+    hint?: string
+  ) {
+    super(402, message, hint);
+    this.name = 'ClearvoPlanRequiredError';
+  }
+
+  /** Always true: the transaction was recorded for Compliance Radar and no amounts were returned. */
+  readonly monitorOnly = true as const;
+}
+
+/**
+ * Thrown when the plan does not include a feature: HTTP 403 `explore_not_included` (Explore: `queryData`, `getQueryFields`,
+ * `exportData`; Growth and above) or `rules_not_included` (the rules API; Enterprise only). `hint` is the plan sentence
+ * from the API; send the user to `upgradeUrl`. Any other 403 stays a generic `ClearvoError`. Catch it with `instanceof`.
+ */
+export class ClearvoPlanNotIncludedError extends ClearvoError {
+  constructor(
+    public readonly feature: 'explore' | 'rules',
+    public readonly upgradeUrl: string,
+    message: string,
+    hint?: string
+  ) {
+    super(403, message, hint);
+    this.name = 'ClearvoPlanNotIncludedError';
+  }
+}
+
+// ── Plans and usage (GET /v1/usage) ──────────────────────────────────────────
+
+/** Plan names. `free` is monitor-only: committed calculations are recorded for Compliance Radar but return no amounts. */
+export type Plan = 'free' | 'starter' | 'growth' | 'enterprise';
+
+export type BillingStatus = 'none' | 'trialing' | 'active' | 'past_due' | 'canceled';
+
+/** Billable transaction usage against the plan allowance for the current billing period (organisation-wide). */
+export interface UsageSummary {
+  plan: Plan;
+  billingStatus: BillingStatus;
+  /** Current billing period; null when the organisation has no subscription period. */
+  period: { start: string; end: string } | null;
+  /** Committed live calculations this period. Previews (`commit: false`) and sandbox calls do not count. */
+  used: number;
+  /** Transactions included in the plan per period; null when the plan is not metered. */
+  included: number | null;
+  remaining: number | null;
+  percentUsed: number | null;
+  /** Price per transaction beyond the allowance; null when the plan has no overage price. */
+  overageUsd: number | null;
+  /** Transactions beyond the allowance. Calculations are never blocked at the allowance. Never charged while `inTrial`. */
+  overage: number;
+  inTrial: boolean;
+  /** When the hourly ledger last changed; counts can trail live traffic by up to an hour. */
+  updatedAt: string | null;
+}
+
+/** GET /v1/usage response. */
+export interface GetUsageResponse {
+  usage: UsageSummary;
+}
+
 // ── Customs duties (POST /v1/duties/quote and the duties block on calculate) ────
 
 /** Scheme of a customs commodity code. */

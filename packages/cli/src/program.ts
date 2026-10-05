@@ -78,6 +78,20 @@ export function createProgram(): Command {
     });
     const data = await res.json().catch(() => ({})) as Record<string, unknown>;
     if (!res.ok) {
+      // Free plan, committed calculation: recorded for Compliance Radar but no amounts returned (HTTP 402 plan_required).
+      if (res.status === 402 && data.error === 'plan_required') {
+        console.error('Your plan does not include tax calculation results.');
+        console.error(`This transaction was recorded for Compliance Radar${data.calculationId ? ` (calculation ${data.calculationId})` : ''}, but no tax amounts were returned. Do not apply any tax from it.`);
+        if (data.upgradeUrl) console.error(`Upgrade your plan: ${data.upgradeUrl}`);
+        console.error('Use --dry-run to preview a calculation without recording it.');
+        process.exit(1);
+      }
+      // Plan lacks Explore (growth and above) or the rules API (enterprise only): HTTP 403 <feature>_not_included.
+      if (res.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included')) {
+        console.error(String(data.message ?? 'Your plan does not include this feature.'));
+        if (data.upgradeUrl) console.error(`Upgrade your plan: ${data.upgradeUrl}`);
+        process.exit(1);
+      }
       const parts = [`HTTP ${res.status}: ${data.error ?? 'Unknown error'}`];
       if (data.hint) parts.push(`Hint: ${data.hint}`);
       if (data.field) parts.push(`Field: ${data.field}`);
@@ -314,7 +328,7 @@ export function createProgram(): Command {
     .command('calculate <file>')
     .description('Calculate tax for a transaction from a JSON file')
     .option('--commit', 'Record in audit trail (redundant — this is the default; kept for backward compatibility)')
-    .option('--dry-run', 'Preview only — do not record or bill this calculation')
+    .option('--dry-run', 'Preview only — do not record or bill this calculation. On a free plan a recorded (non-dry-run) calculation returns no amounts: the command prints an upgrade link and exits 1.')
     .option('--direction <sale|purchase>', '"sale" (default) — the entity is the supplier and the customer (from the file) is required. "purchase" — the entity is the customer and the supplier (from the file) is required. Overrides transactionDirection in the file when both are given.')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: {
@@ -338,6 +352,18 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo usage ────────────────────────────────────────────────────────────
+  // GET /v1/usage: plan and billable transaction usage against the allowance for
+  // the current billing period. Organisation-wide, so no --entity flag.
+  program
+    .command('usage')
+    .description('Show your plan and billable tax-calculation usage against the plan allowance for the current billing period. Only committed live calculations count (previews and sandbox calls do not). Counts come from an hourly ledger and can trail live traffic by up to an hour (see updatedAt).')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      const result = await api('GET', '/usage');
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo duties quote <file> ──────────────────────────────────────────────
   // POST /v1/duties/quote: estimated import duty, import VAT/GST and customs
   // fees for a cross-border cart. The JSON file is the same body as `clearvo
