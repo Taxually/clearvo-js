@@ -19,6 +19,8 @@
     "test:supplier-tools": "node scripts/verify-supplier-tools.js",
     "test:rules-engine-tools": "node scripts/verify-rules-engine-tools.js",
     "typecheck": "tsc --noEmit",
+    "test:tool-names": "node scripts/verify-tool-names.js",
+    "test:openapi-parity": "node scripts/verify-openapi-parity.js",
     "dev": "tsc --watch"
   },
   "dependencies": {

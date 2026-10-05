@@ -119,6 +119,17 @@ async function callApi(
 // timeout or opaque failure further down the chain.
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
+// Entity logos: PNG, JPEG or WEBP up to 2 MB (the route re-validates and also enforces 32-2000 px).
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+/** True when the bytes' real file signature matches the declared logo content type. */
+function matchesLogoContentType(buffer: Buffer, contentType: string): boolean {
+  if (contentType === 'image/png') return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (contentType === 'image/jpeg') return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (contentType === 'image/webp') return buffer.length >= 12 && buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP';
+  return false;
+}
+
 // Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
 // POST /v1/send/bulk's synchronous ceiling (Taxually-Einvoicing lib/mcp/tools.ts). The public API
 // used to split sync/async across two endpoints (/send/bulk vs /send/bulk-async); that split was
@@ -1400,6 +1411,49 @@ const TOOLS = [
     },
   },
   {
+    name: 'update_invoice_business_status',
+    description:
+      'Same as update_business_status (the hosted connector\'s regime-neutral name for it). Record a customer-lifecycle ("business") status decision on a received (inbound) invoice. The one shared ' +
+      'tool every registered regime goes through — currently France, Germany, and Brazil (Manifestação do ' +
+      'Destinatário). Only valid on an INBOUND invoice you received: the calling entity is the customer ' +
+      'recording their own decision on it. For an invoice you issued, the other side\'s response syncs ' +
+      'automatically once they act on their own side — there is nothing to call here for that direction. ' +
+      'FR/DE: approve, partially approve, dispute, suspend, refuse, or mark paid — rejectionDetail.reason is ' +
+      'required when status is DISPUTED, REFUSED, or SUSPENDED. Brazil: acknowledge receipt (CIENCIA), confirm ' +
+      'the operation occurred (CONFIRMACAO), or reject it — either the operation didn\'t occur ' +
+      '(OPERACAO_NAO_REALIZADA, rejectionDetail.message required, 15–255 characters) or you don\'t recognize the ' +
+      'transaction (DESCONHECIMENTO, rejectionDetail forbidden). PRESUMIDA (Brazil\'s day-90 deemed-acceptance ' +
+      'presumption) is never a valid target here — SEFAZ\'s own statutory silence writes it, not a customer ' +
+      'request. Only the status values belonging to the invoice\'s own country/regime are a valid transition for ' +
+      'it — check get_invoice\'s businessStatusActions first rather than guessing from this enum alone. Fails ' +
+      '409 if the transition isn\'t valid from the invoice\'s current status (also Brazil-specific: no ' +
+      'certificate on file, an expired certificate, homologação not yet complete, or SEFAZ itself rejected the ' +
+      'event), 422 (FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s ' +
+      'tax number, and 503 (Brazil only, RATE_LIMITED) if SEFAZ\'s own 20/hour rate limit was hit — none is ' +
+      'retryable by changing the request; the status was not changed either way.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Invoice id or referenceId of a received (inbound) invoice — as returned by get_invoice or list_invoices.' },
+        status: {
+          type: 'string',
+          enum: ['IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED', 'CIENCIA', 'CONFIRMACAO', 'OPERACAO_NAO_REALIZADA', 'DESCONHECIMENTO'],
+          description: 'The new business-lifecycle status. FR/DE: the first nine values. Brazil: CIENCIA/CONFIRMACAO/OPERACAO_NAO_REALIZADA/DESCONHECIMENTO only.',
+        },
+        rejectionDetail: {
+          type: 'object' as const,
+          description: 'Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), or OPERACAO_NAO_REALIZADA (Brazil — message required, 15–255 characters). Forbidden for Brazil\'s DESCONHECIMENTO.',
+          properties: {
+            reason: { type: 'string', description: 'Short machine-usable reason code (FR/DE).' },
+            message: { type: 'string', description: 'Human-readable detail — optional for FR/DE, required for Brazil\'s OPERACAO_NAO_REALIZADA.' },
+          },
+        },
+        entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'status'],
+    },
+  },
+  {
     name: 'set_hu_credentials',
     description:
       'Register Hungary NAV Online Számla credentials for an entity: tax number and technical user details. ' +
@@ -1556,15 +1610,28 @@ const TOOLS = [
     },
   },
   {
+    name: 'trigger_br_poll',
+    description:
+      'Manually trigger a Brazil poll cycle for this entity, outside the normal hourly schedule. ' +
+      'Rate-limited to once per 60 minutes per entity, and further gated on a shared rate budget for this ' +
+      'certificate\'s CNPJ root — a recent rate-limit response, or an automatic hold after repeated ones, returns ' +
+      'a 429 with a retry time. documentFamily picks which surface to poll: "nfe" (goods, Distribuição DFe/SEFAZ — ' +
+      'the default) or "nfse" (services, the national ADN) — each has its own cooldown and rate budget, so polling ' +
+      'one never counts against the other. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+        documentFamily: { type: 'string', enum: ['nfe', 'nfse'], description: 'Which surface to poll — "nfe" (goods, default) or "nfse" (services, the national ADN).' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'poll_br_inbound',
     description:
-      'Manually trigger a Distribuição DFe poll cycle for this entity — Clearvo\'s hourly automated sweep already ' +
-      'does this; use this only when you need it sooner. Rate-limited to once per 60 minutes per entity (a ' +
-      'second manual call inside that window gets 429). Independently of that per-entity cooldown, the shared ' +
-      'SEFAZ rate budget for the certificate\'s own CNPJ root (20 queries/hour, shared across every entity on ' +
-      'that root) may already be parked (a recent "no new documents" response) or held (three consecutive ' +
-      'rate-limit responses — an administrator must release the hold) — either case also answers 429, before any ' +
-      'real SEFAZ call is attempted.',
+      'DEPRECATED — use trigger_br_poll, which also covers NFS-e. Kept as an alias that polls the NF-e (Distribuição DFe) surface only. ' +
+      'Manually trigger a Distribuição DFe poll cycle for this entity; rate-limited to once per 60 minutes per entity (a second call inside that window gets 429).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3507,6 +3574,253 @@ const TOOLS = [
       required: ['id', 'csv'],
     },
   },
+  // ── Public API sync: tools that wrap public routes the stdio server previously lacked ──
+  // Names match the hosted connector's (Taxually-Einvoicing lib/mcp/tools.ts); the ones below
+  // without a hosted twin (refund_tax_calculation, retry_invoice, deliver_invoice,
+  // resend_invoice_notification, list/update_tax_obligation(s), delete/restore_product) are stdio-only.
+  {
+    name: 'get_usage',
+    description:
+      'Read billable tax-calculation usage against the plan allowance for the current billing period: plan, ' +
+      'billing status, period start/end, transactions used, transactions included, remaining, percentUsed, ' +
+      'overage (transactions beyond the allowance) and overageUsd (price per extra transaction). Only committed ' +
+      'live calculations count; previews (commit:false) and sandbox calls do not. Counts come from an hourly ' +
+      'ledger and can trail live traffic by up to an hour (see updatedAt). Calculations are never blocked at the ' +
+      'allowance. While inTrial is true nothing is charged.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'receive_invoice_document',
+    description:
+      'Submit a received (inbound) invoice document — a ZUGFeRD PDF or bare CII/UBL XML — on this entity\'s ' +
+      'behalf, for a supplier document that arrived outside Clearvo (email, a portal download, ...). DE only ' +
+      'today; any other country returns 409 COUNTRY_NOT_ENABLED. Always returns 200 for a successfully ' +
+      'intaken document, conformant or not — check validationOutcome for the real result: E_INVOICE / ' +
+      'E_INVOICE_WITH_FLAGS is a legally-sufficient e-invoice; FORMAT_ERROR / PROFILE_NOT_SUFFICIENT / ' +
+      'NOT_AN_EINVOICE still land the document (clearanceStatus RECEIVED_NEEDS_REVIEW) but flag it for ' +
+      'manual review — this is never a reason to retry. A repeat call with byte-identical content returns ' +
+      'the same id with duplicate:true rather than storing a second copy.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        documentBase64: { type: 'string', description: 'Base64-encoded PDF or XML bytes of the received document — no data: URI prefix.' },
+        fileName: { type: 'string', description: 'Optional original filename (helps transport-level type detection — e.g. "invoice.pdf").' },
+        contentType: { type: 'string', description: 'Optional declared MIME type, e.g. "application/pdf" or "application/xml".' },
+        country: { type: 'string', description: 'ISO country code of the regime this document was received under. Defaults to DE, the only country wired today.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['documentBase64'],
+    },
+  },
+  {
+    name: 'get_inbound_batch',
+    description:
+      'Poll one async inbound bulk-receive batch (created via POST /v1/receive/bulk — a .zip archive or ' +
+      'several documents received from suppliers at once). Returns status (UPLOADED/VALIDATING/COMPLETED/' +
+      'FAILED/CANCELLED), total, outcomeCounts (ACCEPTED/NEEDS_REVIEW/DUPLICATE/ERRORED/' +
+      'COUNTRY_NOT_ENABLED counts), and a human-readable summary. 404 means no such batch, or it belongs to ' +
+      'a different entity than this key is scoped to.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by the bulk inbound-receive upload.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'get_inbound_email_address',
+    description:
+      'Get this entity\'s DE inbound forwarding email address — ask suppliers to send (or forward) their ' +
+      'invoices there and Clearvo ingests them automatically through the same pipeline as ' +
+      'receive_invoice_document. Read-only: address is null until one has been issued from the dashboard ' +
+      '(Country Setup → Germany) — this tool cannot issue or regenerate one.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'upload_entity_logo',
+    description:
+      'Upload (or replace) a business entity\'s own logo, rendered on the buyer-facing invoice-notification ' +
+      'email, the hosted invoice-view page, and the downloadable invoice PDF, in place of the platform\'s ' +
+      'own logo. Accepts PNG, JPEG, or WEBP, up to 2 MB, between 32x32 and 2000x2000 pixels. Stored in private storage and served back only ' +
+      'through the app-mediated logo URL returned by list_entities — never a raw storage URL.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'The entity ID to set the logo for (from list_entities or create_entity) — always required, including for entity-scoped keys, since this uploads to that specific entity.' },
+        imageBase64: { type: 'string', description: 'Base64-encoded image file content — no surrounding data: URI prefix or whitespace.' },
+        contentType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp'], description: 'The image\'s actual MIME type — must match imageBase64\'s real file signature, or the upload is rejected.' },
+      },
+      required: ['entityId', 'imageBase64', 'contentType'],
+    },
+  },
+  {
+    name: 'remove_entity_logo',
+    description: 'Removes a business entity\'s uploaded logo. The buyer-facing invoice email, hosted invoice-view page, and downloadable PDF fall back to the platform\'s own logo afterwards.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'The entity ID to remove the logo from (from list_entities or create_entity).' },
+      },
+      required: ['entityId'],
+    },
+  },
+  {
+    name: 'set_customer_invoice_format',
+    description:
+      'Set (or clear) a per-customer default DE invoice format override — ZUGFERD, XRECHNUNG or PEPPOL — applied ' +
+      'whenever a POST /v1/send to this customer omits its own countrySpecific.de.invoiceFormat. Most-' +
+      'specific-wins resolution order: the request\'s own override, then this per-customer default, then ' +
+      'the entity default, then the platform default (ZUGFERD). Pass null to clear the override and fall ' +
+      'through to the entity/platform default.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        customerId: { type: 'string', description: 'The customer id (from list_customers/create_customer).' },
+        invoiceFormat: { type: ['string', 'null'], enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL', null], description: 'The new default (ZUGFERD, XRECHNUNG or PEPPOL), or null to clear the customer-level override.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['customerId', 'invoiceFormat'],
+    },
+  },
+  {
+    name: 'update_rule_property_definition',
+    description: 'Edit a custom property definition\'s label, or deprecate/reactivate it. `propertyKey` and `dataType` are immutable once created and cannot be changed here. `deprecate: true` stops it being offered for NEW rule conditions/actions (list_rule_property_definitions excludes it by default) but never affects any EXISTING rule or calc request already referencing it — deprecation is purely a write-time/listing-time concept. `deprecate: false` reactivates it (clears the deprecation). Scoped to a definition you own — never a platform (Global/system) one.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string' },
+        label: { type: 'string' },
+        deprecate: { type: 'boolean', description: 'true deprecates, false reactivates. Omit to leave deprecation status unchanged.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'refund_tax_calculation',
+    description:
+      'Mark a committed tax calculation as refunded, fully or partially, so the refunded amount leaves the compliance threshold ' +
+      'totals. amount defaults to the calculation\'s remaining un-refunded amount. Send a distinct idempotencyKey per distinct ' +
+      'partial refund: a second call with no key (or the same key) is treated as a retry, not a second refund. Returns the refunded amount and what remains.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'The calculationId returned by calculate_tax (committed calculations only).' },
+        amount: { type: 'number', description: 'Amount refunded, in the calculation\'s currency. Omit to refund whatever remains.' },
+        idempotencyKey: { type: 'string', description: 'Dedupes THIS refund event; use a distinct key for each distinct partial refund.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['calculationId'],
+    },
+  },
+  {
+    name: 'retry_invoice',
+    description:
+      'Retry an invoice that is stuck or undelivered (for example UNDELIVERED, or a transient authority failure), re-running it through ' +
+      'its country\'s delivery pipeline. Not for NEEDS_INFO or REJECTED invoices: correct those by resubmitting with submit_invoice and correctsInvoiceId. ' +
+      'Returns the new clearanceStatus; follow with poll_status.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Invoice id or referenceId, from submit_invoice or list_invoices.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'deliver_invoice',
+    description:
+      'Re-deliver an invoice over Peppol, optionally overriding the customer endpoint. Use it when delivery failed because the stored or ' +
+      'derived Peppol address is wrong or missing (UNROUTABLE / "Cannot determine customer endpoint"): pass electronicAddress.value (and schemeId). ' +
+      'On a self-billed invoice the address is the supplier\'s. Look an address up first with the participant lookup if unsure.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'Invoice id or referenceId.' },
+        electronicAddress: {
+          type: 'object',
+          description: 'Peppol address to deliver to. Send value and schemeId together.',
+          properties: {
+            value: { type: 'string', description: 'Peppol participant ID value.' },
+            schemeId: { type: 'string', description: 'Peppol participant scheme ID, e.g. "0204" or "9930".' },
+          },
+        },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'resend_invoice_notification',
+    description:
+      'Resend the customer invoice notification email (the hosted invoice link) for one invoice, or for several at once by passing ids. ' +
+      'Only meaningful where Clearvo itself notifies the customer (no authority network delivers the invoice) and the customer has an email on file.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'One invoice id or referenceId. Use this OR ids.' },
+        ids: { type: 'array', items: { type: 'string' }, description: 'Several invoice ids or referenceIds (batch endpoint). Use this OR id.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'delete_product',
+    description: 'Soft-delete a classified product (its cached tax category). Recoverable with restore_product.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string', description: 'The product id from list_products.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'restore_product',
+    description: 'Restore a soft-deleted product classification. A reason is required and kept in the audit trail.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The product id.' },
+        reason: { type: 'string', description: 'Why the product is being restored (non-empty).' },
+      },
+      required: ['id', 'reason'],
+    },
+  },
+  {
+    name: 'list_tax_obligations',
+    description:
+      'List the account\'s tax obligations (the Compliance Radar view): per country/region, registration status (REGISTERED/PENDING/NOT_REGISTERED/MONITORING), ' +
+      'obligation status (COMPLIANT/APPROACHING/BREACH/MONITORING), threshold and current-period amounts, and whether action is required. Distinct from get_reporting_obligations (which reporting mandates an entity is enrolled in).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', description: 'Filter by ISO 3166-1 alpha-2 country.' },
+        status: { type: 'string', description: 'Filter by obligation status, e.g. BREACH or APPROACHING.' },
+      },
+    },
+  },
+  {
+    name: 'update_tax_obligation',
+    description: 'Record a registration decision on a tax obligation: set its registrationStatus and registrationNumber, or override obligationStatus with a detailSummary note.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The obligation id from list_tax_obligations.' },
+        registrationStatus: { type: 'string', enum: ['REGISTERED', 'PENDING', 'NOT_REGISTERED', 'MONITORING'] },
+        registrationNumber: { type: 'string', description: 'The tax registration number once registered.' },
+        obligationStatus: { type: 'string', enum: ['COMPLIANT', 'APPROACHING', 'BREACH', 'MONITORING'] },
+        detailSummary: { type: 'string', description: 'Free-text note stored with the obligation.' },
+      },
+      required: ['id'],
+    },
+  },
 ] as const;
 
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -4217,6 +4531,96 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'import_rules_engine_dataset': {
       const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
       return callApi('POST', `/rules-engine/datasets/${encodeURIComponent(id)}/import`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'trigger_br_poll': {
+      const { entityId, documentFamily } = args as { entityId?: string; documentFamily?: string };
+      const path = documentFamily === 'nfse' ? '/br/nfse/inbound/poll' : '/br/inbound/poll';
+      return callApi('POST', path, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'update_invoice_business_status': {
+      const { id, entityId, ...body } = args as { id: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/invoices/${encodeURIComponent(id)}/business-status`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_usage': {
+      return callApi('GET', '/usage');
+    }
+    case 'receive_invoice_document': {
+      const { documentBase64, fileName, contentType, country, entityId } = args as {
+        documentBase64: string; fileName?: string; contentType?: string; country?: string; entityId?: string;
+      };
+      return callApi('POST', '/receive', { fileBase64: documentBase64, fileName, contentType, country }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_inbound_batch': {
+      const { batchId, entityId } = args as { batchId: string; entityId?: string };
+      return callApi('GET', `/receive/bulk/${encodeURIComponent(batchId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_inbound_email_address': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/de/inbound-address', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'upload_entity_logo': {
+      const { entityId, imageBase64, contentType } = args as { entityId: string; imageBase64: string; contentType: string };
+      const buffer = Buffer.from(imageBase64, 'base64');
+      if (buffer.length > MAX_LOGO_BYTES) {
+        throw new Error(`imageBase64 decodes to ${buffer.length} bytes, exceeding the ${MAX_LOGO_BYTES / (1024 * 1024)}MB limit for entity logos.`);
+      }
+      if (!matchesLogoContentType(buffer, contentType)) {
+        throw new Error(`imageBase64 does not decode to a valid ${contentType} file (magic-byte check failed). Check the value is base64-encoded image file content with no surrounding data: URI prefix or whitespace, and that contentType is image/png, image/jpeg or image/webp.`);
+      }
+      const formData = new FormData();
+      formData.append('file', new Blob([buffer], { type: contentType }), `logo.${contentType.split('/')[1]}`);
+      return callApi('POST', `/entities/${encodeURIComponent(entityId)}/logo`, formData);
+    }
+    case 'remove_entity_logo': {
+      const { entityId } = args as { entityId: string };
+      return callApi('DELETE', `/entities/${encodeURIComponent(entityId)}/logo`);
+    }
+    case 'set_customer_invoice_format': {
+      const { customerId, invoiceFormat, entityId } = args as { customerId: string; invoiceFormat: string | null; entityId?: string };
+      return callApi('PATCH', `/customers/${encodeURIComponent(customerId)}`, { countrySpecific: { de: { invoiceFormat } } }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'update_rule_property_definition': {
+      const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
+      return callApi('PATCH', `/rules-engine/properties/${encodeURIComponent(id)}`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'refund_tax_calculation': {
+      const { calculationId, entityId, ...body } = args as { calculationId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/refund`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'retry_invoice': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry`, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'deliver_invoice': {
+      const { id, entityId, ...body } = args as { id: string; entityId?: string } & Record<string, unknown>;
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/deliver`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'resend_invoice_notification': {
+      const { id, ids, entityId } = args as { id?: string; ids?: string[]; entityId?: string };
+      const headers = entityId ? { 'x-entity-id': String(entityId) } : undefined;
+      if (Array.isArray(ids) && ids.length > 0) return callApi('POST', '/invoices/resend-notification/batch', { ids }, headers);
+      if (!id) throw new Error('Provide id (one invoice) or ids (several).');
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/resend-notification`, {}, headers);
+    }
+    case 'delete_product': {
+      const { id } = args as { id: string };
+      return callApi('DELETE', `/products/${encodeURIComponent(id)}`);
+    }
+    case 'restore_product': {
+      const { id, reason } = args as { id: string; reason: string };
+      return callApi('POST', `/tax/products/${encodeURIComponent(id)}/restore`, { reason });
+    }
+    case 'list_tax_obligations': {
+      const qs = new URLSearchParams();
+      if (args.country) qs.set('country', String(args.country));
+      if (args.status) qs.set('status', String(args.status));
+      const q = qs.toString();
+      return callApi('GET', `/tax/obligations${q ? `?${q}` : ''}`);
+    }
+    case 'update_tax_obligation': {
+      const { id, ...body } = args as { id: string } & Record<string, unknown>;
+      return callApi('PATCH', `/tax/obligations/${encodeURIComponent(id)}`, body);
     }
 
     default:
