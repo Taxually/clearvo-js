@@ -147,6 +147,56 @@ import type {
   ListPlatformRuleChangesParams,
   ListPlatformRuleChangesResponse,
   RulesEngineSchema,
+  CreateCustomerInput,
+  UpdateCustomerInput,
+  Customer,
+  ListCustomersParams,
+  ListCustomersResponse,
+  ListCustomerReferenceTypesResponse,
+  GetInvoiceResponse,
+  DeliverInvoiceInput,
+  InvoiceActionResponse,
+  ResendNotificationResponse,
+  ResendNotificationBatchResponse,
+  ReceiveInvoiceDocumentInput,
+  ReceiveInvoiceDocumentResponse,
+  InboundBatchStatus,
+  InboundEmailAddressResponse,
+  GetInvoiceDocumentResult,
+  ExportInvoicesParams,
+  RefundTaxCalculationInput,
+  RefundTaxCalculationResponse,
+  CreateExemptionCertificateInput,
+  UpdateExemptionCertificateInput,
+  ExemptionCertificateResponse,
+  ExemptionCertificate,
+  ListExemptionCertificatesParams,
+  ListExemptionCertificatesResponse,
+  ListTaxObligationsParams,
+  ListTaxObligationsResponse,
+  UpdateTaxObligationInput,
+  TaxObligation,
+  TaxSettings,
+  TaxSettingsResponse,
+  ListTaxJurisdictionsResponse,
+  ListTaxCategoriesResponse,
+  BulkClientTaxCodesInput,
+  BulkClientTaxCodesResponse,
+  ClientTaxCodeAuditParams,
+  ClientTaxCodeAuditResponse,
+  ListValidationsResponse,
+  GetUsageResponse,
+  InviteTeamMemberInput,
+  InviteTeamMemberResponse,
+  SetupStatusResponse,
+  LookupCompanyParams,
+  LookupCompanyResponse,
+  LookupParticipantParams,
+  LookupParticipantResponse,
+  ListMandatesParams,
+  ListMandatesResponse,
+  BulkProductsInput,
+  RegistrationFieldDefinitionsParams,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -1113,5 +1163,284 @@ export class ClearvoClient {
     const { entityId, limit } = params;
     const qs = limit != null ? `?${new URLSearchParams({ limit: String(limit) }).toString()}` : '';
     return this.request('GET', `/rules-engine/platform-changes${qs}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Customers ────────────────────────────────────────────────────────────
+  // Customer master data. Reference one from a send via `customer.customerRef`.
+
+  private entityHeader(entityId?: string): Record<string, string> | undefined {
+    return entityId ? { 'x-entity-id': entityId } : undefined;
+  }
+
+  listCustomers(params: ListCustomersParams = {}): Promise<ListCustomersResponse> {
+    const qs = new URLSearchParams();
+    if (params.search) qs.set('search', params.search);
+    if (params.page  != null) qs.set('page',  String(params.page));
+    if (params.limit != null) qs.set('limit', String(params.limit));
+    const q = qs.toString();
+    return this.request('GET', `/customers${q ? `?${q}` : ''}`, undefined, this.entityHeader(params.entityId));
+  }
+
+  getCustomer(customerId: string, entityId?: string): Promise<Customer> {
+    return this.request('GET', `/customers/${encodeURIComponent(customerId)}`, undefined, this.entityHeader(entityId));
+  }
+
+  createCustomer(input: CreateCustomerInput, entityId?: string): Promise<{ customer: Customer }> {
+    return this.request('POST', '/customers', input, this.entityHeader(entityId));
+  }
+
+  /** Partial update. `references`, when supplied, replaces the whole list; omit to leave it untouched. */
+  updateCustomer(customerId: string, updates: UpdateCustomerInput, entityId?: string): Promise<Customer> {
+    return this.request('PATCH', `/customers/${encodeURIComponent(customerId)}`, updates, this.entityHeader(entityId));
+  }
+
+  /** Soft delete. */
+  deleteCustomer(customerId: string, entityId?: string): Promise<void> {
+    return this.request('DELETE', `/customers/${encodeURIComponent(customerId)}`, undefined, this.entityHeader(entityId));
+  }
+
+  /** Create or update a customer keyed by your own reference. */
+  upsertCustomerByRef(customerRef: string, input: UpdateCustomerInput, entityId?: string): Promise<{ customer: Customer }> {
+    return this.request('PUT', `/customers/by-ref/${encodeURIComponent(customerRef)}`, input, this.entityHeader(entityId));
+  }
+
+  /** The registry of reference kinds a customer can carry (Peppol participant ID, Leitweg-ID, ...), optionally narrowed to one country. */
+  listCustomerReferenceTypes(params: { country?: string } = {}): Promise<ListCustomerReferenceTypesResponse> {
+    const q = params.country ? `?country=${encodeURIComponent(params.country)}` : '';
+    return this.request('GET', `/customer-reference-types${q}`);
+  }
+
+  // ── Invoice detail and actions ────────────────────────────────────────────
+
+  /** Full invoice detail by Clearvo id or authority reference id, including `businessStatusActions` on a received invoice. */
+  getInvoice(invoiceId: string, entityId?: string): Promise<GetInvoiceResponse> {
+    return this.request('GET', `/invoices/${encodeURIComponent(invoiceId)}`, undefined, this.entityHeader(entityId));
+  }
+
+  /** Re-run a stuck or undelivered invoice through the delivery pipeline. */
+  retryInvoice(invoiceId: string, entityId?: string): Promise<InvoiceActionResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(invoiceId)}/retry`, undefined, this.entityHeader(entityId));
+  }
+
+  /** Re-deliver an invoice over Peppol, optionally overriding the customer endpoint with `electronicAddress`. */
+  deliverInvoice(invoiceId: string, input: DeliverInvoiceInput = {}, entityId?: string): Promise<InvoiceActionResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(invoiceId)}/deliver`, input, this.entityHeader(entityId));
+  }
+
+  /** Resend the customer invoice notification email. */
+  resendInvoiceNotification(invoiceId: string, entityId?: string): Promise<ResendNotificationResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(invoiceId)}/resend-notification`, undefined, this.entityHeader(entityId));
+  }
+
+  /** Resend the customer notification email for several invoices at once. */
+  resendInvoiceNotificationsBatch(ids: string[], entityId?: string): Promise<ResendNotificationBatchResponse> {
+    return this.request('POST', '/invoices/resend-notification/batch', { ids }, this.entityHeader(entityId));
+  }
+
+  /** Download an invoice's XML or PDF. Returns the raw bytes and the response content type. */
+  async getInvoiceDocument(invoiceId: string, format: 'xml' | 'pdf' = 'xml', entityId?: string): Promise<GetInvoiceDocumentResult> {
+    const response = await fetch(`${this.baseUrl}/documents/${encodeURIComponent(invoiceId)}?format=${encodeURIComponent(format)}`, {
+      method: 'GET',
+      headers: { 'x-api-key': this.apiKey, ...this.entityHeader(entityId) },
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ClearvoError(response.status, String(data.error ?? `HTTP ${response.status}`));
+    }
+    return { contentType: response.headers.get('content-type'), data: await response.arrayBuffer() };
+  }
+
+  /** Bulk export of invoices (or a data-query result set when `dataset` is given). Returns the raw response text (CSV or JSON, per `format`). */
+  async exportInvoices(params: ExportInvoicesParams = {}, entityId?: string): Promise<string> {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    const response = await fetch(`${this.baseUrl}/export${q ? `?${q}` : ''}`, {
+      method: 'GET',
+      headers: { 'x-api-key': this.apiKey, ...this.entityHeader(entityId) },
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ClearvoError(response.status, String(data.error ?? `HTTP ${response.status}`));
+    }
+    return response.text();
+  }
+
+  // ── Receiving (inbound) ───────────────────────────────────────────────────
+
+  /** Submit a received supplier document (ZUGFeRD PDF or CII/UBL XML). DE only today. Check `validationOutcome`; a non-conformant document is still stored for review. */
+  receiveInvoiceDocument(input: ReceiveInvoiceDocumentInput, entityId?: string): Promise<ReceiveInvoiceDocumentResponse> {
+    return this.request('POST', '/receive', input, this.entityHeader(entityId));
+  }
+
+  /** Poll one asynchronous bulk-receive batch. */
+  getInboundBatch(batchId: string, entityId?: string): Promise<InboundBatchStatus> {
+    return this.request('GET', `/receive/bulk/${encodeURIComponent(batchId)}`, undefined, this.entityHeader(entityId));
+  }
+
+  /** The entity's DE inbound forwarding address; `address` is null until one has been issued from the dashboard. */
+  getInboundEmailAddress(entityId?: string): Promise<InboundEmailAddressResponse> {
+    return this.request('GET', '/de/inbound-address', undefined, this.entityHeader(entityId));
+  }
+
+  // ── Tax calculation extras ────────────────────────────────────────────────
+
+  /** Mark a committed calculation as refunded, fully or partially. */
+  refundTaxCalculation(calculationId: string, input: RefundTaxCalculationInput = {}, entityId?: string): Promise<RefundTaxCalculationResponse> {
+    return this.request('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/refund`, input, this.entityHeader(entityId));
+  }
+
+  getTaxSettings(): Promise<TaxSettingsResponse> {
+    return this.request('GET', '/tax/settings');
+  }
+
+  updateTaxSettings(updates: TaxSettings): Promise<TaxSettingsResponse> {
+    return this.request('PATCH', '/tax/settings', updates);
+  }
+
+  listTaxJurisdictions(): Promise<ListTaxJurisdictionsResponse> {
+    return this.request('GET', '/tax/jurisdictions');
+  }
+
+  listTaxCategories(): Promise<ListTaxCategoriesResponse> {
+    return this.request('GET', '/tax/categories');
+  }
+
+  /** Restore a soft-deleted product classification. `reason` is required and kept in the audit trail. */
+  restoreProduct(productId: string, reason: string): Promise<{ ok?: boolean }> {
+    return this.request('POST', `/tax/products/${encodeURIComponent(productId)}/restore`, { reason });
+  }
+
+  /** Classify many products in one call (JSON body). */
+  bulkClassifyProducts(input: BulkProductsInput): Promise<{ ok?: boolean; queued?: number; summary?: { succeeded?: number; failed?: number }; results?: unknown[] }> {
+    return this.request('POST', '/tax/products/bulk', input);
+  }
+
+  /** Create or update many client tax codes in one call. */
+  bulkUpsertClientTaxCodes(input: BulkClientTaxCodesInput, entityId?: string): Promise<BulkClientTaxCodesResponse> {
+    return this.request('POST', '/tax/client-codes/bulk', input, this.entityHeader(entityId));
+  }
+
+  /** The audit trail of one client tax code, newest first, cursor-paged. */
+  getClientTaxCodeAudit(params: ClientTaxCodeAuditParams, entityId?: string): Promise<ClientTaxCodeAuditResponse> {
+    const qs = new URLSearchParams({ code: params.code });
+    if (params.limit != null) qs.set('limit', String(params.limit));
+    if (params.cursor) qs.set('cursor', params.cursor);
+    return this.request('GET', `/tax/client-codes/audit?${qs.toString()}`, undefined, this.entityHeader(entityId));
+  }
+
+  // ── Exemption certificates ────────────────────────────────────────────────
+
+  listExemptionCertificates(params: ListExemptionCertificatesParams = {}, entityId?: string): Promise<ListExemptionCertificatesResponse> {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/tax/exemptions${q ? `?${q}` : ''}`, undefined, this.entityHeader(entityId));
+  }
+
+  createExemptionCertificate(input: CreateExemptionCertificateInput, entityId?: string): Promise<ExemptionCertificateResponse> {
+    return this.request('POST', '/tax/exemptions', input, this.entityHeader(entityId));
+  }
+
+  getExemptionCertificate(certificateId: string, entityId?: string): Promise<ExemptionCertificate> {
+    return this.request('GET', `/tax/exemptions/${encodeURIComponent(certificateId)}`, undefined, this.entityHeader(entityId));
+  }
+
+  updateExemptionCertificate(certificateId: string, updates: UpdateExemptionCertificateInput, entityId?: string): Promise<ExemptionCertificate> {
+    return this.request('PATCH', `/tax/exemptions/${encodeURIComponent(certificateId)}`, updates, this.entityHeader(entityId));
+  }
+
+  /** Soft delete. */
+  deleteExemptionCertificate(certificateId: string, entityId?: string): Promise<{ ok: boolean }> {
+    return this.request('DELETE', `/tax/exemptions/${encodeURIComponent(certificateId)}`, undefined, this.entityHeader(entityId));
+  }
+
+  /** Attach a certificate's PDF (multipart `document` field). */
+  uploadExemptionDocument(certificateId: string, pdf: Blob | Uint8Array, entityId?: string): Promise<ExemptionCertificate> {
+    const formData = new FormData();
+    const blob = pdf instanceof Blob ? pdf : new Blob([pdf as unknown as ArrayBuffer], { type: 'application/pdf' });
+    formData.append('document', blob, 'certificate.pdf');
+    return this.request('POST', `/tax/exemptions/${encodeURIComponent(certificateId)}/document`, formData, this.entityHeader(entityId));
+  }
+
+  // ── Compliance obligations ────────────────────────────────────────────────
+
+  listTaxObligations(params: ListTaxObligationsParams = {}): Promise<ListTaxObligationsResponse> {
+    const qs = new URLSearchParams();
+    if (params.country) qs.set('country', params.country);
+    if (params.status)  qs.set('status',  params.status);
+    const q = qs.toString();
+    return this.request('GET', `/tax/obligations${q ? `?${q}` : ''}`);
+  }
+
+  getTaxObligation(obligationId: string): Promise<TaxObligation> {
+    return this.request('GET', `/tax/obligations/${encodeURIComponent(obligationId)}`);
+  }
+
+  updateTaxObligation(obligationId: string, updates: UpdateTaxObligationInput): Promise<TaxObligation> {
+    return this.request('PATCH', `/tax/obligations/${encodeURIComponent(obligationId)}`, updates);
+  }
+
+  /** Extra-field requirements for a tax registration in one country/region/scheme. */
+  getRegistrationFieldDefinitions(params: RegistrationFieldDefinitionsParams): Promise<Record<string, unknown>> {
+    const qs = new URLSearchParams({ country: params.country });
+    if (params.region) qs.set('region', params.region);
+    if (params.scheme) qs.set('scheme', params.scheme);
+    return this.request('GET', `/tax/registrations/field-definitions?${qs.toString()}`);
+  }
+
+  // ── Account, usage and reference data ─────────────────────────────────────
+
+  /** Billable tax-calculation usage against the plan allowance for the current billing period. */
+  getUsage(): Promise<GetUsageResponse> {
+    return this.request('GET', '/usage');
+  }
+
+  getSetupStatus(): Promise<SetupStatusResponse> {
+    return this.request('GET', '/setup/status');
+  }
+
+  /** Invite a team member (not `admin`; that role is dashboard-only). */
+  inviteTeamMember(input: InviteTeamMemberInput): Promise<InviteTeamMemberResponse> {
+    return this.request('POST', '/team/invites', input);
+  }
+
+  /** Every check POST /v1/send can emit, optionally narrowed to one country. */
+  listValidations(params: { country?: string } = {}): Promise<ListValidationsResponse> {
+    const q = params.country ? `?country=${encodeURIComponent(params.country)}` : '';
+    return this.request('GET', `/validations${q}`);
+  }
+
+  /** Company-name lookup against national registers. */
+  lookupCompany(params: LookupCompanyParams): Promise<LookupCompanyResponse> {
+    const qs = new URLSearchParams({ country: params.country, name: params.name });
+    if (params.city) qs.set('city', params.city);
+    return this.request('GET', `/lookup?${qs.toString()}`);
+  }
+
+  /** Look up a Peppol participant by tax ID or by endpoint id and scheme. */
+  lookupParticipant(params: LookupParticipantParams): Promise<LookupParticipantResponse> {
+    const qs = new URLSearchParams();
+    if (params.taxId) qs.set('taxId', params.taxId);
+    if (params.endpointId) qs.set('endpointId', params.endpointId);
+    if (params.endpointSchemeId) qs.set('endpointSchemeId', params.endpointSchemeId);
+    if (params.country) qs.set('country', params.country);
+    if (params.selfBilling != null) qs.set('selfBilling', String(params.selfBilling));
+    return this.request('GET', `/participants/lookup?${qs.toString()}`);
+  }
+
+  /** Supported e-invoicing mandates and their required fields. Pass `id` for one mandate. */
+  listMandates(params: ListMandatesParams = {}): Promise<ListMandatesResponse> {
+    const q = params.id ? `?id=${encodeURIComponent(params.id)}` : '';
+    return this.request('GET', `/mandates${q}`);
+  }
+
+  /** Acknowledge a mandate obligation as handled elsewhere. */
+  acknowledgeMandateObligation(obligationId: string, acknowledged = true): Promise<{ ok?: boolean; [key: string]: unknown }> {
+    return this.request('PATCH', `/mandates/obligations/${encodeURIComponent(obligationId)}`, { acknowledged });
   }
 }

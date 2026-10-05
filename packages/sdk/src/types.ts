@@ -4217,3 +4217,483 @@ export interface ImportSettlementVariance {
     byCurrency: Array<{ currency: string; count: number; estimated: number; actual: number; variance: number }>;
   }>;
 }
+
+
+// ── Public API surface sync: customers, invoice actions, receiving, exemptions, settings and lookups ──
+// Shapes follow the route handlers in the backend. Response objects carry an index signature so a newly added
+// backend field is never a type error for a caller reading it.
+
+/** One of a customer's typed references (Leitweg-ID, Peppol participant ID, ...). Types come from `listCustomerReferenceTypes()`. */
+export interface CustomerReferenceInput {
+  type: string;
+  value: string;
+}
+
+export interface CustomerTaxIdInput {
+  country: string;
+  taxId: string;
+}
+
+/** Body of `createCustomer`. */
+export interface CreateCustomerInput {
+  name: string;
+  /** ISO 3166-1 alpha-2 country of the primary tax ID. */
+  country?: string;
+  taxId?: string;
+  /** Up to 10 additional country-specific tax IDs. */
+  taxIds?: CustomerTaxIdInput[];
+  /** Your own reference for this customer (e.g. a CRM id). Referenced from `customer.customerRef` on a send. */
+  customerRef?: string;
+  addressCountry?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  /**
+   * Typed references. When supplied on create or update it REPLACES the whole list (`null` or `[]` clears it);
+   * omit to leave stored references untouched. A Peppol participant ID supplied here counts as confirmed.
+   */
+  references?: CustomerReferenceInput[] | null;
+  /** Per-country defaults: `it.codiceDestinatario` / `it.pecDestinatario`, `de.invoiceFormat` (ZUGFERD, XRECHNUNG, PEPPOL, or null to clear), `ar.*`. */
+  countrySpecific?: Record<string, Record<string, unknown> | undefined>;
+}
+
+/** Body of `updateCustomer` / `upsertCustomerByRef`: every `createCustomer` field, all optional. */
+export type UpdateCustomerInput = Partial<CreateCustomerInput>;
+
+export interface Customer {
+  id: string;
+  customerRef?: string | null;
+  name: string;
+  country?: string | null;
+  taxId?: string | null;
+  taxIds?: CustomerTaxIdInput[];
+  addressCountry?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+  source?: string;
+  references?: Array<CustomerReferenceInput & { confirmedAt?: string | null; [key: string]: unknown }>;
+  countrySpecific?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface ListCustomersParams {
+  /** Case-insensitive name search. */
+  search?: string;
+  page?: number;
+  /** 1-100, default 25. */
+  limit?: number;
+  entityId?: string;
+}
+
+export interface ListCustomersResponse {
+  customers: Customer[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface CustomerReferenceType {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface ListCustomerReferenceTypesResponse {
+  types?: CustomerReferenceType[];
+  [key: string]: unknown;
+}
+
+/** One invoice as returned by `getInvoice()` (GET /v1/invoices/{id}). */
+export interface InvoiceDetail {
+  id: string;
+  referenceId?: string;
+  country?: string;
+  documentType?: string;
+  direction?: string;
+  clearanceStatus?: string;
+  terminal?: boolean;
+  businessStatus?: string;
+  /** Legal next business-status steps from the current status, for a received invoice. */
+  businessStatusActions?: unknown[];
+  [key: string]: unknown;
+}
+
+export interface GetInvoiceResponse {
+  invoice: InvoiceDetail;
+  [key: string]: unknown;
+}
+
+/** Body of `deliverInvoice`: override the Peppol endpoint when the stored/derived one is wrong or missing. */
+export interface DeliverInvoiceInput {
+  electronicAddress?: { value?: string; schemeId?: string };
+}
+
+/** Status-style response of `retryInvoice` / `deliverInvoice`. */
+export interface InvoiceActionResponse {
+  ok?: boolean;
+  referenceId?: string;
+  country?: string;
+  clearanceStatus?: string;
+  terminal?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ResendNotificationResponse {
+  ok?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ResendNotificationBatchResponse {
+  ok?: boolean;
+  results?: Array<{ id: string; ok?: boolean; error?: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+/** Body of `receiveInvoiceDocument`: a supplier document (ZUGFeRD PDF or bare CII/UBL XML) received outside Clearvo. */
+export interface ReceiveInvoiceDocumentInput {
+  /** Base64 bytes of the document, no `data:` prefix. */
+  fileBase64: string;
+  fileName?: string;
+  contentType?: string;
+  /** Regime the document was received under. Defaults to DE, the only country wired. */
+  country?: string;
+}
+
+export interface ReceiveInvoiceDocumentResponse {
+  ok: true;
+  id: string;
+  country?: string;
+  clearanceStatus: 'ACCEPTED' | 'RECEIVED_NEEDS_REVIEW';
+  terminal?: boolean;
+  validationOutcome: 'E_INVOICE' | 'E_INVOICE_WITH_FLAGS' | 'FORMAT_ERROR' | 'PROFILE_NOT_SUFFICIENT' | 'NOT_AN_EINVOICE' | 'BUSINESS_RULE_ERROR' | 'NOT_VALIDATED';
+  documentFormat: string;
+  errorCode?: string;
+  suggestedAction?: string;
+  /** True when byte-identical content was already received; `duplicateOf` names the stored document. */
+  duplicate?: boolean;
+  duplicateOf?: string;
+}
+
+export interface InboundBatchStatus {
+  batchId: string;
+  status: 'UPLOADED' | 'VALIDATING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  total?: number;
+  outcomeCounts?: Record<string, number>;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+export interface InboundEmailAddressResponse {
+  /** Null until one has been issued from the dashboard. */
+  address: string | null;
+  [key: string]: unknown;
+}
+
+export interface GetInvoiceDocumentResult {
+  contentType: string | null;
+  data: ArrayBuffer;
+}
+
+export interface ExportInvoicesParams {
+  format?: string;
+  from?: string;
+  to?: string;
+  countries?: string;
+  statuses?: string;
+  limit?: number;
+  dataset?: string;
+  filters?: string;
+  columns?: string;
+  includeOriginals?: boolean;
+}
+
+export interface RefundTaxCalculationInput {
+  /** Defaults to the calculation's remaining un-refunded amount. */
+  amount?: number;
+  /** Dedupes this refund event; send a distinct key per distinct partial refund. */
+  idempotencyKey?: string;
+}
+
+export interface RefundTaxCalculationResponse {
+  ok: boolean;
+  calculationId?: string;
+  amount?: number;
+  remaining?: number;
+}
+
+export type ExemptionCertificateType =
+  'RESALE' | 'MANUFACTURING' | 'AGRICULTURAL' | 'ENERGY' | 'EXEMPT_ORG' | 'GOVERNMENT' | 'DIRECT_PAY'
+  | 'BLANKET_OTHER' | 'DIGITAL_SERVICES_COMMERCIAL_USE' | 'EXPORT_AUTHORIZATION';
+
+export interface CreateExemptionCertificateInput {
+  certificateRef: string;
+  customerRef: string;
+  customerName?: string;
+  customerTaxId?: string;
+  certificateType: ExemptionCertificateType;
+  formType?: string;
+  country?: string;
+  region?: string;
+  taxCategorySlug?: string;
+  /** YYYY-MM-DD. */
+  effectiveFrom: string;
+  effectiveTo?: string;
+}
+
+export interface UpdateExemptionCertificateInput {
+  status?: 'REVOKED';
+  effectiveTo?: string;
+  documentUrl?: string;
+}
+
+export interface ExemptionCertificate {
+  id: string;
+  certificateRef?: string;
+  customerRef?: string;
+  certificateType?: ExemptionCertificateType;
+  status?: 'ACTIVE' | 'EXPIRING_SOON' | 'EXPIRED' | 'REVOKED';
+  effectiveFrom?: string;
+  effectiveTo?: string | null;
+  documentUrl?: string | null;
+  needsDocument?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ListExemptionCertificatesParams {
+  status?: string;
+  country?: string;
+  region?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface ListExemptionCertificatesResponse {
+  certificates: ExemptionCertificate[];
+  total?: number;
+  [key: string]: unknown;
+}
+
+export interface ExemptionCertificateResponse {
+  certificate?: ExemptionCertificate;
+  [key: string]: unknown;
+}
+
+export interface ListTaxObligationsParams {
+  country?: string;
+  status?: string;
+}
+
+export interface TaxObligation {
+  id: string;
+  country?: string;
+  region?: string | null;
+  registrationStatus?: 'REGISTERED' | 'PENDING' | 'NOT_REGISTERED' | 'MONITORING';
+  registrationNumber?: string | null;
+  obligationStatus?: 'COMPLIANT' | 'APPROACHING' | 'BREACH' | 'MONITORING';
+  obligationType?: 'THRESHOLD' | 'IMMEDIATE';
+  actionRequired?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ListTaxObligationsResponse {
+  obligations: TaxObligation[];
+  total?: number;
+}
+
+export interface UpdateTaxObligationInput {
+  registrationStatus?: string;
+  registrationNumber?: string;
+  obligationStatus?: string;
+  detailSummary?: string;
+}
+
+/** Tax calculation settings (GET/PATCH /v1/tax/settings). */
+export interface TaxSettings {
+  vatUnverifiableTreatment?: 'consumer' | 'business';
+  vatValidationMode?: 'full' | 'format' | 'none';
+  defaultPriceIncludesTax?: boolean;
+  defaultTaxCategorySlug?: string;
+  usAddressPrecision?: 'rooftop' | 'zip';
+  placeOfBusinessAddress?: { line1?: string; line2?: string; city?: string; region?: string; postalCode?: string; country?: string };
+  isMarketplaceFacilitator?: boolean;
+  confirmed?: boolean;
+  confirmedAt?: string;
+  defaultImporterOfRecord?: 'SELLER' | 'BUYER';
+  importVatAccountingElection?: 'POSTPONED' | 'STANDARD';
+  apTolerance?: { absoluteAmount?: number; percent?: number };
+  apPoDisposition?: 'warn' | 'hold' | 'ignore';
+  [key: string]: unknown;
+}
+
+export interface TaxSettingsResponse {
+  ok?: boolean;
+  settings: TaxSettings;
+}
+
+export interface TaxJurisdiction {
+  country: string;
+  name: string;
+  comingSoon: boolean;
+  availableFrom?: string;
+}
+
+export interface ListTaxJurisdictionsResponse {
+  jurisdictions: TaxJurisdiction[];
+  count?: number;
+}
+
+export interface TaxCategory {
+  slug: string;
+  name?: string;
+  defaultTaxCode?: string;
+  [key: string]: unknown;
+}
+
+export interface ListTaxCategoriesResponse {
+  categories: TaxCategory[];
+  count?: number;
+}
+
+export interface BulkClientTaxCodesInput {
+  clientTaxCodes: CreateClientTaxCodeInput[];
+}
+
+export interface BulkClientTaxCodesResponse {
+  ok?: boolean;
+  queued?: number;
+  results?: Array<{ code?: string; id?: string; error?: string; errorCode?: string; [key: string]: unknown }>;
+  summary?: { succeeded?: number; failed?: number };
+}
+
+export interface ClientTaxCodeAuditParams {
+  /** The client tax code (the ERP code string) whose history to read. */
+  code: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ClientTaxCodeAuditResponse {
+  ok?: boolean;
+  entries: Array<{ id?: string; eventType?: string; code?: string; before?: unknown; after?: unknown; createdAt?: string; [key: string]: unknown }>;
+  hasMore?: boolean;
+  nextCursor?: string;
+}
+
+export interface ValidationCheck {
+  code: string;
+  severity: string;
+  countries: string[];
+  fieldPath: string;
+  autoCorrectable: boolean;
+  messageTemplate: string;
+  [key: string]: unknown;
+}
+
+export interface ListValidationsResponse {
+  country?: string;
+  rulesetVersion: number;
+  checks: ValidationCheck[];
+}
+
+/** Billable tax-calculation usage for the current billing period (GET /v1/usage). */
+export interface UsageSummary {
+  plan?: string;
+  period?: { start?: string; end?: string };
+  transactionsUsed?: number;
+  transactionsIncluded?: number;
+  remaining?: number;
+  percentUsed?: number;
+  overage?: number;
+  overageUsd?: number;
+  inTrial?: boolean;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface GetUsageResponse {
+  usage: UsageSummary;
+}
+
+export type TeamInviteRole = 'developer' | 'finance' | 'viewer' | 'auditor';
+
+export interface InviteTeamMemberInput {
+  email: string;
+  role: TeamInviteRole;
+  /** Restrict the invited member to these entities. */
+  entityIds?: string[];
+}
+
+export interface InviteTeamMemberResponse {
+  ok?: boolean;
+  inviteId?: string;
+  email?: string;
+  role?: string;
+  entityIds?: string[];
+  expiresAt?: string;
+}
+
+export interface SetupStatusResponse {
+  ok?: boolean;
+  enabledSolutions?: string[];
+  plan?: string;
+  steps?: Array<{ step?: string; done?: boolean; required?: boolean; description?: string; howTo?: string; applicable?: boolean; [key: string]: unknown }>;
+  nextSteps?: unknown[];
+  readyForLaunch?: boolean;
+  blockedReason?: string;
+  [key: string]: unknown;
+}
+
+export interface LookupCompanyParams {
+  country: string;
+  name: string;
+  city?: string;
+}
+
+export interface LookupCompanyResponse {
+  ok?: boolean;
+  country?: string;
+  query?: string;
+  results: Array<{ name?: string; taxNumber?: string; address?: string; entityType?: string; source?: string; confidence?: number; [key: string]: unknown }>;
+}
+
+export interface LookupParticipantParams {
+  taxId?: string;
+  endpointId?: string;
+  endpointSchemeId?: string;
+  country?: string;
+  selfBilling?: boolean;
+}
+
+export interface LookupParticipantResponse {
+  ok?: boolean;
+  participantId?: string;
+  endpointUrl?: string;
+  transportProfile?: string;
+  cached?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ListMandatesParams {
+  /** Return one mandate with its required fields. */
+  id?: string;
+}
+
+export interface ListMandatesResponse {
+  mandates: Array<{ id?: string; country?: string; name?: string; authority?: string; status?: string; requiredFields?: unknown[]; [key: string]: unknown }>;
+}
+
+export interface BulkProductsInput {
+  products: Array<{ productCode?: string; productName?: string; productDescription?: string; taxCategory?: string }>;
+}
+
+export interface RegistrationFieldDefinitionsParams {
+  country: string;
+  region?: string;
+  scheme?: string;
+}
