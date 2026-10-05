@@ -1,7 +1,6 @@
 // Coverage for B7 propagation (docs/features/rules-engine/discovery.md,
 // focus-eng-lead.md §1.N.4) — SDK twins of every /v1/rules-engine/*
-// operation (docs/openapi/rules-engine.yaml on the backend) plus the AP
-// manual-adjustments surface. Each test asserts the exact path/method/body
+// operation (docs/openapi/rules-engine.yaml on the backend). Each test asserts the exact path/method/body
 // the SDK method sends against a mocked fetch, mirroring this repo's
 // existing fr-credentials.test.ts/fr-business-status-inbound-poll.test.ts
 // convention.
@@ -375,64 +374,5 @@ describe('ClearvoClient rules engine', () => {
     await client.listPlatformRuleChanges();
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe('http://x/v1/rules-engine/platform-changes');
-  });
-});
-
-describe('ClearvoClient manual adjustments', () => {
-  const originalFetch = global.fetch;
-  afterEach(() => {
-    global.fetch = originalFetch;
-  });
-
-  it('proposeManualAdjustment POSTs /tax/calculate/{id}/adjustments with the body, calculationId never duplicated into it', async () => {
-    const fetchMock = mockFetch({ ok: true, adjustmentId: 'adj1' }, 201);
-    const client = new ClearvoClient({ apiKey: 'csk_live_acct_x', baseUrl: 'http://x/v1' });
-    const result = await client.proposeManualAdjustment('calc1', {
-      mode: 'FORCED_INPUT',
-      forcedInputs: { taxCategory: 'digital_service' },
-      originalValue: { taxCategory: null },
-      reason: 'Miscategorized at checkout',
-      entityId: 'ent-1',
-    });
-    const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://x/v1/tax/calculate/calc1/adjustments');
-    expect(opts.method).toBe('POST');
-    expect(opts.headers['x-entity-id']).toBe('ent-1');
-    const body = JSON.parse(opts.body as string);
-    expect(body).toEqual({
-      mode: 'FORCED_INPUT',
-      forcedInputs: { taxCategory: 'digital_service' },
-      originalValue: { taxCategory: null },
-      reason: 'Miscategorized at checkout',
-    });
-    expect(body).not.toHaveProperty('entityId');
-    expect(result.adjustmentId).toBe('adj1');
-  });
-
-  it('listManualAdjustments GETs /tax/calculate/{id}/adjustments with an optional status query param', async () => {
-    const fetchMock = mockFetch({ ok: true, adjustments: [] });
-    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
-    await client.listManualAdjustments('calc1', { status: 'DRAFT' });
-    const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://x/v1/tax/calculate/calc1/adjustments?status=DRAFT');
-    expect(opts.method).toBe('GET');
-  });
-
-  it('listManualAdjustments omits the query string when no status is given', async () => {
-    const fetchMock = mockFetch({ ok: true, adjustments: [] });
-    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
-    await client.listManualAdjustments('calc1');
-    const [url] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://x/v1/tax/calculate/calc1/adjustments');
-  });
-
-  it('getManualAdjustmentOptions GETs /tax/calculate/{id}/adjustment-options', async () => {
-    const fetchMock = mockFetch({ modes: ['FORCED_INPUT', 'POST_CALCULATION_OVERRIDE'], targetTypes: [], forcedInputProperties: { header: [], line: [] }, overrideColumns: [] });
-    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
-    const result = await client.getManualAdjustmentOptions('calc1');
-    const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://x/v1/tax/calculate/calc1/adjustment-options');
-    expect(opts.method).toBe('GET');
-    expect(result.modes).toEqual(['FORCED_INPUT', 'POST_CALCULATION_OVERRIDE']);
   });
 });

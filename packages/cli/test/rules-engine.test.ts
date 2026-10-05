@@ -1,4 +1,4 @@
-// Coverage for `clearvo rules ...` / `clearvo adjustments ...` argument
+// Coverage for `clearvo rules ...` argument
 // parsing and fetch behaviour (B7 propagation, docs/features/rules-engine/
 // discovery.md). Drives the real Commander commands defined in
 // packages/cli/src/program.ts (via createProgram()) with a mocked
@@ -20,7 +20,7 @@ function findCommand(program: Command, path: string[]): Command {
   return current;
 }
 
-describe('clearvo rules / adjustments CLI', () => {
+describe('clearvo rules CLI', () => {
   const originalFetch = global.fetch;
   const originalApiKey = process.env.CLEARVO_API_KEY;
   const originalBaseUrl = process.env.CLEARVO_BASE_URL;
@@ -306,57 +306,5 @@ describe('clearvo rules / adjustments CLI', () => {
 
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe('http://x/v1/rules-engine/trace?recordType=calculation&recordId=c1');
-  });
-
-  it('"adjustments propose <id> --mode FORCED_INPUT --original-value <json> --reason <r>" POSTs the expected body', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, adjustmentId: 'adj1' }) });
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    await findCommand(createProgram(), ['adjustments', 'propose']).parseAsync(
-      [
-        'calc1', '--mode', 'FORCED_INPUT',
-        '--original-value', '{"taxCategory":null}',
-        '--reason', 'Miscategorized at checkout',
-        '--forced-inputs', '{"taxCategory":"digital_service"}',
-        '--entity', 'ent-1',
-      ],
-      { from: 'user' },
-    );
-
-    const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://x/v1/tax/calculate/calc1/adjustments');
-    expect(opts.method).toBe('POST');
-    expect(opts.headers['x-entity-id']).toBe('ent-1');
-    const body = JSON.parse(opts.body as string);
-    expect(body).toEqual({
-      mode: 'FORCED_INPUT',
-      originalValue: { taxCategory: null },
-      reason: 'Miscategorized at checkout',
-      forcedInputs: { taxCategory: 'digital_service' },
-    });
-  });
-
-  it('"adjustments list <id> --status DRAFT" GETs with a status query param', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, adjustments: [] }) });
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    await findCommand(createProgram(), ['adjustments', 'list']).parseAsync(['calc1', '--status', 'DRAFT'], { from: 'user' });
-
-    const [url] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://x/v1/tax/calculate/calc1/adjustments?status=DRAFT');
-  });
-
-  it('"adjustments options <id>" GETs /tax/calculate/{id}/adjustment-options', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ modes: ['FORCED_INPUT', 'POST_CALCULATION_OVERRIDE'], targetTypes: [], forcedInputProperties: { header: [], line: [] }, overrideColumns: [] }),
-    });
-    global.fetch = fetchMock as unknown as typeof fetch;
-
-    await findCommand(createProgram(), ['adjustments', 'options']).parseAsync(['calc1'], { from: 'user' });
-
-    const [url, opts] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://x/v1/tax/calculate/calc1/adjustment-options');
-    expect(opts.method).toBe('GET');
   });
 });

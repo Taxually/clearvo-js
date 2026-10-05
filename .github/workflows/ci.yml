@@ -48,3 +48,17 @@ jobs:
 
       - name: Build all packages
         run: npm run build
+
+      - name: Unit tests (SDK and CLI)
+        run: npm test --workspaces --if-present
+
+      - name: MCP tool-surface checks (names, annotations, schema parity with openapi.json)
+        working-directory: packages/mcp
+        env:
+          CLEARVO_MARKETING_OPENAPI_PATH: ${{ github.workspace }}/clearvo-marketing/public/openapi.json
+        run: |
+          npm run test:tool-names
+          npm run test:tool-annotations
+          npm run test:rules-engine-tools
+          npm run test:supplier-tools
+          npm run test:openapi-parity

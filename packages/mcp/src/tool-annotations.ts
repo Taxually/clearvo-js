@@ -7,8 +7,9 @@
 // Keep the two files in sync by hand; scripts/verify-tool-annotations.js fails
 // the build if any tool in this server's tools/list lacks an annotation.
 //
-// Differences from the hosted copy: get_br_credentials / poll_br_inbound are
-// stdio-only tool names (the hosted connector exposes trigger_br_poll instead).
+// Differences from the hosted copy: stdio-only tools (see tool-names.json's "stdioOnly") are
+// get_br_credentials, the deprecated poll_br_inbound alias (hosted: trigger_br_poll) and the
+// public-route wrappers the hosted connector has not added yet.
 //
 // Classification rules (from each tool's real HTTP verb, not its name):
 //   readOnlyHint    true : no state change on Clearvo (GET tools, plus the two
@@ -31,7 +32,7 @@ export interface McpToolAnnotations {
 }
 
 const READ_ONLY = new Set<string>([
-  'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
+  'get_usage', 'list_tax_obligations', 'list_client_tax_codes',
   'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_entities',
   'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements',
   'list_invoices', 'get_invoice', 'list_products', 'list_webhooks', 'list_registrations',
@@ -47,7 +48,7 @@ const READ_ONLY = new Set<string>([
 ]);
 
 const DESTRUCTIVE = new Set<string>([
-  'delete_client_tax_code', 'remove_entity_logo', 'delete_webhook', 'delete_customer', 'delete_supplier',
+  'delete_client_tax_code', 'delete_product', 'remove_entity_logo', 'delete_webhook', 'delete_customer', 'delete_supplier',
   'delete_bank_account', 'unsuppress_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
   'cancel_sii_report', 'amend_sii_report', 'reset_field_mappings', 'exclude_reporting_batch_item',
   'confirm_reporting_batch',
@@ -62,13 +63,15 @@ const DESTRUCTIVE = new Set<string>([
 ]);
 
 const NON_IDEMPOTENT = new Set<string>([
-  'calculate_tax', 'propose_manual_adjustment', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
+  'calculate_tax', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
   'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
   'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch',
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account',
   'receive_invoice_document', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
   'move_rule', 'amend_sii_report',
+  // Second call fails (404/409) or sends a second email/delivery.
+  'refund_tax_calculation', 'retry_invoice', 'deliver_invoice', 'resend_invoice_notification', 'restore_product',
   // Second call fails (409: batch no longer awaiting confirmation).
   'confirm_tax_calculation_import', 'confirm_reporting_batch',
 ]);
@@ -76,7 +79,7 @@ const NON_IDEMPOTENT = new Set<string>([
 const OPEN_WORLD = new Set<string>([
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
   'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
-  'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
+  'retry_invoice', 'deliver_invoice', 'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
   // poll_status is a GET that live-polls KSeF/NAV and writes the result back: NOT read-only.
   'poll_status',
   // These verify the credential against the authority live before saving.
