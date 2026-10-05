@@ -279,12 +279,50 @@ export interface LineItemInput {
   unitOfMeasure?: string;
   /** Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (422 UNKNOWN_FIELD_LINE_RENAMED). */
   sellerItemId?: string;
+  /** Per-line override of the invoice-level `taxIncluded`. */
+  taxIncluded?: boolean;
+  /** Nature of the line. */
+  lineType?: 'product' | 'service' | 'digital_service' | 'transport' | 'other';
+  /** Global Trade Item Number (EN16931 BT-157). */
+  gtin?: string;
+  /** Item classification code (EN16931 BT-158), e.g. a CPV or UNSPSC value; pair with `itemClassificationScheme`. */
+  itemClassificationCode?: string;
+  /** Scheme identifier for `itemClassificationCode` (BT-158-1). */
+  itemClassificationScheme?: string;
+  /** Poland: this line's GTU group code for the KSeF FA(3) marking. Several invoice-level codes with no line assignment hold the invoice (`PL_GTU_LINE_ASSIGNMENT_REQUIRED`). */
+  gtuCode?: string;
+  /** Free-text line note. */
+  note?: string;
+  /** Reference to the order line this invoice line fulfils (BT-132). */
+  orderLineReference?: string;
+  /** Invoicing period of this line (BG-26). */
+  period?: InvoicePeriodInput;
+  /** Line-level allowances. */
+  allowances?: AllowanceChargeInput[];
+  /** Line-level charges. */
+  charges?: AllowanceChargeInput[];
+  /** Free-form string key/value pairs stored with the line. */
+  metadata?: Record<string, string>;
+}
+
+/** Invoicing period (EN16931 BG-14 / BG-26), both dates YYYY-MM-DD. */
+export interface InvoicePeriodInput {
+  start: string;
+  end: string;
 }
 
 export interface ShippingInput {
   amount: number;
+  /** @deprecated The API does not read `carrier`; send `carrierId`. */
   carrier?: string;
+  /** Carrier identifier. */
+  carrierId?: string;
   trackingNumber?: string;
+  serviceLevel?: string;
+  description?: string;
+  /** Tax rate as a percentage, 0-100. */
+  taxRate?: number;
+  taxAmount?: number;
   /** Same resolution as LineItemInput.clientTaxCode — RECOMMENDED. */
   clientTaxCode?: string;
   /**
@@ -299,7 +337,17 @@ export interface ShippingInput {
 export interface AllowanceChargeInput {
   /** Absolute amount, always positive — sign is implied by whether this is under `allowances` or `charges`. */
   amount: number;
-  reason: string;
+  /** Free-text reason. */
+  reason?: string;
+  /** UNCL5189 (allowance) / UNCL7161 (charge) reason code. */
+  reasonCode?: string;
+  /** Base the percentage was applied to (BT-93/BT-100), informational. */
+  baseAmount?: number;
+  /** Percentage applied to `baseAmount`, informational. */
+  percentage?: number;
+  /** Tax rate as a percentage, 0-100. */
+  taxRate?: number;
+  taxAmount?: number;
   /** Same resolution as LineItemInput.clientTaxCode — RECOMMENDED. */
   clientTaxCode?: string;
   /** Same resolution as LineItemInput.taxTreatment. Same zero-rated-by-default carve-out as ShippingInput.taxTreatment. */
@@ -381,6 +429,8 @@ export interface SubmitInvoiceInput {
   documentType?: 'invoice' | 'credit_note' | 'debit_note';
   invoiceNumber: string;
   issueDate: string;
+  /** Tax point date (EN16931 BT-7), YYYY-MM-DD, when it differs from `issueDate`. Mandate effective-date matching and reporting-period membership use it first, falling back to `issueDate`. */
+  taxPointDate?: string;
   dueDate?: string;
   currency: string;
   country: string;
@@ -471,7 +521,49 @@ export interface SubmitInvoiceInput {
    * (EN 16931 BR-CO-16) holds the invoice with `PAYABLE_AMOUNT_BR_CO_16`.
    */
   statedPayableAmount?: number;
-  originalInvoiceRef?: { invoiceNumber: string; issueDate: string };
+  /** The earlier invoice a credit or debit note corrects. */
+  originalInvoiceRef?: {
+    invoiceNumber: string;
+    issueDate: string;
+    reason?: string;
+    /** Poland: the KSeF reference number of the original invoice. */
+    ksefNumber?: string;
+  };
+  /** Declares whether this supply is reported under the One-Stop-Shop scheme. Omit to let the platform work it out; an explicit value wins. Feeds Compliance Mandate resolution only, never tax treatment. */
+  ossDeclared?: boolean;
+  /** Sandbox keys only: force a deterministic `REJECTED` outcome for authority-network countries. A no-op for ES/PT/DE/FR and with a live key. */
+  sandboxSimulateOutcome?: 'REJECTED';
+  /** Buyer reference (EN16931 BT-10); the Leitweg-ID for German public-sector buyers. */
+  buyerReference?: string;
+  /** Customer purchase order number (BT-13). */
+  orderReference?: string;
+  /** Contract reference (BT-12). */
+  contractReference?: string;
+  /** Project reference (BT-11). */
+  projectReference?: string;
+  /** Free-text invoice note (BT-22). */
+  note?: string;
+  invoicePeriod?: InvoicePeriodInput;
+  /** Payee when different from the supplier (BG-10). */
+  payee?: CustomerPartyInput;
+  /** Delivery information (BG-13). */
+  delivery?: {
+    date?: string;
+    locationId?: string;
+    partyName?: string;
+    address?: { street?: string; street2?: string; city?: string; postalCode?: string; countyCode?: string; country?: string };
+  };
+  /** Supporting documents (BG-24): `externalUrl`, or `contentBase64` with `mimeType` and `fileName`. */
+  attachments?: Array<{
+    reference: string;
+    description?: string;
+    externalUrl?: string;
+    contentBase64?: string;
+    mimeType?: string;
+    fileName?: string;
+  }>;
+  /** Extra label/value rows shown on the rendered invoice. */
+  customFields?: Array<{ label: string; value: string }>;
   /**
    * Id (from a prior submit response) of the invoice this submission corrects
    * — either a fiscal credit/debit note reversing it, or a plain resubmission
@@ -842,6 +934,28 @@ export interface TaxCalculateRequest {
   currency: string;
   commit?: boolean;
   idempotencyKey?: string;
+  /** ISO 4217 currency the tax must be reported in, when it differs from `currency` (EN16931 BT-6). Omit to let it resolve from the transaction's own jurisdiction. */
+  taxReportingCurrency?: string;
+  /** Transaction date, `YYYY-MM-DD` or an ISO 8601 timestamp. Defaults to now. Required with `externalOriginalReference`. */
+  date?: string;
+  /** Your own reference for the order/transaction (max 100 chars); stored and echoed back. */
+  merchantRef?: string;
+  /** Order-level discount in the transaction currency, apportioned across the lines. Non-negative. */
+  orderDiscount?: number;
+  /** How the buyer paid. */
+  paymentMethod?: 'card' | 'bank_transfer' | 'digital_wallet' | 'cash' | 'other';
+  /** US: true when a marketplace facilitator collects and remits the tax on this sale. */
+  isMarketplaceFacilitatedSale?: boolean;
+  /** Default `'invoice'`. A `'credit_note'` with `commit` true (the default) requires exactly one of `relatedCalculationId` or `externalOriginalReference`. */
+  transactionType?: 'invoice' | 'credit_note';
+  /** Credit notes: the `calculationId` of the original invoice being credited (max 50 chars). */
+  relatedCalculationId?: string;
+  /** Credit notes: your own reference to an original invoice not calculated here. Requires `date`; mutually exclusive with `relatedCalculationId`. */
+  externalOriginalReference?: string;
+  /** Delivery address. `region` is required for a US destination. */
+  shipTo?: TaxCalcShipFrom;
+  /** How the consignment ships; relevant to duties/import treatment. */
+  shippingMode?: 'post' | 'courier';
   /**
    * `'sale'` (default) — an outgoing transaction: the entity is the
    * supplier and `customer` (the counterparty) is required. `'purchase'`
@@ -950,6 +1064,28 @@ export interface TaxCalculateRequest {
      * supplied directly, quantity is not consumed by the engine. Non-negative.
      */
     quantity?: number;
+    /** Longer product description (max 500 chars); an extra classification signal. */
+    productDescription?: string;
+    /** Optional SKU or product code. The classification result is cached per account so the product is not re-classified on every transaction. */
+    productCode?: string;
+    /** Absolute discount taken off this line, in the transaction currency. Must not exceed the line amount (422 `discount_exceeds_line_amount`). */
+    discount?: number;
+    /** Audit/display only; never consumed by the tax engine. */
+    discountAmount?: number;
+    /** Purchases only: goods vs services. A purchase line without it returns outcome `UNKNOWN_TREATMENT` (`missing_supply_type`). */
+    supplyType?: 'GOODS' | 'SERVICES';
+    /** Purchases only: manual override of the recoverable share of input tax, 0-100 (a percentage, not a fraction). Wins over the client tax code's recoverability. */
+    recoverablePercentOverride?: number;
+    /** Purchases only: the tax the supplier actually charged on this line. The engine compares it with the legally due tax and returns a `taxVerification` verdict. */
+    statedTaxAmount?: number;
+    /** Display size in inches, for jurisdictions with screen-size based fees. */
+    screenSizeInches?: number;
+    /** US `shipping_handling` lines only: who delivers. Omitted is treated conservatively (taxable). */
+    shippingCarrier?: 'common' | 'seller_vehicle';
+    /** US `shipping_handling` lines only: whether the buyer could avoid the charge. Omitted is treated conservatively (taxable). */
+    chargeAvoidable?: boolean;
+    /** US `shipping_handling` lines only: true when the charge is the actual cost of shipment. Omitted is treated conservatively (taxable). */
+    actualCostOfShipment?: boolean;
     productName: string;
     taxCategory?: string;
     /**
@@ -3897,7 +4033,7 @@ export interface DutiesResult {
  * credit-note fields, `transactionDirection: 'purchase'` and `idempotencyKey`.
  * `duties.include` is implied.
  */
-export type QuoteDutiesInput = Omit<TaxCalculateRequest, 'commit' | 'idempotencyKey' | 'transactionDirection' | 'documentStage' | 'duties'> & {
+export type QuoteDutiesInput = Omit<TaxCalculateRequest, 'commit' | 'idempotencyKey' | 'transactionDirection' | 'documentStage' | 'transactionType' | 'relatedCalculationId' | 'externalOriginalReference' | 'duties'> & {
   duties?: Omit<DutiesRequest, 'include'> & { include?: true };
 };
 

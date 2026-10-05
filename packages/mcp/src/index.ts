@@ -198,6 +198,34 @@ const CLASSIFICATION_CODES_SCHEMA = {
   },
 };
 
+// Document-level allowance/charge entry (POST /v1/send `allowances[]` / `charges[]`, also nested per line) — hoisted
+// so the document-level and per-line copies cannot drift. Mirrors the backend's CustomerAllowanceCharge.
+const ALLOWANCE_CHARGE_ITEM_SCHEMA = {
+  type: 'object' as const,
+  properties: {
+    amount: { type: 'number', description: 'Always positive; whether it reduces (allowance) or increases (charge) the total is decided by which array it sits in.' },
+    baseAmount: { type: 'number', description: 'Base the percentage was applied to (EN16931 BT-93/BT-100), informational.' },
+    percentage: { type: 'number', description: 'Percentage applied to baseAmount, informational.' },
+    clientTaxCode: { type: 'string', description: 'Your own ERP tax code for this entry. Mutually exclusive with taxTreatment.' },
+    taxTreatment: { type: 'string', enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'], description: 'Explicit tax treatment, used when clientTaxCode is omitted.' },
+    taxRate: { type: 'number', description: 'Tax rate as a percentage, 0-100.' },
+    taxAmount: { type: 'number', description: 'Tax amount for this entry; computed when omitted.' },
+    reasonCode: { type: 'string', description: 'UNCL5189 (allowance) / UNCL7161 (charge) reason code.' },
+    reason: { type: 'string', description: 'Free-text reason.' },
+  },
+  required: ['amount'],
+};
+
+const INVOICE_PERIOD_SCHEMA = {
+  type: 'object' as const,
+  description: 'Invoicing period (EN16931 BG-14).',
+  properties: {
+    start: { type: 'string', description: 'YYYY-MM-DD' },
+    end: { type: 'string', description: 'YYYY-MM-DD' },
+  },
+  required: ['start', 'end'],
+};
+
 // calculate_tax's input schema, hoisted so quote_duties (POST /v1/duties/quote, the same body minus commit,
 // transactionDirection and documentStage) is derived from it and can never drift from it.
 const CALCULATE_TAX_INPUT_SCHEMA = {
@@ -205,6 +233,40 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
   properties: {
     currency: { type: 'string', description: 'ISO 4217 currency code' },
     commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
+    idempotencyKey: { type: 'string', description: 'Optional key that makes a committed calculation safely retryable: a retry with the same key returns the stored result instead of recording a second transaction. Only honoured when commit is true.' },
+    taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency the tax must be reported in, when it differs from currency (EN16931 BT-6). Omit to let it resolve from the transaction\'s own jurisdiction.' },
+    date: { type: 'string', description: 'Transaction date, YYYY-MM-DD or an ISO 8601 timestamp. Defaults to now. Rates and rules in force on this date apply. Required with externalOriginalReference.' },
+    documentStage: { type: 'string', enum: ['purchase_order', 'invoice'], description: 'Default invoice. Only meaningful on a purchase: purchase_order binds later invoice-stage poLink/poComparison against this calculation.' },
+    customProperties: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] }, description: 'Header-level custom facts a rules-engine condition/action can read or write as customProperties.<key>. Call list_rule_property_definitions for the keys visible to this key.' },
+    vatValidation: { type: 'string', enum: ['full', 'format', 'none'], description: 'Per-request override of how the customer/supplier tax ID is checked: full (format plus live authority lookup), format (syntax only) or none.' },
+    vatUnverifiableFallback: { type: 'string', enum: ['conservative', 'permissive'], description: 'Default conservative. What to do when a tax ID cannot be verified (authority unreachable): conservative treats the party as unverified (no B2B relief), permissive treats it as valid.' },
+    merchantRef: { type: 'string', maxLength: 100, description: 'Your own reference for the order/transaction (max 100 chars); stored and echoed back.' },
+    orderDiscount: { type: 'number', minimum: 0, description: 'Order-level discount in the transaction currency, apportioned across the lines.' },
+    paymentMethod: { type: 'string', enum: ['card', 'bank_transfer', 'digital_wallet', 'cash', 'other'], description: 'How the buyer paid. Informational for most jurisdictions.' },
+    isMarketplaceFacilitatedSale: { type: 'boolean', description: 'US: true when a marketplace facilitator collects and remits the tax on this sale. Unsupported jurisdictions return an error.' },
+    transactionType: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Default invoice. A credit_note with commit true (the default) requires exactly one of relatedCalculationId or externalOriginalReference.' },
+    relatedCalculationId: { type: 'string', maxLength: 50, description: 'Credit notes: the calculationId of the original invoice being credited; its date and rate context are reused.' },
+    externalOriginalReference: { type: 'string', maxLength: 200, description: 'Credit notes: your own reference to the original invoice when it was not calculated here. Requires date. Mutually exclusive with relatedCalculationId.' },
+    shippingMode: { type: 'string', enum: ['post', 'courier'], description: 'How the consignment ships; relevant to duties/import treatment.' },
+    shipTo: {
+      type: 'object',
+      description: 'Delivery address. region is required for a US destination.',
+      properties: {
+        line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
+        region: { type: 'string', description: 'State/region code, e.g. "TX"' },
+        postalCode: { type: 'string' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+      },
+      required: ['country'],
+    },
+    evidence: {
+      type: 'object',
+      description: 'Location evidence for place-of-supply of digital services.',
+      properties: {
+        ipAddress: { type: 'string', description: 'Buyer IP address.' },
+        binCountry: { type: 'string', description: 'Country of the payment card BIN, ISO 3166-1 alpha-2.' },
+      },
+    },
     transactionDirection: {
       type: 'string',
       enum: ['sale', 'purchase'],
@@ -302,6 +364,21 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
           quantity: { type: 'number', description: 'Number of units. Required when unitPrice is supplied (the two define the line total); informational when amount is supplied directly.' },
           productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
           productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
+          productDescription: { type: 'string', maxLength: 500, description: 'Longer product description; an extra classification signal.' },
+          amountIncludesTax: { type: 'boolean', description: 'True when amount/unitPrice already includes tax (the engine extracts it).' },
+          discount: { type: 'number', description: 'Absolute discount taken off this line, in the transaction currency. Must not exceed the line amount (422 discount_exceeds_line_amount).' },
+          discountAmount: { type: 'number', description: 'Audit/display only; never consumed by the tax engine.' },
+          supplyType: { type: 'string', enum: ['GOODS', 'SERVICES'], description: 'Purchases only: goods vs services. A purchase line without it returns outcome UNKNOWN_TREATMENT (missing_supply_type).' },
+          recoverablePercentOverride: { type: 'number', minimum: 0, maximum: 100, description: 'Purchases only: manual override of the recoverable share of input tax, 0-100 (a percentage, not a fraction). Wins over the client tax code\'s recoverability.' },
+          statedTaxAmount: { type: 'number', description: 'Purchases only: the tax the supplier actually charged on this line. The engine compares it with the legally due tax and returns a taxVerification verdict.' },
+          screenSizeInches: { type: 'number', description: 'Display size in inches, for jurisdictions with screen-size based fees.' },
+          shipFrom: { type: 'object', description: 'Per-line dispatch address; overrides the transaction shipFrom for this line.', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' }, region: { type: 'string' }, postalCode: { type: 'string' }, city: { type: 'string' }, line1: { type: 'string' }, line2: { type: 'string' }, customsStatus: { type: 'string', enum: ['free_circulation', 'bonded'] } }, required: ['country'] },
+          shippingCarrier: { type: 'string', enum: ['common', 'seller_vehicle'], description: 'US shipping_handling lines only: who delivers. Omitted is treated conservatively (taxable).' },
+          chargeAvoidable: { type: 'boolean', description: 'US shipping_handling lines only: whether the buyer could avoid the charge by collecting the goods. Omitted is treated conservatively (taxable).' },
+          actualCostOfShipment: { type: 'boolean', description: 'US shipping_handling lines only: true when the charge is the actual cost of shipment. Omitted is treated conservatively (taxable).' },
+          customProperties: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] }, description: 'Per-line custom facts a rules-engine condition/action can read or write as customProperties.<key> (e.g. glAccount, costCenter, intendedUse).' },
+          purchaseOrderId: { type: 'string', maxLength: 50, description: 'Invoice-stage purchase lines: the purchase-order header id to link back to a documentStage purchase_order calculation (see poLink/poComparison).' },
+          purchaseOrderLineNumber: { type: 'string', maxLength: 100, description: 'Which PO line poLink resolves against when the PO header may omit it.' },
           taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
           classificationCodes: CLASSIFICATION_CODES_SCHEMA,
           taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
@@ -324,7 +401,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
   required: ['currency', 'lineItems'],
 };
 
-const { commit: _quoteOmitCommit, transactionDirection: _quoteOmitDirection, documentStage: _quoteOmitStage, ...QUOTE_DUTIES_PROPERTIES } = CALCULATE_TAX_INPUT_SCHEMA.properties as Record<string, unknown>;
+const { commit: _quoteOmitCommit, idempotencyKey: _quoteOmitKey, transactionType: _quoteOmitType, relatedCalculationId: _quoteOmitRelated, externalOriginalReference: _quoteOmitExternal, transactionDirection: _quoteOmitDirection, documentStage: _quoteOmitStage, ...QUOTE_DUTIES_PROPERTIES } = CALCULATE_TAX_INPUT_SCHEMA.properties as Record<string, unknown>;
 
 const TOOLS = [
   {
@@ -531,12 +608,24 @@ const TOOLS = [
               discountAmount: { type: 'number', description: 'Line discount as an absolute amount in the invoice currency, always positive. Mutually exclusive with discountPercent — set at most one.' },
               unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
               sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
+              taxIncluded: { type: 'boolean', description: 'Per-line override of the invoice-level taxIncluded.' },
+              lineType: { type: 'string', enum: ['product', 'service', 'digital_service', 'transport', 'other'], description: 'Nature of the line.' },
+              gtin: { type: 'string', description: 'Global Trade Item Number (EN16931 BT-157).' },
+              itemClassificationCode: { type: 'string', description: 'Item classification code (EN16931 BT-158), e.g. a CPV or UNSPSC value; pair with itemClassificationScheme.' },
+              itemClassificationScheme: { type: 'string', description: 'Scheme identifier for itemClassificationCode (BT-158-1).' },
+              gtuCode: { type: 'string', description: 'Poland: this line\'s GTU goods/services group code for the KSeF FA(3) marking. Several invoice-level codes with no line assignment hold the invoice (PL_GTU_LINE_ASSIGNMENT_REQUIRED).' },
+              note: { type: 'string', description: 'Free-text line note.' },
+              orderLineReference: { type: 'string', description: 'Reference to the order line this invoice line fulfils (BT-132).' },
+              period: INVOICE_PERIOD_SCHEMA,
+              allowances: { type: 'array', description: 'Line-level allowances.', items: ALLOWANCE_CHARGE_ITEM_SCHEMA },
+              charges: { type: 'array', description: 'Line-level charges.', items: ALLOWANCE_CHARGE_ITEM_SCHEMA },
+              metadata: { type: 'object', additionalProperties: { type: 'string' }, description: 'Free-form string key/value pairs stored with the line.' },
             },
             required: ['description', 'quantity', 'unitPrice', 'taxRate'],
           },
         },
-        totalAmount: { type: 'number', description: 'Net total excluding tax' },
-        taxAmount: { type: 'number', description: 'Total tax amount' },
+        totalAmount: { type: 'number', deprecated: true, description: 'Ignored. Totals are computed from lines (net, tax, gross); use statedPayableAmount to pin the payable total. Kept optional for older callers.' },
+        taxAmount: { type: 'number', deprecated: true, description: 'Ignored. Tax is computed from the lines; see lines[].taxAmount. Kept optional for older callers.' },
         documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note". Over Peppol a credit note reverses a previously accepted invoice in full (no partial credit notes yet) and a debit note is sent as an invoice marked as a debit note; not yet available for Singapore, Japan or the UAE (422 CREDIT_NOTE_PEPPOL_UNSUPPORTED).' },
         clientTaxCode: {
           type: 'string',
@@ -629,6 +718,79 @@ const TOOLS = [
             periodo: { type: 'string', description: '2-digit month, e.g. "06".' },
           },
         },
+        taxPointDate: { type: 'string', description: 'Tax point date (EN16931 BT-7), YYYY-MM-DD, when it differs from issueDate. Compliance-mandate effective-date matching and reporting-period membership use it first, falling back to issueDate.' },
+        dueDate: { type: 'string', description: 'Payment due date, YYYY-MM-DD. The only home of the due date (payment.dueDate was removed).' },
+        taxIncluded: { type: 'boolean', description: 'When true, unitPrice values are tax-inclusive (gross). Default false (net).' },
+        allowances: { type: 'array', description: 'Document-level allowances (discounts) reducing the invoice total.', items: ALLOWANCE_CHARGE_ITEM_SCHEMA },
+        charges: { type: 'array', description: 'Document-level charges (e.g. handling fees) increasing the invoice total.', items: ALLOWANCE_CHARGE_ITEM_SCHEMA },
+        shipping: {
+          type: 'object',
+          description: 'Shipping/freight charge. Freight appears as a totals.charges[] entry on the invoice view.',
+          properties: {
+            amount: { type: 'number' },
+            description: { type: 'string' },
+            clientTaxCode: { type: 'string', description: 'Your own ERP tax code. Mutually exclusive with taxTreatment.' },
+            taxTreatment: { type: 'string', enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'] },
+            taxRate: { type: 'number', description: 'Tax rate as a percentage, 0-100.' },
+            taxAmount: { type: 'number' },
+            carrierId: { type: 'string' },
+            trackingNumber: { type: 'string' },
+            serviceLevel: { type: 'string' },
+          },
+          required: ['amount'],
+        },
+        prepaidAmount: { type: 'number', description: 'Amount already paid in advance (EN16931 BT-113); reduces the payable amount.' },
+        statedPayableAmount: { type: 'number', description: 'The payable amount as your system computed it. Authoritative and stored as stated; any difference from the lines-based recompute becomes the rounding amount (BT-114). A gap over one minor unit is the WARNING ROUNDING_RESIDUAL_OVER_TOLERANCE; an amount that would fail EN 16931 BR-CO-16 in the target format holds the invoice (PAYABLE_AMOUNT_BR_CO_16).' },
+        originalInvoiceRef: {
+          type: 'object',
+          description: 'REQUIRED for a credit_note or debit_note that corrects a specific earlier invoice: the invoice being credited/debited.',
+          properties: {
+            invoiceNumber: { type: 'string', description: 'Number of the original invoice.' },
+            issueDate: { type: 'string', description: 'Issue date of the original invoice, YYYY-MM-DD.' },
+            reason: { type: 'string', description: 'Why the original is being credited/corrected.' },
+            ksefNumber: { type: 'string', description: 'Poland: the KSeF reference number of the original invoice, when it was cleared through KSeF.' },
+          },
+          required: ['invoiceNumber', 'issueDate'],
+        },
+        customerReference: { type: 'string', description: 'Your own free-text reference for the customer on this document (e.g. a CRM id); echoed back, not used for matching.' },
+        contractReference: { type: 'string', description: 'Contract reference (EN16931 BT-12).' },
+        projectReference: { type: 'string', description: 'Project reference (EN16931 BT-11).' },
+        note: { type: 'string', description: 'Free-text invoice note (EN16931 BT-22).' },
+        invoicePeriod: INVOICE_PERIOD_SCHEMA,
+        payee: {
+          type: 'object',
+          description: 'Payee, when different from the supplier (EN16931 BG-10). Same shape as supplier/customer: name, taxId, address, electronicAddress, identifiers.',
+          properties: {
+            name: { type: 'string' },
+            taxId: { type: 'string' },
+            address: { type: 'object', properties: { street: { type: 'string' }, city: { type: 'string' }, postalCode: { type: 'string' }, country: { type: 'string', description: 'ISO 3166-1 alpha-2' } } },
+          },
+        },
+        attachments: {
+          type: 'array',
+          description: 'Supporting documents (EN16931 BG-24). Supply externalUrl, or contentBase64 with mimeType and fileName.',
+          items: {
+            type: 'object',
+            properties: {
+              reference: { type: 'string' },
+              description: { type: 'string' },
+              externalUrl: { type: 'string' },
+              contentBase64: { type: 'string' },
+              mimeType: { type: 'string' },
+              fileName: { type: 'string' },
+            },
+            required: ['reference'],
+          },
+        },
+        metadata: { type: 'object', additionalProperties: { type: 'string' }, description: 'Free-form string key/value pairs stored with the document and echoed back; not sent to authorities.' },
+        customFields: {
+          type: 'array',
+          description: 'Extra label/value rows shown on the rendered invoice.',
+          items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'string' } }, required: ['label', 'value'] },
+        },
+        ossDeclared: { type: 'boolean', description: 'Declare whether this supply is reported under the One-Stop-Shop (OSS) scheme. Omit to let the platform work it out; an explicit value always wins. Feeds Compliance Mandate resolution only (a reporting-mechanism fact, e.g. France\'s OSS split) and never changes tax treatment.' },
+        rejectInsteadOfAutoCorrect: { type: 'boolean', description: 'When true, a value the platform would otherwise silently normalise instead surfaces as a blocking entry in the 422 response, so you can fix it yourself. Default false.' },
+        sandboxSimulateOutcome: { type: 'string', enum: ['REJECTED'], description: 'Sandbox keys only: force a deterministic REJECTED outcome for authority-network countries (a no-op for ES/PT/DE/FR, which have no authority call to simulate). Ignored with a live key.' },
         countrySpecific: {
           type: 'object',
           description: 'Country-specific invoice fields.',
@@ -701,7 +863,7 @@ const TOOLS = [
           },
         },
       },
-      required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'customer', 'lines', 'totalAmount', 'taxAmount'],
+      required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'customer', 'lines'],
     },
   },
   {
