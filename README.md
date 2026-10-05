@@ -52,7 +52,7 @@ Add to `~/.claude/settings.json`:
 
 Then ask Claude: *"Submit a test invoice for €1,000 to Acme SpA (IT12345678901) for software licence Q3"*
 
-**Available tools**: `submit_invoice`, `poll_status`, `calculate_tax`, `validate_tax_number`, `validate_tax_numbers_batch`, `list_entities`, `create_entity`, `get_requirements`, `list_invoices`, `get_invoice`, `list_products`, `create_product`, `update_product`, `list_webhooks`, `create_webhook`, `delete_webhook`, `list_registrations`, `add_registration`, `set_registration_collection`, `list_tax_calculations`, `get_query_fields`, `query_data`, `get_setup_status`, `get_tax_settings`, `update_tax_settings`, `get_reporting_obligations`, `update_reporting_obligations`, `list_customer_reference_types`, `list_customers`, `create_customer`, `update_customer`, `delete_customer`, `list_suppliers`, `create_supplier`, `update_supplier`, `delete_supplier`, `list_client_tax_codes`, `create_client_tax_code`, `update_client_tax_code`, `delete_client_tax_code`, `list_tax_codes`, `list_reporting_batches`, `run_reporting_batch_sweep`
+**Available tools**: the server exposes one tool per public API operation family: invoices (`submit_invoice`, `poll_status`, `get_invoice`, `list_invoices`, `retry_invoice`, `deliver_invoice`, `resend_invoice_notification`, `receive_invoice_document`, bulk CSV send), tax calculation (`calculate_tax`, `refund_tax_calculation`, `quote_duties`, `estimate_duties`, imports), tax-number validation, entities, customers, suppliers, bank accounts, products, client tax codes, registrations, obligations, exemption certificates, reporting batches and obligations, per-country credentials, webhooks, usage, and the rules engine. The exact list is `packages/mcp/tool-names.json` (checked in CI against `tools/list`), or ask your client for the server's tools.
 
 `submit_invoice` line items have no `taxCode` field — the EN16931 category is always a resolved output. Pass `clientTaxCode` (RECOMMENDED) or a `taxTreatment` hint (`exempt`/`out_of_scope`/`zero_rated`/`reverse_charge`) instead, and set `dryRun: true` to preview the resolution without submitting for real.
 
@@ -110,7 +110,14 @@ clearvo entities list --pretty
 clearvo requirements --country IT --pretty
 clearvo validate-tin --country DE --number DE123456789
 clearvo send invoice.json --pretty
-clearvo status ref-abc123 --pretty
+clearvo status ref-abc123 --country IT --pretty
+clearvo invoices list --country IT --limit 10 --pretty
+clearvo customers create --name "Acme GmbH" --tax-id DE123456789 --pretty
+clearvo usage --pretty
+
+# Any public route that has no dedicated command
+clearvo api GET /tax/jurisdictions --pretty
+clearvo api POST /tax/calculate/<id>/refund --data '{"amount":5}'
 ```
 
 ## Get an API key

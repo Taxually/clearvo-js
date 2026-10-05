@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -1943,6 +1943,562 @@ export function createProgram(): Command {
       const result = await api('POST', `/rules-engine/mappings/reset?${qs.toString()}`, {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
+
+
+  // ── Public API surface sync ───────────────────────────────────────────────
+  // Commands for the rest of the public routes, plus `clearvo api` as a generic escape hatch for
+  // anything not wrapped here. Shared helpers first.
+  const entityHeader = (entity?: string): Record<string, string> | undefined => (entity ? { 'x-entity-id': entity } : undefined);
+  const withQuery = (path: string, params: Record<string, string | undefined>): string => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined) qs.set(k, v);
+    const q = qs.toString();
+    return q ? `${path}?${q}` : path;
+  };
+  const ENTITY_DESC = 'Required for account-scoped keys; omit for entity-scoped keys';
+
+  // ── clearvo api <METHOD> <path> ──
+  program
+    .command('api <method> <path>')
+    .description(
+      'Call any public API route directly: `clearvo api GET /usage`, `clearvo api POST /tax/calculate/abc/refund --data \'{"amount":5}\'`. ' +
+      '<path> is relative to the API base URL (a leading /v1 is accepted and ignored). Prints the JSON response; exits non-zero on an HTTP error.'
+    )
+    .option('--data <json>', 'JSON request body (POST/PUT/PATCH)')
+    .option('--data-file <path>', 'Read the JSON request body from a file')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (method: string, path: string, opts: { data?: string; dataFile?: string; entity?: string; pretty?: boolean }) => {
+      const verb = method.toUpperCase();
+      if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(verb)) {
+        console.error(`Error: method must be GET, POST, PUT, PATCH or DELETE (got "${method}").`);
+        process.exit(1);
+      }
+      if (opts.data && opts.dataFile) {
+        console.error('Error: use either --data or --data-file, not both.');
+        process.exit(1);
+      }
+      let body: unknown;
+      if (opts.data) body = parseJsonOption('--data', opts.data);
+      else if (opts.dataFile) body = parseJsonOption('--data-file', readFileSync(opts.dataFile, 'utf8'));
+      const normalised = `/${path.replace(/^\/+/, '').replace(/^v1(\/|$)/, '')}`.replace(/\/$/, '') || '/';
+      const result = await api(verb, normalised.replace(/^\/\?/, '?'), body, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo invoices ──
+  const invoices = program.command('invoices').description('List, read and act on submitted or received invoices');
+
+  invoices
+    .command('list')
+    .description('List invoices')
+    .option('--country <code>', 'Filter by country')
+    .option('--status <status>', 'Filter by clearance status')
+    .option('--direction <direction>', 'sale or purchase')
+    .option('--from <date>', 'Issued on or after (YYYY-MM-DD)')
+    .option('--to <date>', 'Issued on or before (YYYY-MM-DD)')
+    .option('--limit <n>', 'Results per page')
+    .option('--after-id <id>', 'Cursor: page after this invoice id')
+    .option('--before-id <id>', 'Cursor: page before this invoice id')
+    .option('--received-after <timestamp>', 'Only invoices received after this ISO timestamp')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; status?: string; direction?: string; from?: string; to?: string; limit?: string; afterId?: string; beforeId?: string; receivedAfter?: string; entity?: string; pretty?: boolean }) => {
+      const path = withQuery('/invoices', {
+        country: opts.country, status: opts.status, direction: opts.direction, from: opts.from, to: opts.to,
+        limit: opts.limit, after_id: opts.afterId, before_id: opts.beforeId, receivedAfter: opts.receivedAfter,
+      });
+      print(await api('GET', path, undefined, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  invoices
+    .command('get <id>')
+    .description('Full invoice detail by Clearvo id or authority reference id (includes businessStatusActions on a received invoice)')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/invoices/${encodeURIComponent(id)}`, undefined, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  invoices
+    .command('retry <id>')
+    .description('Retry a stuck or undelivered invoice through its delivery pipeline')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('POST', `/invoices/${encodeURIComponent(id)}/retry`, {}, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  invoices
+    .command('deliver <id>')
+    .description('Re-deliver an invoice over Peppol, optionally overriding the customer endpoint')
+    .option('--address <value>', 'Peppol participant ID value to deliver to')
+    .option('--scheme <schemeId>', 'Peppol participant scheme ID (e.g. 0204, 9930)')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { address?: string; scheme?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.address || opts.scheme) body.electronicAddress = { value: opts.address, schemeId: opts.scheme };
+      print(await api('POST', `/invoices/${encodeURIComponent(id)}/deliver`, body, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  invoices
+    .command('resend-notification <ids...>')
+    .description('Resend the customer invoice notification email for one or more invoices')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (ids: string[], opts: { entity?: string; pretty?: boolean }) => {
+      const result = ids.length === 1
+        ? await api('POST', `/invoices/${encodeURIComponent(ids[0])}/resend-notification`, {}, entityHeader(opts.entity))
+        : await api('POST', '/invoices/resend-notification/batch', { ids }, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  invoices
+    .command('document <id>')
+    .description('Download an invoice\'s XML or PDF')
+    .option('--format <format>', 'xml or pdf', 'xml')
+    .option('--out <path>', 'Write to this file instead of stdout (required for pdf)')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .action(async (id: string, opts: { format: string; out?: string; entity?: string }) => {
+      if (opts.format === 'pdf' && !opts.out) {
+        console.error('Error: --out <path> is required for --format pdf.');
+        process.exit(1);
+      }
+      const res = await fetch(`${getBaseUrl()}${withQuery(`/documents/${encodeURIComponent(id)}`, { format: opts.format })}`, {
+        headers: { 'x-api-key': getApiKey(), ...entityHeader(opts.entity) },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+        console.error(`HTTP ${res.status}: ${data.error ?? 'Unknown error'}`);
+        process.exit(1);
+      }
+      const bytes = Buffer.from(await res.arrayBuffer());
+      if (opts.out) writeFileSync(opts.out, bytes);
+      else process.stdout.write(bytes);
+    });
+
+  // ── clearvo entities update ──
+  entities
+    .command('update <id>')
+    .description('Update an entity')
+    .option('--name <name>', 'Legal name')
+    .option('--vat <vatNumber>', 'VAT registration number')
+    .option('--address-line1 <text>')
+    .option('--address-line2 <text>')
+    .option('--city <text>')
+    .option('--postal-code <text>')
+    .option('--notify-customer-by-default <bool>', 'Default for the send notifyCustomer flag', (v: string) => v !== 'false')
+    .option('--default-de-invoice-format <format>', 'Germany: ZUGFERD, XRECHNUNG or PEPPOL ("null" clears)')
+    .option('--mx-ingestion-mode <mode>', 'Mexico: sat_pull or client_push')
+    .option('--confirm-no-registrations', 'Confirm the entity has no tax registrations')
+    .option('--data <json>', 'Any further fields as a JSON object (e.g. entityFacts)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: Record<string, unknown>) => {
+      const body: Record<string, unknown> = opts.data ? { ...(parseJsonOption('--data', String(opts.data)) as object) } : {};
+      if (opts.name !== undefined) body.name = opts.name;
+      if (opts.vat !== undefined) body.vatNumber = opts.vat;
+      if (opts.addressLine1 !== undefined) body.addressLine1 = opts.addressLine1;
+      if (opts.addressLine2 !== undefined) body.addressLine2 = opts.addressLine2;
+      if (opts.city !== undefined) body.city = opts.city;
+      if (opts.postalCode !== undefined) body.postalCode = opts.postalCode;
+      if (opts.notifyCustomerByDefault !== undefined) body.notifyCustomerByDefault = opts.notifyCustomerByDefault;
+      if (opts.defaultDeInvoiceFormat !== undefined) body.defaultDeInvoiceFormat = opts.defaultDeInvoiceFormat === 'null' ? null : opts.defaultDeInvoiceFormat;
+      if (opts.mxIngestionMode !== undefined) body.mxIngestionMode = opts.mxIngestionMode;
+      if (opts.confirmNoRegistrations) body.confirmNoRegistrations = true;
+      if (Object.keys(body).length === 0) {
+        console.error('Error: nothing to update — pass at least one option.');
+        process.exit(1);
+      }
+      print(await api('PATCH', `/entities/${encodeURIComponent(id)}`, body), !!opts.pretty);
+    });
+
+  // ── clearvo customers ──
+  const customers = program.command('customers').description('Manage customer master data');
+
+  customers
+    .command('list')
+    .description('List customers')
+    .option('--search <text>', 'Case-insensitive name search')
+    .option('--page <n>')
+    .option('--limit <n>', '1-100, default 25')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { search?: string; page?: string; limit?: string; entity?: string; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/customers', { search: opts.search, page: opts.page, limit: opts.limit }), undefined, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  customers
+    .command('get <id>')
+    .description('Get a customer')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/customers/${encodeURIComponent(id)}`, undefined, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  const customerFlags = (cmd: Command): Command => cmd
+    .option('--country <code>', 'Country of the primary tax ID')
+    .option('--tax-id <taxId>')
+    .option('--customer-ref <ref>', 'Your own reference')
+    .option('--address-country <code>')
+    .option('--address-line1 <text>')
+    .option('--address-line2 <text>')
+    .option('--city <text>')
+    .option('--region <text>')
+    .option('--postal-code <text>')
+    .option('--references <json>', 'Typed references, e.g. \'[{"type":"LEITWEG_ID","value":"04011000-1234512345-06"}]\'. Replaces the whole list; "null" or [] clears it. Run `clearvo customers reference-types` for the types.')
+    .option('--country-specific <json>', 'Per-country defaults, e.g. \'{"de":{"invoiceFormat":"XRECHNUNG"}}\'')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output');
+  const customerBody = (opts: Record<string, unknown>): Record<string, unknown> => {
+    const body: Record<string, unknown> = {};
+    const map: Array<[string, string]> = [
+      ['name', 'name'], ['country', 'country'], ['taxId', 'taxId'], ['customerRef', 'customerRef'], ['addressCountry', 'addressCountry'],
+      ['addressLine1', 'addressLine1'], ['addressLine2', 'addressLine2'], ['city', 'city'], ['region', 'region'], ['postalCode', 'postalCode'],
+    ];
+    for (const [flag, field] of map) if (opts[flag] !== undefined) body[field] = opts[flag];
+    if (opts.references !== undefined) body.references = parseJsonOption('--references', String(opts.references));
+    if (opts.countrySpecific !== undefined) body.countrySpecific = parseJsonOption('--country-specific', String(opts.countrySpecific));
+    return body;
+  };
+
+  customerFlags(customers.command('create').description('Create a customer').requiredOption('--name <name>', 'Customer name'))
+    .action(async (opts: Record<string, unknown>) => {
+      print(await api('POST', '/customers', customerBody(opts), entityHeader(opts.entity as string | undefined)), !!opts.pretty);
+    });
+
+  customerFlags(customers.command('update <id>').description('Update a customer (partial)').option('--name <name>', 'Customer name'))
+    .action(async (id: string, opts: Record<string, unknown>) => {
+      print(await api('PATCH', `/customers/${encodeURIComponent(id)}`, customerBody(opts), entityHeader(opts.entity as string | undefined)), !!opts.pretty);
+    });
+
+  customerFlags(customers.command('upsert <customerRef>').description('Create or update a customer keyed by your own reference').option('--name <name>', 'Customer name'))
+    .action(async (customerRef: string, opts: Record<string, unknown>) => {
+      print(await api('PUT', `/customers/by-ref/${encodeURIComponent(customerRef)}`, customerBody(opts), entityHeader(opts.entity as string | undefined)), !!opts.pretty);
+    });
+
+  customers
+    .command('delete <id>')
+    .description('Delete a customer (soft delete)')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .action(async (id: string, opts: { entity?: string }) => {
+      await api('DELETE', `/customers/${encodeURIComponent(id)}`, undefined, entityHeader(opts.entity));
+      console.log(JSON.stringify({ ok: true }));
+    });
+
+  customers
+    .command('reference-types')
+    .description('The registry of reference kinds a customer can carry (Peppol participant ID, Leitweg-ID, ...)')
+    .option('--country <code>', 'Only types applicable to this country')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/customer-reference-types', { country: opts.country })), !!opts.pretty);
+    });
+
+  // ── clearvo receive ──
+  const receive = program.command('receive').description('Receive supplier invoice documents (inbound)');
+
+  receive
+    .command('document <file>')
+    .description('Submit a received invoice document (ZUGFeRD PDF or CII/UBL XML). DE only today; check validationOutcome in the result')
+    .option('--country <code>', 'Regime the document was received under (default DE)')
+    .option('--content-type <mime>', 'Declared MIME type')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { country?: string; contentType?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { fileBase64: readFileSync(file).toString('base64'), fileName: file.split('/').pop() };
+      if (opts.country) body.country = opts.country;
+      if (opts.contentType) body.contentType = opts.contentType;
+      print(await api('POST', '/receive', body, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  receive
+    .command('batch <batchId>')
+    .description('Poll one asynchronous bulk-receive batch')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/receive/bulk/${encodeURIComponent(batchId)}`, undefined, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  receive
+    .command('email-address')
+    .description('The entity\'s DE inbound forwarding email address (null until issued from the dashboard)')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', '/de/inbound-address', undefined, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  // ── clearvo tax settings / obligations / jurisdictions / categories / refund ──
+  const taxSettings = program.command('tax-settings').description('Tax calculation settings');
+
+  taxSettings
+    .command('get')
+    .description('Read the tax calculation settings')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      print(await api('GET', '/tax/settings'), !!opts.pretty);
+    });
+
+  taxSettings
+    .command('update')
+    .description('Update tax calculation settings, e.g. --data \'{"vatValidationMode":"format"}\'')
+    .requiredOption('--data <json>', 'JSON object of the settings to change')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { data: string; pretty?: boolean }) => {
+      print(await api('PATCH', '/tax/settings', parseJsonOption('--data', opts.data)), !!opts.pretty);
+    });
+
+  const obligations = program.command('obligations').description('Tax obligations (Compliance Radar)');
+
+  obligations
+    .command('list')
+    .description('List tax obligations')
+    .option('--country <code>')
+    .option('--status <status>', 'e.g. BREACH, APPROACHING')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; status?: string; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/tax/obligations', { country: opts.country, status: opts.status })), !!opts.pretty);
+    });
+
+  obligations
+    .command('get <id>')
+    .description('Get one tax obligation')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { pretty?: boolean }) => {
+      print(await api('GET', `/tax/obligations/${encodeURIComponent(id)}`), !!opts.pretty);
+    });
+
+  obligations
+    .command('update <id>')
+    .description('Record a registration decision on an obligation')
+    .option('--registration-status <status>', 'REGISTERED, PENDING, NOT_REGISTERED or MONITORING')
+    .option('--registration-number <number>')
+    .option('--obligation-status <status>', 'COMPLIANT, APPROACHING, BREACH or MONITORING')
+    .option('--detail-summary <text>')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { registrationStatus?: string; registrationNumber?: string; obligationStatus?: string; detailSummary?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.registrationStatus) body.registrationStatus = opts.registrationStatus;
+      if (opts.registrationNumber) body.registrationNumber = opts.registrationNumber;
+      if (opts.obligationStatus) body.obligationStatus = opts.obligationStatus;
+      if (opts.detailSummary) body.detailSummary = opts.detailSummary;
+      print(await api('PATCH', `/tax/obligations/${encodeURIComponent(id)}`, body), !!opts.pretty);
+    });
+
+  calculations
+    .command('refund <calculationId>')
+    .description('Mark a committed calculation as refunded, fully or partially')
+    .option('--amount <n>', 'Amount refunded (default: whatever remains)')
+    .option('--idempotency-key <key>', 'Distinct key per distinct partial refund')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (calculationId: string, opts: { amount?: string; idempotencyKey?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.amount !== undefined) body.amount = Number(opts.amount);
+      if (opts.idempotencyKey) body.idempotencyKey = opts.idempotencyKey;
+      print(await api('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/refund`, body, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  program
+    .command('jurisdictions')
+    .description('List supported tax jurisdictions')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      print(await api('GET', '/tax/jurisdictions'), !!opts.pretty);
+    });
+
+  program
+    .command('categories')
+    .description('List tax categories')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      print(await api('GET', '/tax/categories'), !!opts.pretty);
+    });
+
+  program
+    .command('validations')
+    .description('List every check `clearvo send` can emit')
+    .option('--country <code>', 'Narrow to one country')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/validations', { country: opts.country })), !!opts.pretty);
+    });
+
+  program
+    .command('mandates')
+    .description('List supported e-invoicing mandates and their required fields')
+    .option('--id <mandateId>', 'Return one mandate')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { id?: string; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/mandates', { id: opts.id })), !!opts.pretty);
+    });
+
+  const lookup = program.command('lookup').description('Company and Peppol participant lookups');
+
+  lookup
+    .command('company')
+    .description('Company-name lookup against national registers')
+    .requiredOption('--country <code>')
+    .requiredOption('--name <name>')
+    .option('--city <city>')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country: string; name: string; city?: string; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/lookup', { country: opts.country, name: opts.name, city: opts.city })), !!opts.pretty);
+    });
+
+  lookup
+    .command('participant')
+    .description('Look up a Peppol participant by tax ID, or by endpoint id and scheme')
+    .option('--tax-id <taxId>')
+    .option('--endpoint-id <id>')
+    .option('--endpoint-scheme-id <scheme>')
+    .option('--country <code>')
+    .option('--self-billing', 'Look up for a self-billed invoice')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { taxId?: string; endpointId?: string; endpointSchemeId?: string; country?: string; selfBilling?: boolean; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/participants/lookup', {
+        taxId: opts.taxId, endpointId: opts.endpointId, endpointSchemeId: opts.endpointSchemeId, country: opts.country,
+        selfBilling: opts.selfBilling ? 'true' : undefined,
+      })), !!opts.pretty);
+    });
+
+  program
+    .command('usage')
+    .description('Billable tax-calculation usage against the plan allowance for the current billing period')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      print(await api('GET', '/usage'), !!opts.pretty);
+    });
+
+  program
+    .command('setup-status')
+    .description('Account setup status: enabled solutions, steps and what is blocking launch')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      print(await api('GET', '/setup/status'), !!opts.pretty);
+    });
+
+  // ── clearvo team invites ──
+  const team = program.command('team').description('Team management');
+
+  team
+    .command('invite')
+    .description('Invite a team member (the admin role is dashboard-only)')
+    .requiredOption('--email <email>')
+    .requiredOption('--role <role>', 'developer, finance, viewer or auditor')
+    .option('--entity-id <id...>', 'Restrict the member to these entities')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { email: string; role: string; entityId?: string[]; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { email: opts.email, role: opts.role };
+      if (opts.entityId?.length) body.entityIds = opts.entityId;
+      print(await api('POST', '/team/invites', body), !!opts.pretty);
+    });
+
+  // ── clearvo reporting-batches / reporting-obligations ──
+  const reportingBatches = program.command('reporting-batches').description('Reporting batches (Spain SII, France e-reporting, ...)');
+
+  reportingBatches
+    .command('list')
+    .description('List reporting batches')
+    .option('--status <status>')
+    .option('--obligation <code>')
+    .option('--mandate <id>')
+    .option('--page <n>')
+    .option('--limit <n>', '1-200, default 50')
+    .option('--entity <entityId>', 'Organisation-scoped keys only: filter to one entity')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { status?: string; obligation?: string; mandate?: string; page?: string; limit?: string; entity?: string; pretty?: boolean }) => {
+      print(await api('GET', withQuery('/reporting-batches', { status: opts.status, obligation: opts.obligation, mandate: opts.mandate, entityId: opts.entity, page: opts.page, limit: opts.limit })), !!opts.pretty);
+    });
+
+  reportingBatches
+    .command('get <id>')
+    .description('One reporting batch with its records and snapshotVersion')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { pretty?: boolean }) => {
+      print(await api('GET', `/reporting-batches/${encodeURIComponent(id)}`), !!opts.pretty);
+    });
+
+  reportingBatches
+    .command('confirm <id>')
+    .description('Confirm a reporting batch for submission to the authority. Pass the snapshotVersion from `reporting-batches get`; a stale one answers 409 BATCH_STALE')
+    .requiredOption('--snapshot-version <n>')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion: string; pretty?: boolean }) => {
+      print(await api('POST', `/reporting-batches/${encodeURIComponent(id)}/confirm`, { snapshotVersion: Number(opts.snapshotVersion) }), !!opts.pretty);
+    });
+
+  reportingBatches
+    .command('exclude <id>')
+    .description('Exclude one record from a reporting batch (moved to the next period)')
+    .requiredOption('--transaction-id <id>')
+    .option('--reason <text>')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { transactionId: string; reason?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { transactionId: opts.transactionId };
+      if (opts.reason) body.reason = opts.reason;
+      print(await api('POST', `/reporting-batches/${encodeURIComponent(id)}/exclude`, body), !!opts.pretty);
+    });
+
+  const reportingObligations = program.command('reporting-obligations').description('Which reporting regimes an entity is enrolled in');
+
+  reportingObligations
+    .command('get')
+    .description('List the entity\'s reporting obligations')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', '/tax/reporting-obligations', undefined, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  reportingObligations
+    .command('update')
+    .description('Enable/disable reporting regimes, e.g. --obligations \'{"es_sii":{"enabled":true}}\'')
+    .option('--obligations <json>', 'JSON object keyed by regime code')
+    .option('--confirm', 'Stamp the entity\'s tax-reporting confirmation')
+    .option('--force', 'Disable es_sii even though a batch still needs attention (409 OBLIGATION_HAS_PENDING_BATCH otherwise)')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { obligations?: string; confirm?: boolean; force?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.obligations) body.obligations = parseJsonOption('--obligations', opts.obligations);
+      if (opts.confirm) body.confirm = true;
+      if (opts.force) body.force = true;
+      print(await api('PATCH', '/tax/reporting-obligations', body, entityHeader(opts.entity)), !!opts.pretty);
+    });
+
+  // ── Country credentials that carry only a JSON payload ──
+  // `clearvo <country> credentials set <file>` posts the file as the body of POST /<country>/credentials.
+  // Each country's required keys are listed below and validated server-side.
+  const JSON_CREDENTIAL_COUNTRIES: Array<[string, string, string]> = [
+    ['ar', 'Argentina (AFIP)', 'cuit, puntoDeVenta, certPem, keyPem, condicionIVAIssuer?'],
+    ['pl', 'Poland (KSeF)', 'nip, token, environment?'],
+    ['pt', 'Portugal (AT)', 'nif, invoiceSeries?, invoiceValidationCode?, creditNoteSeries?, creditNoteValidationCode?, debitNoteSeries?, debitNoteValidationCode?, subUser?, password?'],
+    ['hu', 'Hungary (NAV)', 'taxNumber, login, password, signKey, exchangeKey, environment?'],
+    ['eg', 'Egypt (ETA)', 'registrationNumber, clientId, clientSecret, certPem, keyPem'],
+    ['jo', 'Jordan (JoFotara)', 'taxpayerNumber, incomeSourceSequence, clientId, secretKey'],
+    ['mx', 'Mexico (SAT e.firma)', 'certificateBase64, keyBase64, password'],
+    ['gr', 'Greece (myDATA)', 'see the API reference'],
+    ['ro', 'Romania (ANAF)', 'see the API reference'],
+    ['il', 'Israel (SHAAM)', 'see the API reference'],
+    ['my', 'Malaysia (MyInvois)', 'see the API reference'],
+  ];
+  for (const [code, label, keys] of JSON_CREDENTIAL_COUNTRIES) {
+    const countryCmd = program.commands.find((c) => c.name() === code) ?? program.command(code).description(`${label} setup`);
+    const creds = countryCmd.command('credentials').description(`Manage the entity's ${label} credentials`);
+    creds
+      .command('set <file>')
+      .description(`Save ${label} credentials from a JSON file (keys: ${keys}). Secrets are never returned.`)
+      .option('--entity <entityId>', ENTITY_DESC)
+      .option('--pretty', 'Pretty-print JSON output')
+      .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
+        const body = parseJsonOption(file, readFileSync(file, 'utf8'));
+        print(await api('POST', `/${code}/credentials`, body, entityHeader(opts.entity)), !!opts.pretty);
+      });
+  }
 
   return program;
 }

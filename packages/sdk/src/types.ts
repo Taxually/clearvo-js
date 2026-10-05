@@ -38,6 +38,12 @@ export interface CreateEntityResponse {
 export interface UpdateEntityInput {
   name?: string;
   vatNumber?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  postalCode?: string;
+  /** Confirm the entity has no tax registrations (silences the "add a registration" prompt). */
+  confirmNoRegistrations?: boolean;
   /**
    * Germany only. Entity-level default for `countrySpecific.de.invoiceFormat`
    * (used when neither the request nor the stored customer picks a format).

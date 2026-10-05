@@ -2,6 +2,36 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — public API contract sync: publish only AFTER the backend manual-adjustments removal (9333a0b48) is deployed
+
+Brings the SDK, stdio MCP server and CLI in line with the backend route code. Mostly additive; the one removal is already live on the backend (its routes 404 today).
+
+### REMOVED (feature deleted from the backend 2026-10-03)
+
+- `@clearvo/sdk`: `proposeManualAdjustment`, `listManualAdjustments`, `getManualAdjustmentOptions` and the `ManualAdjustment*` / `ProposeManualAdjustment*` types.
+- `@clearvo/mcp`: tools `propose_manual_adjustment`, `list_manual_adjustments`, `get_manual_adjustment_options`; the `manual_adjustment.*` event names are gone from `create_webhook` (the backend no longer emits them).
+- `@clearvo/cli`: `clearvo adjustments propose|list|options`.
+
+### @clearvo/sdk
+
+- `TaxCalculateRequest` gains the fields the route reads: `taxReportingCurrency`, `date`, `merchantRef`, `orderDiscount`, `paymentMethod`, `isMarketplaceFacilitatedSale`, `transactionType`, `relatedCalculationId`, `externalOriginalReference` (credit notes), `shipTo`, `shippingMode`; per line `productDescription`, `productCode`, `discount`, `discountAmount`, `supplyType`, `recoverablePercentOverride`, `statedTaxAmount`, `screenSizeInches`, `shippingCarrier`, `chargeAvoidable`, `actualCostOfShipment`. Not added on purpose: `clientTaxCode` (top level and per line) is rejected by `POST /v1/tax/calculate` (calculation output only; send it to `POST /v1/send`), `lineItems[].stripeTaxCode` is rejected (use `classificationCodes`), and the per-line `taxCode` is an internal escape hatch. `QuoteDutiesInput` omits the credit-note fields.
+- `SubmitInvoiceInput` gains `taxPointDate`, `ossDeclared`, `sandboxSimulateOutcome`, `buyerReference`, `orderReference`, `contractReference`, `projectReference`, `note`, `invoicePeriod`, `payee`, `delivery`, `attachments`, `customFields`; `originalInvoiceRef` gains `reason` and `ksefNumber`. Lines gain `taxIncluded`, `lineType`, `gtin`, `itemClassificationCode|Scheme`, `gtuCode`, `note`, `orderLineReference`, `period`, `allowances`, `charges`, `metadata`. `ShippingInput` gains `carrierId`, `serviceLevel`, `description`, `taxRate`, `taxAmount` (`carrier` is deprecated: the API only reads `carrierId`); `AllowanceChargeInput.reason` is now optional and it gains `reasonCode`, `baseAmount`, `percentage`, `taxRate`, `taxAmount`. `metadata` was already typed and the API does accept it. `UpdateEntityInput` gains the address fields and `confirmNoRegistrations`.
+- New methods: `listCustomers`, `getCustomer`, `createCustomer`, `updateCustomer`, `deleteCustomer`, `upsertCustomerByRef`, `listCustomerReferenceTypes`; `getInvoice`, `retryInvoice`, `deliverInvoice`, `resendInvoiceNotification`, `resendInvoiceNotificationsBatch`, `getInvoiceDocument`, `exportInvoices`; `receiveInvoiceDocument`, `getInboundBatch`, `getInboundEmailAddress`; `refundTaxCalculation`, `getTaxSettings`, `updateTaxSettings`, `listTaxJurisdictions`, `listTaxCategories`, `restoreProduct`, `bulkClassifyProducts`, `bulkUpsertClientTaxCodes`, `getClientTaxCodeAudit`; `listExemptionCertificates`, `createExemptionCertificate`, `getExemptionCertificate`, `updateExemptionCertificate`, `deleteExemptionCertificate`, `uploadExemptionDocument`; `listTaxObligations`, `getTaxObligation`, `updateTaxObligation`, `getRegistrationFieldDefinitions`; `getUsage`, `getSetupStatus`, `inviteTeamMember`, `listValidations`, `lookupCompany`, `lookupParticipant`, `listMandates`, `acknowledgeMandateObligation`. Partner-key, test-helper and internal routes are deliberately not wrapped.
+
+### @clearvo/mcp
+
+- `submit_invoice` input schema gains `taxPointDate`, `dueDate`, `taxIncluded`, `allowances`, `charges`, `shipping`, `prepaidAmount`, `statedPayableAmount`, `originalInvoiceRef` (needed for credit and debit notes), `customerReference`, `contractReference`, `projectReference`, `note`, `invoicePeriod`, `payee`, `attachments`, `metadata`, `customFields`, `ossDeclared`, `rejectInsteadOfAutoCorrect`, `sandboxSimulateOutcome`, and per-line `taxIncluded`, `lineType`, `gtin`, `itemClassification*`, `gtuCode`, `note`, `orderLineReference`, `period`, `allowances`, `charges`, `metadata`. `totalAmount` and `taxAmount` are no longer required: the route never read them (they stay accepted, marked deprecated).
+- `calculate_tax` (and `quote_duties`, derived from it) input schema gains `idempotencyKey`, `taxReportingCurrency`, `date`, `documentStage`, `customProperties`, `vatValidation`, `vatUnverifiableFallback`, `merchantRef`, `orderDiscount`, `paymentMethod`, `isMarketplaceFacilitatedSale`, `transactionType`, `relatedCalculationId`, `externalOriginalReference`, `shippingMode`, `shipTo`, `evidence` and the per-line fields listed under the SDK. `quote_duties` omits the credit-note fields and `idempotencyKey`.
+- New tools matching the hosted connector's names: `get_usage`, `receive_invoice_document`, `get_inbound_batch`, `get_inbound_email_address`, `upload_entity_logo`, `remove_entity_logo`, `set_customer_invoice_format`, `update_rule_property_definition`, `trigger_br_poll` (NF-e and NFS-e via `documentFamily`), `update_invoice_business_status` (same route and behaviour as `update_business_status`, which stays). `poll_br_inbound` is kept as a deprecated alias of `trigger_br_poll` (NF-e only).
+- New stdio-only tools wrapping public routes the hosted connector has not added yet: `refund_tax_calculation`, `retry_invoice`, `deliver_invoice`, `resend_invoice_notification`, `delete_product`, `restore_product`, `list_tax_obligations`, `update_tax_obligation`.
+- Not mirrored on purpose: `confirm_reporting_batch` and `exclude_reporting_batch_item` stay hosted-only (confirming submits a batch to the authority; kept as a human step here).
+- Drift guards: `tool-names.json` plus `npm run test:tool-names` (tools/list must equal the checked-in list) and `npm run test:openapi-parity` (the two big schemas must cover the contract's top-level properties).
+
+### @clearvo/cli
+
+- New: `clearvo api <METHOD> <path> [--data json]` (generic escape hatch), `invoices list|get|retry|deliver|resend-notification|document`, `entities update`, `customers list|get|create|update|upsert|delete|reference-types`, `receive document|batch|email-address`, `tax-settings get|update`, `obligations list|get|update`, `calculations refund`, `jurisdictions`, `categories`, `validations`, `mandates`, `lookup company|participant`, `usage`, `setup-status`, `team invite`, `reporting-batches list|get|confirm|exclude`, `reporting-obligations get|update`, and `<ar|pl|pt|hu|eg|jo|mx|gr|ro|il|my> credentials set <file>`.
+- README: `clearvo status` examples now show the required `--country`.
+
 ## Unreleased — Canonical Invoice v1 pass 2 S3 (payment) and S4 (totals): backend PRs 17021 and 17034 are deployed to production, so this block can be published; it is NOT published yet
 
 **BREAKING**, no aliases: the send `payment` object is now `payment.means[]` (SDK `PaymentInput`, MCP `submit_invoice`). The old names return 422 `UNKNOWN_FIELD_RENAMED` naming the replacement.
