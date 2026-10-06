@@ -2,6 +2,10 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend company-law entity-facts migration PR is deployed
+
+**BREAKING, no aliases, never used by a real customer so no migration guide needed**: Germany's `countrySpecific.de` per-invoice company-law override fields (`legalForm`, `handelsregisternummer`, `registergericht`, `registeredSeat`, `geschaeftsfuehrer`) are removed from `submit_invoice` (SDK `SubmitInvoiceInput`, MCP, CLI). These facts were never genuinely per-invoice — they're properties of the entity's own one place of establishment, not any one invoice, so the same disclosure must render on every invoice the entity issues regardless of which country's clearance rules that invoice resolves to. Set them via `update_entity`'s `entityFacts` instead (SDK/MCP/REST; not yet its own CLI command) — see `get_entity_fact_definitions` for the current key list, which now also covers the FR/IT/PT/ES equivalents. `update_registration`'s `extraFields` no longer accepts `de_handelsregisternummer`/`de_registergericht`/`de_registered_seat`/`de_geschaeftsfuehrer` (unknown-key rejection) — `de_steuernummer` and `de_kleinunternehmer` are unaffected.
+
 ## Unreleased — Canonical Invoice v1 pass 2 S3 (payment) and S4 (totals): backend PRs 17021 and 17034 are deployed to production, so this block can be published; it is NOT published yet
 
 **BREAKING**, no aliases: the send `payment` object is now `payment.means[]` (SDK `PaymentInput`, MCP `submit_invoice`). The old names return 422 `UNKNOWN_FIELD_RENAMED` naming the replacement.

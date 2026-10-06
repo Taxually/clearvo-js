@@ -929,9 +929,9 @@ export function createProgram(): Command {
   
   registrations
     .command('update <id>')
-    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. France\'s SIRET, Germany\'s Handelsregisternummer/Kleinunternehmer flag; Spain\'s es_tax_territory: mainland | canary_islands | both — Canary Islands IGIC invoices need it) in place')
+    .description('Edit an existing registration\'s tax number and/or secondary identifiers (e.g. Germany\'s Steuernummer/Kleinunternehmer flag; Spain\'s es_tax_territory: mainland | canary_islands | both — Canary Islands IGIC invoices need it). Company-law disclosure facts (Handelsregisternummer, SIRET, and each other country\'s equivalent) are entity-level, not registration secondary identifiers — set them via update_entity\'s entityFacts (SDK/MCP/REST API; not yet its own CLI command).')
     .option('--number <taxNumber>', 'New registration/VAT number (pass an empty string to clear it)')
-    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"fr_siret":"12345678901234"}\' or \'{"de_handelsregisternummer":"HRB 12345","de_kleinunternehmer":"true"}\' or \'{"es_tax_territory":"canary_islands"}\' — see docs for the full de_* key list')
+    .option('--extra <json>', 'JSON object of secondary identifiers to merge in, e.g. \'{"de_steuernummer":"21/815/08155","de_kleinunternehmer":"true"}\' or \'{"es_tax_territory":"canary_islands"}\' — see docs for the full de_* key list')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { number?: string; extra?: string; pretty?: boolean }) => {
       if (opts.number === undefined && opts.extra === undefined) {
