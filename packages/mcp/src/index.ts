@@ -1851,12 +1851,16 @@ const TOOLS = [
       'List committed tax calculations (those created with commit=true). ' +
       'Shows jurisdiction, amounts, tax totals, and customer type for each calculation. ' +
       'Use this to audit the calculation history, reconcile totals, or inspect calculations ' +
-      'that fed into compliance threshold monitoring.',
+      'that fed into compliance threshold monitoring. ' +
+      'Purchase rows also return selfAssessedTaxAmount (number; reverse charge / postponed import VAT you ' +
+      'self-assessed, 0 when none) and selfAssessedKind (REVERSE_CHARGE | IMPORT_VAT_POSTPONED | USE_TAX | null).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         entityId: { type: 'string', description: 'Filter by entity ID. Required for account-scoped keys.' },
         country: { type: 'string', description: 'Filter by jurisdiction country code (e.g. "DE", "US")' },
+        documentStage: { type: 'string', enum: ['invoice', 'purchase_order'], description: 'Filter by document stage: "invoice" or "purchase_order" (omit for both). Each row returns documentStage.' },
+        purchaseOrderId: { type: 'string', description: 'Exact purchase-order reference: returns that purchase order plus every invoice calculation linked to it. Rows return purchaseOrderId/purchaseOrderLineNumber/poLink.' },
         limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
         page: { type: 'number', description: 'Page number, 1-based (default 1)' },
       },
@@ -3719,6 +3723,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const qs = new URLSearchParams();
       if (args.entityId) qs.set('entityId', args.entityId as string);
       if (args.country)  qs.set('country',  args.country  as string);
+      if (args.documentStage) qs.set('documentStage', args.documentStage as string);
+      if (args.purchaseOrderId) qs.set('purchaseOrderId', args.purchaseOrderId as string);
       if (args.limit)    qs.set('limit',    String(args.limit));
       if (args.page)     qs.set('page',     String(args.page));
       const q = qs.toString();
