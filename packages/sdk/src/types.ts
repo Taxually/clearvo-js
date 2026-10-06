@@ -880,6 +880,14 @@ export interface TaxCalculateRequest {
    */
   shipFrom?: TaxCalcShipFrom;
   /**
+   * Purchase only: where the goods or service are delivered, i.e. where use tax is owed. A US address makes the line US
+   * consumer's use tax at that address (`lineItems[].useTax`; a US state not enabled for use tax still returns 422
+   * `us_jurisdiction_purchase_unsupported`); an address in the entity's own country refines a goods line's destination; an
+   * address in any other country is not used and the response warns (`ship_to_country_not_supported`). Omitted: the
+   * entity's own address, as before. A line-level `shipTo` overrides it. A sale ignores it.
+   */
+  shipTo?: TaxCalcShipTo;
+  /**
    * Explicit importer of record on a customs-crossing shipment; wins over
    * `incoterms`. With duties on it decides who bears the import charges.
    */
@@ -993,6 +1001,8 @@ export interface TaxCalculateRequest {
     weight?: { value: number; unit: 'kg' | 'g' | 'lb' | 'oz' };
     /** Per-line dispatch address; overrides the transaction `shipFrom` for this line (a second warehouse is a second consignment). */
     shipFrom?: TaxCalcShipFrom;
+    /** Purchase only: where this line is delivered; overrides the transaction `shipTo`. A US address makes the line US consumer's use tax. */
+    shipTo?: TaxCalcShipTo;
     amountIncludesTax?: boolean;
     /**
      * When true, the customer claims exemption for this line item with no
@@ -1078,6 +1088,10 @@ export interface TaxCalcParty {
 
 export interface TaxCalculateResponse {
   calculationId: string;
+  /** US use tax only: the sum of the lines' `useTax.selfAssessedTaxAmount`. */
+  selfAssessedTaxAmount?: number;
+  /** Present with `selfAssessedTaxAmount`; `USE_TAX` for a use tax calculation. */
+  selfAssessedKind?: 'REVERSE_CHARGE' | 'IMPORT_VAT_POSTPONED' | 'USE_TAX';
   entityId: string;
   committed: boolean;
   sandbox: boolean;
@@ -1210,6 +1224,8 @@ export interface TaxCalculateResponse {
      * certificate match would instead attach to).
      */
     exemptionReason?: 'RESALE' | 'MANUFACTURING' | 'AGRICULTURAL' | 'ENERGY' | 'EXEMPT_ORG' | 'GOVERNMENT' | 'DIRECT_PAY' | 'BLANKET_OTHER';
+    /** US consumer's use tax detail; present only on a purchase line delivered to a US state enabled for use tax. */
+    useTax?: TaxCalcUseTax;
     /**
      * `transactionDirection: 'purchase'` only — the vendor-charged-tax
      * verification result for this line (AP decision layer, lib/ap/decision.ts
@@ -1223,7 +1239,8 @@ export interface TaxCalculateResponse {
       reasonCode:
         | 'WITHIN_TOLERANCE' | 'TRUSTED_SUPPLIER_OVERRIDE' | 'OVERCHARGE_EXCEEDS_TOLERANCE'
         | 'UNDERCHARGE_EXCEEDS_TOLERANCE' | 'PO_DISPOSITION_HOLD' | 'REVERSE_CHARGE_VAT_WRONGLY_CHARGED'
-        | 'TAX_CHARGED_ON_ZERO_LIABILITY_LINE' | 'NO_TAX_DUE_NONE_CHARGED' | 'IMPORT_TAX_PAID_AT_BORDER';
+        | 'TAX_CHARGED_ON_ZERO_LIABILITY_LINE' | 'NO_TAX_DUE_NONE_CHARGED' | 'IMPORT_TAX_PAID_AT_BORDER'
+        | 'USE_TAX_SELF_ASSESSED' | 'USE_TAX_SHORTFALL_SELF_ASSESSED' | 'USE_TAX_VENDOR_CHARGE_REVIEW';
       /** statedTaxAmount - calculatedTaxAmount, rounded to 2dp. */
       legalDelta: number;
       /** 0 when outcome is ACCEPTED_AS_CHARGED; equal to legalDelta otherwise — the true remaining reportable exposure. */
@@ -3745,6 +3762,67 @@ export class ClearvoError extends Error {
 
 /** Scheme of a customs commodity code. */
 export type DutyCodeScheme = 'HS6' | 'CN8' | 'TARIC10' | 'UK10' | 'HTS10';
+
+/** A delivery address on a purchase calculation (`shipTo`). A US address needs `region`. */
+export interface TaxCalcShipTo {
+  country: string;
+  region?: string;
+  postalCode?: string;
+  line1?: string;
+  line2?: string;
+  city?: string;
+}
+
+/** What the vendor most plausibly charged, inferred from the stated tax (US use tax). */
+export type TaxCalcVendorChargeStory =
+  | 'MATCHES_DESTINATION' | 'MATCHES_ORIGIN_SOURCING' | 'MATCHES_SIMPLIFIED_REMOTE_SELLER_RATE' | 'SAME_STATE_PARTIAL'
+  | 'OTHER_STATE_RATE' | 'STATE_ONLY_OR_NONE' | 'UNEXPLAINED' | 'NOT_PROVIDED';
+
+/**
+ * US consumer's use tax on a purchase line (`lineItems[].useTax`): present only when a purchase is delivered to a US state
+ * enabled for use tax. The line's `taxAmount` is the use tax due at the use location.
+ */
+export interface TaxCalcUseTax {
+  useLocation: {
+    country: 'US';
+    state: string;
+    county: string | null;
+    city: string | null;
+    postalCode: string | null;
+    precision: 'ROOFTOP' | 'ZIP' | 'STATE';
+    /** `ENTITY_ADDRESS`: no ship-to was sent and the entity's own address was assumed. */
+    basis: 'LINE_SHIP_TO' | 'HEADER_SHIP_TO' | 'ENTITY_ADDRESS';
+  };
+  /** Use tax at the use location before credit. Equals the line's `taxAmount`. */
+  taxDueAtUseLocation: number;
+  /** The line's `statedTaxAmount`; null when none was sent. */
+  taxChargedByVendor: number | null;
+  /** What the vendor should have charged at the use location; null when it could not be determined. */
+  taxExpectedFromVendor: number | null;
+  /** Vendor tax credited against the use tax due (tax charged for the same state only). */
+  creditAllowed: number;
+  /** What the buyer self-assesses and accrues. `taxDueAtUseLocation = creditAllowed + selfAssessedTaxAmount + toleranceWaived`. */
+  selfAssessedTaxAmount: number;
+  /** Use tax a use-tax tolerance rule waived on this line; 0 unless one applied. */
+  toleranceWaived: number;
+  /** Per taxing authority, state first; sums to the line figures. */
+  breakdown: Array<{
+    level: string;
+    name: string;
+    /** 01 state, 02 county, 03 county district, 04 city, 05 city district. */
+    taxType: string;
+    rate: number;
+    taxDue: number;
+    creditApplied: number;
+    selfAssessed: number;
+  }>;
+  /** Closed list of machine-readable assumptions, e.g. `USE_LOCATION_ASSUMED_ENTITY_ADDRESS`, `VENDOR_TAX_NOT_PROVIDED_ASSUMED_ZERO`. */
+  assumptions: string[];
+  vendorChargeStory: TaxCalcVendorChargeStory | null;
+  /** True when a person should look at this line; never changes the arithmetic. */
+  reviewRequired: boolean;
+  reviewReasons: string[];
+}
 
 /** A dispatch address on a calculation. */
 export interface TaxCalcShipFrom {

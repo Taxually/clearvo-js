@@ -269,6 +269,17 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       },
       required: ['country'],
     },
+    shipTo: {
+      type: 'object',
+      description: 'Purchase only (transactionDirection "purchase"): where the goods or service are delivered, i.e. where use tax is owed. A US address makes the line US consumer\'s use tax at that address (only for a state enabled for use tax; any other US state returns 422 us_jurisdiction_purchase_unsupported); an address in your own country refines a goods line\'s destination; an address in any other country is not used and the response warns (ship_to_country_not_supported). Omitted: your own registered address is used, as before. A line-level shipTo overrides this for that line. A sale ignores it.',
+      properties: {
+        line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
+        region: { type: 'string', description: 'State/region code, REQUIRED for a US address, e.g. "TX"' },
+        postalCode: { type: 'string' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+      },
+      required: ['country'],
+    },
     insurance: {
       type: 'object',
       description: 'Consignment insurance, a customs-value component where the destination values goods CIF. Duties only; ignored otherwise.',
@@ -308,6 +319,17 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
           commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff; for rate-band lookup, matching is jurisdiction-scoped by the line\'s own resolved country; with duties on, this is the code the duty is priced at, see commodityCodeScheme). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
           commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block). Not the AP fact customProperties.commodityCodeScheme.' },
           countryOfOrigin: { type: 'string', description: 'Two-letter country the goods were made in, read only when duties are on. Never inferred from shipFrom. Falls back to the product catalogue, then defaultCountryOfOrigin.' },
+          shipTo: {
+            type: 'object',
+            description: 'Purchase only: where THIS line is delivered, overriding the transaction-level shipTo. A US address makes the line US consumer\'s use tax at that address (see the calculate_tax description). Omitted: the transaction-level shipTo, then your own address.',
+            properties: {
+              line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
+              region: { type: 'string', description: 'State code, REQUIRED for a US address, e.g. "TX"' },
+              postalCode: { type: 'string' },
+              country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            },
+            required: ['country'],
+          },
           weight: {
             type: 'object',
             description: 'Weight of ONE unit, for specific (per-kg) duty rates; the line weight is value x quantity.',
@@ -820,7 +842,8 @@ const TOOLS = [
       'mismatch). seller is a deprecated alias for supplier, accepted on a sale only — rejected with 422 ' +
       'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
-      'which block is your own entity.',
+      'which block is your own entity. ' +
+      'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, creditAllowed (same-state vendor tax is credited), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. Illinois and Iowa have no local use tax on general purchases (state only).',
     inputSchema: CALCULATE_TAX_INPUT_SCHEMA,
   },
   {
@@ -1853,7 +1876,8 @@ const TOOLS = [
       'Use this to audit the calculation history, reconcile totals, or inspect calculations ' +
       'that fed into compliance threshold monitoring. ' +
       'Purchase rows also return selfAssessedTaxAmount (number; reverse charge / postponed import VAT you ' +
-      'self-assessed, 0 when none) and selfAssessedKind (REVERSE_CHARGE | IMPORT_VAT_POSTPONED | USE_TAX | null).',
+      'self-assessed, 0 when none) and selfAssessedKind (REVERSE_CHARGE | IMPORT_VAT_POSTPONED | USE_TAX | null). ' +
+      'USE_TAX is US consumer\'s use tax on a purchase delivered to an enabled US state.',
     inputSchema: {
       type: 'object' as const,
       properties: {

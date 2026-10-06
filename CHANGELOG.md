@@ -2,6 +2,14 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend US use tax PR is deployed
+
+Additive: US consumer's use tax on purchases. `POST /v1/tax/calculate` with `transactionDirection: "purchase"` accepts `shipTo` (request level) and `lineItems[].shipTo`; a purchase delivered to a US state enabled for use tax returns `lineItems[].useTax` (use location with basis, tax due, tax charged by the vendor, credit allowed, self-assessed amount, per-authority breakdown, assumptions, vendor-charge story) and the response header `selfAssessedTaxAmount` / `selfAssessedKind: "USE_TAX"`. New `taxVerification.reasonCode` values `USE_TAX_SELF_ASSESSED`, `USE_TAX_SHORTFALL_SELF_ASSESSED`, `USE_TAX_VENDOR_CHARGE_REVIEW`.
+
+- SDK: new `TaxCalcShipTo`, `TaxCalcUseTax`, `TaxCalcVendorChargeStory`; `shipTo` on the calculate request and its line items; `useTax` on the response line; the three reason codes.
+- MCP `calculate_tax`: `shipTo` (request and line) and a use tax description; `list_tax_calculations` notes `USE_TAX`.
+- CLI: `clearvo calculate <file>` passes the JSON body through, so `shipTo` works with no flag change.
+
 ## Unreleased — Canonical Invoice v1 pass 2 S3 (payment) and S4 (totals): backend PRs 17021 and 17034 are deployed to production, so this block can be published; it is NOT published yet
 
 **BREAKING**, no aliases: the send `payment` object is now `payment.means[]` (SDK `PaymentInput`, MCP `submit_invoice`). The old names return 422 `UNKNOWN_FIELD_RENAMED` naming the replacement.
