@@ -821,15 +821,18 @@ const TOOLS = [
       'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
       'which block is your own entity. ' +
-      'On a free plan a commit=true call on a live key is recorded for Compliance Radar but returns no amounts: the result is ' +
-      '{ error: "plan_required", calculationId, monitorOnly: true, upgradeUrl } (HTTP 402 on the REST API) — do not apply any tax ' +
-      'from it; point the user at upgradeUrl. commit=false previews, paid plans and sandbox keys return the full calculation.',
+      'Calculations through MCP return tax amounts from the Growth plan. On Free and Starter a commit=true call is recorded for ' +
+      'Compliance Radar but returns no amounts, and a commit=false preview returns none and records nothing: the result is ' +
+      '{ error: "plan_required", reason: "custom_api_requires_growth", calculationId (null for a preview), monitorOnly, message, upgradeUrl } ' +
+      '(HTTP 402 on the REST API) — do not apply any tax from it; point the user at upgradeUrl. Growth, Enterprise and an active trial return the full calculation.',
     inputSchema: CALCULATE_TAX_INPUT_SCHEMA,
     outputSchema: {
       type: 'object' as const,
-      description: 'Either the full calculation, or — on a free plan with commit=true on a live key — the monitor-only result (monitorOnly true, no amounts).',
+      description: 'Either the full calculation, or — below the Growth plan — the plan_required result (no amounts).',
       properties: {
-        calculationId: { type: 'string' },
+        calculationId: { type: ['string', 'null'], description: 'Null on a plan_required preview (commit=false): nothing was recorded.' },
+        reason: { type: 'string', enum: ['custom_api_requires_growth'], description: 'Present on the plan_required result: calculations from your own key or MCP need Growth.' },
+        message: { type: 'string', description: 'Plan_required result only: a sentence to show the user.' },
         committed: { type: 'boolean', description: 'Full calculation only.' },
         summary: { type: 'object', description: 'Full calculation only: totalAmount, totalTax, totalAmountWithTax. Absent when monitorOnly is true.' },
         lineItems: { type: 'array', description: 'Full calculation only. Absent when monitorOnly is true.', items: { type: 'object' } },

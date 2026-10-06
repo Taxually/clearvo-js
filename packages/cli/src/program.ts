@@ -78,10 +78,18 @@ export function createProgram(): Command {
     });
     const data = await res.json().catch(() => ({})) as Record<string, unknown>;
     if (!res.ok) {
-      // Free plan, committed calculation: recorded for Compliance Radar but no amounts returned (HTTP 402 plan_required).
+      // Below Growth (HTTP 402 plan_required): no tax amounts. A committed call is recorded for Compliance Radar;
+      // a preview (calculationId null, monitorOnly false) records nothing.
       if (res.status === 402 && data.error === 'plan_required') {
-        console.error('Your plan does not include tax calculation results.');
-        console.error(`This transaction was recorded for Compliance Radar${data.calculationId ? ` (calculation ${data.calculationId})` : ''}, but no tax amounts were returned. Do not apply any tax from it.`);
+        console.error(data.reason === 'custom_api_requires_growth'
+          ? 'Calculations from your own API key or MCP return tax amounts from the Growth plan.'
+          : 'Your plan does not include tax calculation results.');
+        if (typeof data.message === 'string' && data.message) console.error(data.message);
+        if (data.monitorOnly === false || !data.calculationId) {
+          console.error('Nothing was recorded and no tax amounts were returned. Do not apply any tax from it.');
+        } else {
+          console.error(`This transaction was recorded for Compliance Radar (calculation ${data.calculationId}), but no tax amounts were returned. Do not apply any tax from it.`);
+        }
         if (data.upgradeUrl) console.error(`Upgrade your plan: ${data.upgradeUrl}`);
         console.error('Use --dry-run to preview a calculation without recording it.');
         process.exit(1);

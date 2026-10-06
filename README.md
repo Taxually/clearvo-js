@@ -89,14 +89,15 @@ const result = await client.calculateTax({
 // result.taxCode === 'K'  (intra-EU reverse charge)
 // result.summary.totalTax === 0
 
-// Free plan: a committed calculation (commit: true, the default) is recorded for Compliance Radar
-// but returns no amounts — it throws ClearvoPlanRequiredError (HTTP 402 plan_required).
-// commit: false previews, paid plans and sandbox keys are unaffected.
+// Calculations from your own API key return amounts from the Growth plan. Below it (Free, Starter) calculateTax
+// throws ClearvoPlanRequiredError (HTTP 402 plan_required). commit: true (the default) is still recorded for
+// Compliance Radar; a commit: false preview records nothing. Built-in integrations are unaffected.
 try {
   await client.calculateTax({ /* ... */ });
 } catch (err) {
   if (err instanceof ClearvoPlanRequiredError) {
-    // err.calculationId, err.monitorOnly (true), err.upgradeUrl
+    // err.reason ('custom_api_requires_growth' | undefined), err.calculationId (string | null),
+    // err.monitorOnly (boolean), err.upgradeUrl; err.message is the server sentence plus the upgrade URL
   }
 }
 

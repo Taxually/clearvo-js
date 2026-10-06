@@ -204,11 +204,16 @@ export class ClearvoClient {
       const data = await response.json().catch(() => ({})) as Record<string, unknown>;
       // Free-plan monitor-only calculation (POST /tax/calculate, commit: true): a typed error, not a generic one.
       if (response.status === 402 && data.error === 'plan_required') {
+        const serverMessage = typeof data.message === 'string' ? data.message : undefined;
+        const upgradeUrl = typeof data.upgradeUrl === 'string' ? data.upgradeUrl : '';
+        const text = [serverMessage, upgradeUrl ? `Upgrade: ${upgradeUrl}` : undefined].filter(Boolean).join(' ');
         throw new ClearvoPlanRequiredError(
-          String(data.calculationId ?? ''),
-          String(data.upgradeUrl ?? ''),
-          'plan_required',
-          typeof data.message === 'string' ? data.message : undefined
+          typeof data.calculationId === 'string' ? data.calculationId : null,
+          upgradeUrl,
+          text || 'plan_required',
+          serverMessage,
+          data.reason === 'custom_api_requires_growth' ? 'custom_api_requires_growth' : undefined,
+          data.monitorOnly !== false
         );
       }
       // Plan lacks Explore (growth and above) or the rules API (enterprise only): a typed error, not a generic one.
@@ -271,9 +276,12 @@ export class ClearvoClient {
   // ── Tax Calculation ───────────────────────────────────────────────────────────
 
   /**
-   * On a free plan a committed calculation (`commit: true`, the default) is recorded for Compliance Radar but returns
-   * no amounts: it throws `ClearvoPlanRequiredError` (HTTP 402 `plan_required`) carrying `calculationId`, `monitorOnly`
-   * and `upgradeUrl`. `commit: false` previews, paid plans and sandbox keys return the full calculation.
+   * Calculations made with your own API key return tax amounts only from the Growth plan. Below it (Free, Starter)
+   * this throws `ClearvoPlanRequiredError` (HTTP 402 `plan_required`, `reason: 'custom_api_requires_growth'`) carrying
+   * `calculationId`, `monitorOnly` and `upgradeUrl`: with `commit: true` (the default) the transaction is recorded for
+   * Compliance Radar (`monitorOnly` true); a `commit: false` preview records nothing (`calculationId` null,
+   * `monitorOnly` false). Growth, Enterprise, trials and sandbox keys return the full calculation. Built-in
+   * integrations are unaffected.
    */
   calculateTax(input: TaxCalculateRequest): Promise<TaxCalculateResponse> {
     return this.request('POST', '/tax/calculate', input);
