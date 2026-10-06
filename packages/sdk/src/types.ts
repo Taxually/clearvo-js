@@ -847,7 +847,9 @@ export interface TaxCalculateRequest {
    * supplier and `customer` (the counterparty) is required. `'purchase'`
    * — an incoming transaction: the entity is the customer and `supplier`
    * (the counterparty) is required. See this interface's own doc comment
-   * for the full direction rule.
+   * for the full direction rule. `'purchase'` is the Purchases (AP) sub-solution: Enterprise only, and
+   * switched on per business under Settings > Solutions; otherwise HTTP 403 `ap_not_included` (plan)
+   * or `ap_not_enabled` (switch it on).
    */
   transactionDirection?: 'sale' | 'purchase';
   /**
@@ -1035,6 +1037,8 @@ export interface TaxCalculateRequest {
    * calculation represents. `'purchase_order'` binds `lineItems[].poLink`
    * resolution and later invoice-stage `poComparison`; `'invoice'` is the
    * ordinary default. Only meaningful on `transactionDirection: 'purchase'`.
+   * Enterprise only (the Purchases (AP) sub-solution): `purchase_order` is refused with HTTP 403
+   * `ap_not_included` (plan) or `ap_not_enabled` (switch it on under Settings > Solutions).
    */
   documentStage?: 'purchase_order' | 'invoice';
   /**
@@ -1750,8 +1754,10 @@ export interface TaxCalculationSummary {
 export interface ListTaxCalculationsParams {
   entityId?: string;
   country?: string;
-  /** 'invoice' or 'purchase_order'. Omit for both. */
+  /** 'invoice' or 'purchase_order'. Omit for both. `purchase_order` is Enterprise only (Purchases (AP)): 403 `ap_not_included` or `ap_not_enabled` otherwise. */
   documentStage?: 'invoice' | 'purchase_order';
+  /** 'sale' or 'purchase'. Omit for both. `purchase` is Enterprise only (Purchases (AP)): 403 `ap_not_included` or `ap_not_enabled` otherwise. */
+  direction?: 'sale' | 'purchase';
   /** Exact purchase-order reference: the PO calculation itself plus every calculation whose lines reference it. */
   purchaseOrderId?: string;
   limit?: number;
