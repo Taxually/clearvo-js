@@ -1733,11 +1733,27 @@ export interface TaxCalculationSummary {
   resolvedAt: string;
   createdAt: string;
   sandbox: boolean;
+  transactionDirection: 'sale' | 'purchase';
+  /** 'purchase_order' for a purchase-order estimate (excluded from every obligation total), otherwise 'invoice'. */
+  documentStage: 'invoice' | 'purchase_order';
+  /** The purchase-order reference: a purchase_order row's own id, otherwise the first line's purchaseOrderId; null when not linked. */
+  purchaseOrderId: string | null;
+  purchaseOrderLineNumber: string | null;
+  /** Cheap link summary (null on a purchase_order row): LINKED when a reference exists, else NONE. */
+  poLink: { status: 'NONE' | 'LINKED'; purchaseOrderId: string | null; purchaseOrderLineNumber: string | null } | null;
+  /** Tax self-assessed on a purchase (reverse charge / postponed import VAT). 0 for sales and rows recorded before this field existed. */
+  selfAssessedTaxAmount: number;
+  /** Why it was self-assessed. USE_TAX is reserved for US consumer's use tax and is not returned yet. */
+  selfAssessedKind: 'REVERSE_CHARGE' | 'IMPORT_VAT_POSTPONED' | 'USE_TAX' | null;
 }
 
 export interface ListTaxCalculationsParams {
   entityId?: string;
   country?: string;
+  /** 'invoice' or 'purchase_order'. Omit for both. */
+  documentStage?: 'invoice' | 'purchase_order';
+  /** Exact purchase-order reference: the PO calculation itself plus every calculation whose lines reference it. */
+  purchaseOrderId?: string;
   limit?: number;
   page?: number;
 }

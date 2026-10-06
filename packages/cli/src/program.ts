@@ -1367,13 +1367,17 @@ export function createProgram(): Command {
     .description('List committed tax calculations')
     .option('--entity <entityId>', 'Filter by entity ID')
     .option('--country <code>', 'Filter by jurisdiction country (e.g. DE, US)')
+    .option('--stage <stage>', 'Filter by document stage: invoice or purchase_order (default: both)')
+    .option('--po <purchaseOrderId>', 'Exact purchase-order reference: the PO itself plus every calculation linked to it')
     .option('--limit <n>', 'Results per page', '25')
     .option('--page <n>', 'Page number', '1')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { entity?: string; country?: string; limit: string; page: string; pretty?: boolean }) => {
+    .action(async (opts: { entity?: string; country?: string; stage?: string; po?: string; limit: string; page: string; pretty?: boolean }) => {
       const qs = new URLSearchParams({ limit: opts.limit, page: opts.page });
       if (opts.entity)  qs.set('entityId', opts.entity);
       if (opts.country) qs.set('country',  opts.country);
+      if (opts.stage)   qs.set('documentStage', opts.stage);
+      if (opts.po)      qs.set('purchaseOrderId', opts.po);
       const result = await api('GET', `/tax/calculate?${qs}`);
       print(result, !!opts.pretty);
     });
