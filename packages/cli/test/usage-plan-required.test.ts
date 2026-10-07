@@ -68,6 +68,37 @@ describe('clearvo usage / plan_required', () => {
     exitSpy.mockRestore();
   });
 
+  it('calculate --dry-run 402 custom_api_requires_growth says nothing was recorded and shows message + upgrade URL', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clearvo-cli-test-'));
+    const file = join(dir, 'calc.json');
+    writeFileSync(file, JSON.stringify({ currency: 'EUR', customer: { billingAddress: { country: 'FR' } }, lineItems: [] }));
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 402,
+      json: async () => ({
+        error: 'plan_required',
+        reason: 'custom_api_requires_growth',
+        calculationId: null,
+        monitorOnly: false,
+        message: 'Upgrade to Growth for amounts.',
+        upgradeUrl: 'https://app.clearvo.io/settings/billing',
+      }),
+    }) as unknown as typeof fetch;
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((): never => {
+      throw new Error('process.exit called');
+    }) as never);
+
+    await expect(createProgram().parseAsync(['calculate', file], { from: 'user' })).rejects.toThrow('process.exit called');
+
+    const printed = errorSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(printed).toContain('Growth plan');
+    expect(printed).toContain('Upgrade to Growth for amounts.');
+    expect(printed).toContain('Nothing was recorded');
+    expect(printed).toContain('https://app.clearvo.io/settings/billing');
+    expect(printed).not.toContain('recorded for Compliance Radar');
+    exitSpy.mockRestore();
+  });
+
   it('prints the plan sentence and upgrade URL on a 403 explore_not_included and exits 1', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,

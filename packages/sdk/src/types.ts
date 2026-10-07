@@ -3527,35 +3527,50 @@ export class ClearvoError extends Error {
   }
 }
 
+/** Why a 402 `plan_required` was returned. Only present for the custom-API case. */
+export type PlanRequiredReason = 'custom_api_requires_growth';
+
 /**
- * Thrown by `calculateTax()` for a committed calculation (`commit: true`, the default) on a free plan: HTTP 402
- * `plan_required`. The transaction WAS recorded for Compliance Radar (`calculationId`), but the plan does not include
- * calculation results, so there are no tax amounts: do not apply any tax from it. Send the user to `upgradeUrl`.
- * `commit: false` previews, paid plans and sandbox keys are unaffected. Catch it with `instanceof`.
+ * Thrown by `calculateTax()` on HTTP 402 `plan_required`: the plan does not include calculation results, so there are
+ * no tax amounts: do not apply any tax from it. Send the user to `upgradeUrl`. `message` carries the server's
+ * sentence followed by the upgrade URL.
+ *
+ * - `reason === 'custom_api_requires_growth'`: the call used your own API key (or MCP) on Free or Starter, which return
+ *   amounts only from Growth. With `commit: true` the transaction was recorded for Compliance Radar (`monitorOnly` true,
+ *   `calculationId` set); with `commit: false` (a preview) nothing was recorded (`monitorOnly` false, `calculationId` null).
+ * - `reason` undefined: the earlier free-plan behaviour (committed, recorded, `monitorOnly` true).
+ *
+ * Built-in integrations and the dashboard are unaffected. Catch it with `instanceof`.
  */
 export class ClearvoPlanRequiredError extends ClearvoError {
+  /**
+   * @param calculationId Id of the row recorded for Compliance Radar; null on a `commit: false` preview (nothing recorded).
+   */
   constructor(
-    public readonly calculationId: string,
+    public readonly calculationId: string | null,
     public readonly upgradeUrl: string,
     message = 'plan_required',
-    hint?: string
+    hint?: string,
+    /** Present only for the custom-API case. */
+    public readonly reason?: PlanRequiredReason,
+    /** True when the transaction was recorded for Compliance Radar without amounts; false on a preview. */
+    public readonly monitorOnly: boolean = true
   ) {
     super(402, message, hint);
     this.name = 'ClearvoPlanRequiredError';
   }
-
-  /** Always true: the transaction was recorded for Compliance Radar and no amounts were returned. */
-  readonly monitorOnly = true as const;
 }
 
 /**
  * Thrown when the plan does not include a feature: HTTP 403 `explore_not_included` (Explore: `queryData`, `getQueryFields`,
- * `exportData`; Growth and above) or `rules_not_included` (the rules API; Enterprise only). `hint` is the plan sentence
+ * `exportData`; Growth and above), `rules_not_included` (the rules API; Enterprise only) or `duties_not_included`
+ * (duties and landed cost: `quoteDuties`, `estimateDuties`, import settlement, settlement variance, `duties.include: true`
+ * on `calculateTax`, and turning `dutiesEnabled` on; Enterprise only). `hint` is the plan sentence
  * from the API; send the user to `upgradeUrl`. Any other 403 stays a generic `ClearvoError`. Catch it with `instanceof`.
  */
 export class ClearvoPlanNotIncludedError extends ClearvoError {
   constructor(
-    public readonly feature: 'explore' | 'rules',
+    public readonly feature: 'explore' | 'rules' | 'duties',
     public readonly upgradeUrl: string,
     message: string,
     hint?: string

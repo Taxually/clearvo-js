@@ -10,6 +10,13 @@ Backend: new `GET /v1/usage`, free-plan HTTP 402 `plan_required` on committed ta
 - @clearvo/cli: `clearvo usage`. `clearvo calculate` prints a plain upgrade message with the upgrade URL on a 402 `plan_required` and exits 1; on a 403 `explore_not_included` / `rules_not_included` it prints the plan sentence and the upgrade URL and exits 1.
 - @clearvo/mcp: new read-only tool `get_usage`. `calculate_tax` documents the monitor-only result and declares an `outputSchema`; the 402 `plan_required` body is returned as the tool result instead of an error, with `structuredContent`. A 403 `*_not_included` error renders as `HTTP 403: <plan sentence>`, `Code: <code>`, `Upgrade: <url>`.
 
+Custom API gate (same release): API keys and MCP work on every plan, but calculations from your own key or MCP return amounts from Growth. Below it, `POST /v1/tax/calculate` answers 402 `plan_required` with `reason: 'custom_api_requires_growth'`; `commit: true` is recorded for Compliance Radar (`monitorOnly` true, `calculationId` set), `commit: false` records nothing (`monitorOnly` false, `calculationId` null).
+
+- @clearvo/sdk: `ClearvoPlanRequiredError` gains `reason?: 'custom_api_requires_growth'`, `calculationId: string | null`, `monitorOnly: boolean` (no longer always true); `message` is now the server message plus `Upgrade: <url>` (was `plan_required`; `hint` still holds the server message). New type `PlanRequiredReason`.
+- Duties and landed cost are Enterprise only: HTTP 403 `duties_not_included` (quote, estimate, import settlement, settlement variance, `duties.include: true`, `dutiesEnabled: true`). @clearvo/sdk throws `ClearvoPlanNotIncludedError` with `feature: 'duties'`; @clearvo/cli prints the plan sentence and upgrade URL; @clearvo/mcp `quote_duties`/`estimate_duties` descriptions state the rule.
+- @clearvo/cli: `clearvo calculate` 402 output names the Growth requirement, prints the server message, and says "Nothing was recorded" for a preview.
+- @clearvo/mcp: `calculate_tax` description/`outputSchema` updated (`reason`, nullable `calculationId`, `message`).
+
 ## Unreleased — publish only AFTER backend PR 17004 (Canonical Invoice v1 pass 2) is deployed
 
 **BREAKING**, no aliases: client tax code field `exemptionReasonText` is now `invoiceReferenceText` (SDK `ClientTaxCode`/request types, MCP `create_client_tax_code`/`update_client_tax_code`, CLI `tax-codes create|update --invoice-reference-text`, replacing `--exemption-reason-text`). Tax-calculation request `reportingCurrency` is now `taxReportingCurrency`.

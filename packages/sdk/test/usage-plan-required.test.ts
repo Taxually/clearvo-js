@@ -73,11 +73,54 @@ describe('ClearvoClient.calculateTax on a free plan', () => {
     expect(err).toBeInstanceOf(ClearvoError);
     const e = err as ClearvoPlanRequiredError;
     expect(e.status).toBe(402);
-    expect(e.message).toBe('plan_required');
+    expect(e.message).toBe(`${body.message} Upgrade: ${body.upgradeUrl}`);
     expect(e.calculationId).toBe('calc_123');
     expect(e.monitorOnly).toBe(true);
+    expect(e.reason).toBeUndefined();
     expect(e.upgradeUrl).toBe('https://app.clearvo.io/settings/billing');
     expect(e.hint).toBe(body.message);
+  });
+
+  it('exposes reason custom_api_requires_growth on a committed 402', async () => {
+    const body = {
+      error: 'plan_required',
+      reason: 'custom_api_requires_growth',
+      calculationId: 'calc_9',
+      monitorOnly: true,
+      message: 'Calculations from your own API key need Growth.',
+      upgradeUrl: 'https://app.clearvo.io/settings/billing',
+    };
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 402, json: async () => body }) as unknown as typeof fetch;
+
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    const e = (await client.calculateTax(input).catch((x: unknown) => x)) as ClearvoPlanRequiredError;
+
+    expect(e).toBeInstanceOf(ClearvoPlanRequiredError);
+    expect(e.reason).toBe('custom_api_requires_growth');
+    expect(e.calculationId).toBe('calc_9');
+    expect(e.monitorOnly).toBe(true);
+    expect(e.message).toContain(body.message);
+    expect(e.message).toContain(body.upgradeUrl);
+  });
+
+  it('maps a commit=false preview 402 to calculationId null and monitorOnly false', async () => {
+    const body = {
+      error: 'plan_required',
+      reason: 'custom_api_requires_growth',
+      calculationId: null,
+      monitorOnly: false,
+      message: 'Calculations from your own API key need Growth.',
+      upgradeUrl: 'https://app.clearvo.io/settings/billing',
+    };
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 402, json: async () => body }) as unknown as typeof fetch;
+
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    const e = (await client.calculateTax({ ...input, commit: false }).catch((x: unknown) => x)) as ClearvoPlanRequiredError;
+
+    expect(e).toBeInstanceOf(ClearvoPlanRequiredError);
+    expect(e.calculationId).toBeNull();
+    expect(e.monitorOnly).toBe(false);
+    expect(e.reason).toBe('custom_api_requires_growth');
   });
 
   it('leaves any other 402 as a generic ClearvoError', async () => {
@@ -101,6 +144,7 @@ describe('ClearvoClient plan-not-included 403', () => {
   it.each([
     ['explore_not_included', 'explore'],
     ['rules_not_included', 'rules'],
+    ['duties_not_included', 'duties'],
   ] as const)('throws ClearvoPlanNotIncludedError for a 403 %s', async (code, feature) => {
     const body = { error: code, message: 'Your plan does not include this feature.', upgradeUrl: 'https://app.clearvo.io/settings/billing' };
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => body }) as unknown as typeof fetch;
