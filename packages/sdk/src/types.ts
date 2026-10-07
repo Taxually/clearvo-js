@@ -3801,8 +3801,10 @@ export interface TaxCalcUseTax {
   taxExpectedFromVendor: number | null;
   /** Vendor tax credited against the use tax due (tax charged for the same state only). */
   creditAllowed: number;
-  /** What the buyer self-assesses and accrues. `taxDueAtUseLocation = creditAllowed + selfAssessedTaxAmount + toleranceWaived`. */
+  /** What the buyer self-assesses and accrues. `taxDueAtUseLocation = creditAllowed + selfAssessedTaxAmount + toleranceWaived + acceptedShortfall`. */
   selfAssessedTaxAmount: number;
+  /** Use tax above what the vendor charged that is not self-assessed because the vendor's charge is accepted (trusted supplier, origin-based in-state charge, remote seller's flat local rate); 0 otherwise. */
+  acceptedShortfall: number;
   /** Use tax a use-tax tolerance rule waived on this line; 0 unless one applied. */
   toleranceWaived: number;
   /** Per taxing authority, state first; sums to the line figures. */
