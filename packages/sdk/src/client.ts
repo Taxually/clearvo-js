@@ -516,6 +516,7 @@ export class ClearvoClient {
     if (params.entityId) qs.set('entityId', params.entityId);
     if (params.country)  qs.set('country',  params.country);
     if (params.documentStage) qs.set('documentStage', params.documentStage);
+    if (params.direction) qs.set('direction', params.direction);
     if (params.purchaseOrderId) qs.set('purchaseOrderId', params.purchaseOrderId);
     if (params.limit != null) qs.set('limit', String(params.limit));
     if (params.page  != null) qs.set('page',  String(params.page));
