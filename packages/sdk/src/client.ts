@@ -217,9 +217,10 @@ export class ClearvoClient {
         );
       }
       // Plan lacks Explore (growth and above) or the rules API (enterprise only): a typed error, not a generic one.
-      if (response.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included')) {
+      // Duties and landed cost are Enterprise only: duties_not_included.
+      if (response.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included' || data.error === 'duties_not_included')) {
         throw new ClearvoPlanNotIncludedError(
-          data.error === 'explore_not_included' ? 'explore' : 'rules',
+          data.error === 'explore_not_included' ? 'explore' : data.error === 'duties_not_included' ? 'duties' : 'rules',
           String(data.upgradeUrl ?? ''),
           data.error,
           typeof data.message === 'string' ? data.message : undefined

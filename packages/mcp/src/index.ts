@@ -854,7 +854,8 @@ const TOOLS = [
       'it is never added to totalTax/totalAmountWithTax. It is an estimate: ' +
       'read each consignment\'s estimate/estimateReasons and a line\'s missingInputs, and send commodityCode, countryOfOrigin and weight to tighten it. ' +
       'A duty failure is a 200 with duties.status "degraded", never an error. Fails closed with HTTP 503 code "tax_content_unavailable" when tax content is temporarily unavailable; retry after Retry-After. ' +
-      'To record the calculation, call calculate_tax with the same body and duties.include true.',
+      'To record the calculation, call calculate_tax with the same body and duties.include true. ' +
+      'Duties and landed cost are included in the Enterprise plan: on any other plan this fails with HTTP 403 code "duties_not_included" and an upgradeUrl.',
     inputSchema: {
       type: 'object' as const,
       properties: QUOTE_DUTIES_PROPERTIES,
@@ -873,7 +874,8 @@ const TOOLS = [
       'Returns product (the resolved commodityCode, scheme, codeSource and precision) and destinations[]: per destination a status (quoted, degraded or not_applicable, with a reason), ' +
       'the same duties, consignments (duty, importTax, fees, landedCost, precision, estimate, responsibleParty) and summary blocks quote_duties returns for a one-line cart, plus the product line\'s duty. ' +
       'One bad destination is a degraded entry, never a failed call. It is an estimate: read each consignment\'s estimate/estimateReasons and the duty\'s missingInputs. ' +
-      'Fails closed with HTTP 503 code "tax_content_unavailable" when tax content is temporarily unavailable; retry after Retry-After.',
+      'Fails closed with HTTP 503 code "tax_content_unavailable" when tax content is temporarily unavailable; retry after Retry-After. ' +
+      'Duties and landed cost are included in the Enterprise plan: on any other plan this fails with HTTP 403 code "duties_not_included" and an upgradeUrl.',
     inputSchema: {
       type: 'object' as const,
       properties: {

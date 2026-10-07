@@ -144,6 +144,7 @@ describe('ClearvoClient plan-not-included 403', () => {
   it.each([
     ['explore_not_included', 'explore'],
     ['rules_not_included', 'rules'],
+    ['duties_not_included', 'duties'],
   ] as const)('throws ClearvoPlanNotIncludedError for a 403 %s', async (code, feature) => {
     const body = { error: code, message: 'Your plan does not include this feature.', upgradeUrl: 'https://app.clearvo.io/settings/billing' };
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => body }) as unknown as typeof fetch;

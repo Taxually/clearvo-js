@@ -95,7 +95,7 @@ export function createProgram(): Command {
         process.exit(1);
       }
       // Plan lacks Explore (growth and above) or the rules API (enterprise only): HTTP 403 <feature>_not_included.
-      if (res.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included')) {
+      if (res.status === 403 && (data.error === 'explore_not_included' || data.error === 'rules_not_included' || data.error === 'duties_not_included')) {
         console.error(String(data.message ?? 'Your plan does not include this feature.'));
         if (data.upgradeUrl) console.error(`Upgrade your plan: ${data.upgradeUrl}`);
         process.exit(1);

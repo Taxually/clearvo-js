@@ -3563,12 +3563,14 @@ export class ClearvoPlanRequiredError extends ClearvoError {
 
 /**
  * Thrown when the plan does not include a feature: HTTP 403 `explore_not_included` (Explore: `queryData`, `getQueryFields`,
- * `exportData`; Growth and above) or `rules_not_included` (the rules API; Enterprise only). `hint` is the plan sentence
+ * `exportData`; Growth and above), `rules_not_included` (the rules API; Enterprise only) or `duties_not_included`
+ * (duties and landed cost: `quoteDuties`, `estimateDuties`, import settlement, settlement variance, `duties.include: true`
+ * on `calculateTax`, and turning `dutiesEnabled` on; Enterprise only). `hint` is the plan sentence
  * from the API; send the user to `upgradeUrl`. Any other 403 stays a generic `ClearvoError`. Catch it with `instanceof`.
  */
 export class ClearvoPlanNotIncludedError extends ClearvoError {
   constructor(
-    public readonly feature: 'explore' | 'rules',
+    public readonly feature: 'explore' | 'rules' | 'duties',
     public readonly upgradeUrl: string,
     message: string,
     hint?: string
