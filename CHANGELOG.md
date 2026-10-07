@@ -2,6 +2,15 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend US use tax PR is deployed
+
+Additive: US consumer's use tax on purchases. `POST /v1/tax/calculate` with `transactionDirection: "purchase"` accepts `shipTo` (request level) and `lineItems[].shipTo`; a purchase delivered to a US state enabled for use tax returns `lineItems[].useTax` (use location with basis, tax due, tax charged by the vendor, credit allowed, self-assessed amount, per-authority breakdown, assumptions, vendor-charge story) and the response header `selfAssessedTaxAmount` / `selfAssessedKind: "USE_TAX"`. New `taxVerification.reasonCode` values `USE_TAX_SELF_ASSESSED`, `USE_TAX_SHORTFALL_SELF_ASSESSED`, `USE_TAX_VENDOR_CHARGE_REVIEW`.
+
+- SDK: new `TaxCalcShipTo`, `TaxCalcUseTax`, `TaxCalcVendorChargeStory`; `shipTo` on the calculate request and its line items; `useTax` on the response line; the three reason codes.
+- MCP `calculate_tax`: `shipTo` (request and line) and a use tax description; `list_tax_calculations` notes `USE_TAX`.
+- Behaviour: a charge matching another state's rate, or unexplained, earns no credit (the full use tax is self-assessed and `reviewRequired` is true). A purchase invoice with no `statedTaxAmount` is treated as the vendor having charged 0 (assumption `VENDOR_TAX_NOT_PROVIDED_ASSUMED_ZERO`); a purchase order is not. The `trusted` supplier flag does not apply to use tax lines.
+- CLI: `clearvo calculate <file>` passes the JSON body through, so `shipTo` works with no flag change.
+
 ## Unreleased — publish only AFTER the backend Purchases (AP) gating PR is deployed
 
 Additive: Purchases (AP) is now an Enterprise-only sub-solution of Tax Calculations (backend `tax_calculations_purchases`). Purchase-direction and `purchase_order` calculations, the Coupa Call Out, and the AP-only supplier and settings fields return HTTP 403 `ap_not_included` (plan) or `ap_not_enabled` (switch it on under Settings > Solutions) without it. Sales are unaffected. SDK `listTaxCalculations({ direction })`, CLI `calculations list --direction`, MCP `list_tax_calculations` `direction`; doc comments on `transactionDirection` and `documentStage` (SDK) and the `calculate_tax` `transactionDirection` description (MCP) name the Enterprise requirement and the two codes. Until the backend is live the `direction` filter is ignored.
