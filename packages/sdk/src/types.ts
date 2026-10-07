@@ -847,7 +847,9 @@ export interface TaxCalculateRequest {
    * supplier and `customer` (the counterparty) is required. `'purchase'`
    * — an incoming transaction: the entity is the customer and `supplier`
    * (the counterparty) is required. See this interface's own doc comment
-   * for the full direction rule.
+   * for the full direction rule. `'purchase'` is the Purchases (AP) sub-solution: Enterprise only, and
+   * switched on per business under Settings > Solutions; otherwise HTTP 403 `ap_not_included` (plan)
+   * or `ap_not_enabled` (switch it on).
    */
   transactionDirection?: 'sale' | 'purchase';
   /**
@@ -1045,6 +1047,8 @@ export interface TaxCalculateRequest {
    * calculation represents. `'purchase_order'` binds `lineItems[].poLink`
    * resolution and later invoice-stage `poComparison`; `'invoice'` is the
    * ordinary default. Only meaningful on `transactionDirection: 'purchase'`.
+   * Enterprise only (the Purchases (AP) sub-solution): `purchase_order` is refused with HTTP 403
+   * `ap_not_included` (plan) or `ap_not_enabled` (switch it on under Settings > Solutions).
    */
   documentStage?: 'purchase_order' | 'invoice';
   /**
@@ -1767,8 +1771,10 @@ export interface TaxCalculationSummary {
 export interface ListTaxCalculationsParams {
   entityId?: string;
   country?: string;
-  /** 'invoice' or 'purchase_order'. Omit for both. */
+  /** 'invoice' or 'purchase_order'. Omit for both. `purchase_order` is Enterprise only (Purchases (AP)): 403 `ap_not_included` or `ap_not_enabled` otherwise. */
   documentStage?: 'invoice' | 'purchase_order';
+  /** 'sale' or 'purchase'. Omit for both. `purchase` is Enterprise only (Purchases (AP)): 403 `ap_not_included` or `ap_not_enabled` otherwise. */
+  direction?: 'sale' | 'purchase';
   /** Exact purchase-order reference: the PO calculation itself plus every calculation whose lines reference it. */
   purchaseOrderId?: string;
   limit?: number;
@@ -3795,15 +3801,15 @@ export interface TaxCalcUseTax {
   };
   /** Use tax at the use location before credit. Equals the line's `taxAmount`. */
   taxDueAtUseLocation: number;
-  /** The line's `statedTaxAmount`; null when none was sent. */
+  /** The line's `statedTaxAmount`; null when none was sent (on an invoice the vendor is then assumed to have charged 0; on a purchase order no assumption is made). */
   taxChargedByVendor: number | null;
   /** What the vendor should have charged at the use location; null when it could not be determined. */
   taxExpectedFromVendor: number | null;
-  /** Vendor tax credited against the use tax due (tax charged for the same state only). */
+  /** Vendor tax credited against the use tax due (tax charged for the same state only). 0 when the charge matches another state's rate or is unexplained. */
   creditAllowed: number;
   /** What the buyer self-assesses and accrues. `taxDueAtUseLocation = creditAllowed + selfAssessedTaxAmount + toleranceWaived + acceptedShortfall`. */
   selfAssessedTaxAmount: number;
-  /** Use tax above what the vendor charged that is not self-assessed because the vendor's charge is accepted (trusted supplier, origin-based in-state charge, remote seller's flat local rate); 0 otherwise. */
+  /** Use tax above what the vendor charged that is not self-assessed because the vendor's charge is accepted (origin-based in-state charge, remote seller's flat local rate); 0 otherwise. */
   acceptedShortfall: number;
   /** Use tax a use-tax tolerance rule waived on this line; 0 unless one applied. */
   toleranceWaived: number;

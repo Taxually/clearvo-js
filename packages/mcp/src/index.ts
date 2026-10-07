@@ -208,7 +208,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
     transactionDirection: {
       type: 'string',
       enum: ['sale', 'purchase'],
-      description: '"sale" (default) — an outgoing transaction: the entity is the supplier, customer (the counterparty) is required. "purchase" — an incoming transaction: the entity is the customer, supplier (the counterparty, the vendor) is required. See this tool\'s own description for the full rule, including the 422 error codes for each direction.',
+      description: '"sale" (default) — an outgoing transaction: the entity is the supplier, customer (the counterparty) is required. "purchase" — an incoming transaction: the entity is the customer, supplier (the counterparty, the vendor) is required. See this tool\'s own description for the full rule, including the 422 error codes for each direction. "purchase" is the Purchases (AP) sub-solution: Enterprise plan only, and the business must have Purchases (AP) switched on under Settings > Solutions; otherwise HTTP 403 code ap_not_included (plan; upgradeUrl returned) or ap_not_enabled (switch it on; hint returned).',
     },
     seller: {
       type: 'object',
@@ -843,7 +843,7 @@ const TOOLS = [
       'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
       'which block is your own entity. ' +
-      'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, creditAllowed (same-state vendor tax is credited), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. A state with no local use tax on general purchases is calculated at the state level only.',
+      'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, creditAllowed (same-state vendor tax is credited), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full (a purchase invoice with no statedTaxAmount is treated as charged 0; a purchase order is not); a charge matching another state\'s rate or unexplained earns no credit and is flagged for review; the trusted supplier flag does not apply to use tax; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. A state with no local use tax on general purchases is calculated at the state level only.',
     inputSchema: CALCULATE_TAX_INPUT_SCHEMA,
   },
   {
@@ -1883,7 +1883,8 @@ const TOOLS = [
       properties: {
         entityId: { type: 'string', description: 'Filter by entity ID. Required for account-scoped keys.' },
         country: { type: 'string', description: 'Filter by jurisdiction country code (e.g. "DE", "US")' },
-        documentStage: { type: 'string', enum: ['invoice', 'purchase_order'], description: 'Filter by document stage: "invoice" or "purchase_order" (omit for both). Each row returns documentStage.' },
+        documentStage: { type: 'string', enum: ['invoice', 'purchase_order'], description: 'Filter by document stage: "invoice" or "purchase_order" (omit for both). Each row returns documentStage. "purchase_order" is Enterprise-only (Purchases (AP)): 403 ap_not_included or ap_not_enabled otherwise.' },
+        direction: { type: 'string', enum: ['sale', 'purchase'], description: 'Filter by transaction direction (omit for both). "purchase" is Enterprise-only (Purchases (AP)): 403 ap_not_included or ap_not_enabled otherwise.' },
         purchaseOrderId: { type: 'string', description: 'Exact purchase-order reference: returns that purchase order plus every invoice calculation linked to it. Rows return purchaseOrderId/purchaseOrderLineNumber/poLink.' },
         limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
         page: { type: 'number', description: 'Page number, 1-based (default 1)' },
@@ -3748,6 +3749,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.entityId) qs.set('entityId', args.entityId as string);
       if (args.country)  qs.set('country',  args.country  as string);
       if (args.documentStage) qs.set('documentStage', args.documentStage as string);
+      if (args.direction) qs.set('direction', args.direction as string);
       if (args.purchaseOrderId) qs.set('purchaseOrderId', args.purchaseOrderId as string);
       if (args.limit)    qs.set('limit',    String(args.limit));
       if (args.page)     qs.set('page',     String(args.page));
