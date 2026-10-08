@@ -1251,6 +1251,8 @@ export interface TaxCalculateResponse {
       appliedDelta: number;
       /** Non-null only for a reverse-charge/PVA/exempt/zero-rated line. */
       zeroLiabilityBasis: 'REVERSE_CHARGE' | 'PVA' | 'EXEMPT' | 'ZERO_RATED' | null;
+      /** US use tax lines only: the charge above the sales tax the delivery address calls for (0 when none). Use it as the "difference" on a use tax line. */
+      overchargeVsExpected?: number;
       /**
        * The PO<->invoice fact-diff (M.14/RE-6) — present only when this
        * line's `poLink` (below) resolved to `'LINKED'`. A plain fact-diff,
@@ -1265,6 +1267,9 @@ export interface TaxCalculateResponse {
         invoiceRate: number;
         invoiceTaxAmount: number;
         taxAmountDelta: number | null;
+        /** US use tax lines only: the sales tax the supplier should charge, per the PO line and per this invoice line. */
+        poTaxExpectedFromVendor?: number | null;
+        invoiceTaxExpectedFromVendor?: number | null;
       };
     };
     /**
@@ -3805,8 +3810,12 @@ export interface TaxCalcUseTax {
   taxChargedByVendor: number | null;
   /** What the vendor should have charged at the use location; null when it could not be determined. */
   taxExpectedFromVendor: number | null;
-  /** Vendor tax credited against the use tax due (tax charged for the same state only). 0 when the charge matches another state's rate or is unexplained. */
+  /** The combined sales rate behind `taxExpectedFromVendor`, as a fraction (0.0925 = 9.25%); null when unknown. Absent on a calculation made before this field existed. */
+  taxExpectedFromVendorRate?: number | null;
+  /** Vendor tax credited against the use tax due, capped at it. A charge matching no known rate is assumed local and credited; a charge at another state's rate is credited only when the delivery state's rule allows it (otherwise 0). */
   creditAllowed: number;
+  /** What to claim back from the supplier; null when nothing. Absent on a calculation made before this field existed. `OVERCHARGE_VS_EXPECTED`: charge above `taxExpectedFromVendor`. `TAX_NOT_DUE`: the whole charge is treated as not legally due on this delivery. */
+  vendorClaim?: { amount: number; basis: 'OVERCHARGE_VS_EXPECTED' | 'TAX_NOT_DUE' } | null;
   /** What the buyer self-assesses and accrues. `taxDueAtUseLocation = creditAllowed + selfAssessedTaxAmount + toleranceWaived + acceptedShortfall`. */
   selfAssessedTaxAmount: number;
   /** Use tax above what the vendor charged that is not self-assessed because the vendor's charge is accepted (origin-based in-state charge, remote seller's flat local rate); 0 otherwise. */
@@ -3824,7 +3833,7 @@ export interface TaxCalcUseTax {
     creditApplied: number;
     selfAssessed: number;
   }>;
-  /** Closed list of machine-readable assumptions, e.g. `USE_LOCATION_ASSUMED_ENTITY_ADDRESS`, `VENDOR_TAX_NOT_PROVIDED_ASSUMED_ZERO`. */
+  /** Closed list of machine-readable assumptions, e.g. `USE_LOCATION_ASSUMED_ENTITY_ADDRESS`, `VENDOR_TAX_NOT_PROVIDED_ASSUMED_ZERO`, `UNEXPLAINED_CHARGE_ASSUMED_LOCAL`, `OTHER_STATE_CHARGE_NOT_CREDITED`, `OTHER_STATE_CHARGE_CREDITED`. */
   assumptions: string[];
   vendorChargeStory: TaxCalcVendorChargeStory | null;
   /** True when a person should look at this line; never changes the arithmetic. */
