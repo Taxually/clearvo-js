@@ -12,6 +12,25 @@ Additive: exemption certificates gain `holderRole`: `SELLER_COLLECTED` (a certif
 - Certificates apply conservatively: only when category-scoped or the line's intended use (`customProperties.intendedUse`, or `accountAssignment: "stock"` for resale) matches the certificate type; validity is judged on the document date. Otherwise the line carries a `certificateHint` and its tax is unchanged.
 - SDK and CLI have no exemption-certificate methods or commands today, so none were added.
 
+## Unreleased — publish only AFTER the backend Explore AP decision fields PR is deployed
+
+Additive: Explore can filter the purchase decision, the calculation list distinguishes a missing purchase order, and the field list can be requested in a small form.
+
+- MCP `query_data` and `get_query_fields` offer the `tax_calculation_line_items` dataset (the API already accepted it; `clearvo query run --dataset` too). The tool descriptions name the fields `apOutcome`, `apReasonCode`, `useTaxReviewRequired`, `poLinkStatus` and, per line, `statedTaxAmount`, with an example filter (`apOutcome in OVERCHARGED,HELD` on `tax_calculations` with `transactionDirection = purchase`).
+- `GET /v1/query/fields` accepts `dataset`, `compact` and `field`. SDK `getQueryFields({ dataset, compact, field })`; CLI `clearvo query fields <dataset> --compact --field <name>`; MCP `get_query_fields` is compact by default (enums of more than 25 values are returned as `enumCount`, `enumSample`, `valuesHint`). Until the backend is live the new parameters are ignored and the full payload is returned.
+- SDK: `QueryDataset` includes `tax_calculation_line_items`. `QueryFilterOperator` is now the set the API accepts (`eq`, `ne`, `gt`, `lt`, `between`, `in`, `contains`, `isNull`); the earlier `neq`, `gte`, `lte` were never accepted by the backend. `QueryFieldDefinition.enumValues` is `{ code, label }[]` (that is what the API returns), with `enumCount`, `enumSample`, `valuesHint`, `sortable`. `QueryFieldsResponse.datasets` is partial.
+- CLI `query run --filter` and the MCP `query_data` operator enum use the same operators; `between` takes comma-separated values.
+- `poLink.status` on tax calculation list rows is `NONE | LINKED | NOT_FOUND` (SDK `TaxCalculationSummary`, MCP `list_tax_calculations` description). Rows committed before the backend recorded it read `LINKED` when they carry a PO reference.
+- MCP `calculate_tax` documents `lineItems[].supplyType` (`GOODS` | `SERVICES`, purchase lines) and the address fields of `shipTo` (request and line); SDK adds `supplyType` to the calculate line item.
+
+## Unreleased — publish only AFTER the backend use tax vendor claim PR is deployed
+
+Additive: US use tax `lineItems[].useTax` gains `vendorClaim` (`{ amount, basis: "OVERCHARGE_VS_EXPECTED" | "TAX_NOT_DUE" }` or `null`) and `taxExpectedFromVendorRate`; `taxVerification.overchargeVsExpected` and `poComparison.poTaxExpectedFromVendor` / `invoiceTaxExpectedFromVendor` on use tax lines. New assumptions `UNEXPLAINED_CHARGE_ASSUMED_LOCAL`, `OTHER_STATE_CHARGE_NOT_CREDITED`, `OTHER_STATE_CHARGE_CREDITED`.
+
+- SDK: `TaxCalcUseTax.vendorClaim`, `taxExpectedFromVendorRate`; `taxVerification.overchargeVsExpected` and the two poComparison fields.
+- MCP `calculate_tax`: the use tax description names the vendor claim and the new treatment.
+- Behaviour: a charge matching no known rate is assumed local for the delivery state and credited up to the use tax; above the expected tax it is `OVERCHARGED` with a claim. A charge at another state's rate is credited only where the delivery state's rule allows it, else claimed whole (`TAX_NOT_DUE`). CLI: no change.
+
 ## Unreleased — publish only AFTER the backend US use tax PR is deployed
 
 Additive: US consumer's use tax on purchases. `POST /v1/tax/calculate` with `transactionDirection: "purchase"` accepts `shipTo` (request level) and `lineItems[].shipTo`; a purchase delivered to a US state enabled for use tax returns `lineItems[].useTax` (use location with basis, tax due, tax charged by the vendor, credit allowed, self-assessed amount, per-authority breakdown, assumptions, vendor-charge story) and the response header `selfAssessedTaxAmount` / `selfAssessedKind: "USE_TAX"`. New `taxVerification.reasonCode` values `USE_TAX_SELF_ASSESSED`, `USE_TAX_SHORTFALL_SELF_ASSESSED`, `USE_TAX_VENDOR_CHARGE_REVIEW`.

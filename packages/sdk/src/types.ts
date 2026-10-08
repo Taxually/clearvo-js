@@ -1003,8 +1003,10 @@ export interface TaxCalculateRequest {
     weight?: { value: number; unit: 'kg' | 'g' | 'lb' | 'oz' };
     /** Per-line dispatch address; overrides the transaction `shipFrom` for this line (a second warehouse is a second consignment). */
     shipFrom?: TaxCalcShipFrom;
-    /** Purchase only: where this line is delivered; overrides the transaction `shipTo`. A US address makes the line US consumer's use tax. */
+    /** Purchase only: where this line is delivered; used for US use tax and as the destination. Overrides the transaction `shipTo`; omitted falls back to it, then to the entity address. A US address makes the line US consumer's use tax. */
     shipTo?: TaxCalcShipTo;
+    /** Purchase only: goods or services (upper case). Without it the line still gets a rate but its outcome is `UNKNOWN_TREATMENT` / `missing_supply_type`. Ignored on a sale. */
+    supplyType?: 'GOODS' | 'SERVICES';
     amountIncludesTax?: boolean;
     /**
      * When true, the customer claims exemption for this line item with no
@@ -1268,6 +1270,8 @@ export interface TaxCalculateResponse {
       appliedDelta: number;
       /** Non-null only for a reverse-charge/PVA/exempt/zero-rated line. */
       zeroLiabilityBasis: 'REVERSE_CHARGE' | 'PVA' | 'EXEMPT' | 'ZERO_RATED' | null;
+      /** US use tax lines only: the charge above the sales tax the delivery address calls for (0 when none). Use it as the "difference" on a use tax line. */
+      overchargeVsExpected?: number;
       /**
        * The PO<->invoice fact-diff (M.14/RE-6) — present only when this
        * line's `poLink` (below) resolved to `'LINKED'`. A plain fact-diff,
@@ -1282,6 +1286,9 @@ export interface TaxCalculateResponse {
         invoiceRate: number;
         invoiceTaxAmount: number;
         taxAmountDelta: number | null;
+        /** US use tax lines only: the sales tax the supplier should charge, per the PO line and per this invoice line. */
+        poTaxExpectedFromVendor?: number | null;
+        invoiceTaxExpectedFromVendor?: number | null;
       };
     };
     /**
@@ -1777,8 +1784,12 @@ export interface TaxCalculationSummary {
   /** The purchase-order reference: a purchase_order row's own id, otherwise the first line's purchaseOrderId; null when not linked. */
   purchaseOrderId: string | null;
   purchaseOrderLineNumber: string | null;
-  /** Cheap link summary (null on a purchase_order row): LINKED when a reference exists, else NONE. */
-  poLink: { status: 'NONE' | 'LINKED'; purchaseOrderId: string | null; purchaseOrderLineNumber: string | null } | null;
+  /**
+   * Link summary (null on a purchase_order row): NONE (no PO referenced), LINKED (the referenced PO exists) or NOT_FOUND (the
+   * invoice references a PO that does not exist for this entity), resolved when the calculation was committed. A row committed
+   * before this was recorded reads LINKED when it carries a reference.
+   */
+  poLink: { status: 'NONE' | 'LINKED' | 'NOT_FOUND'; purchaseOrderId: string | null; purchaseOrderLineNumber: string | null } | null;
   /** Tax self-assessed on a purchase (reverse charge / postponed import VAT). 0 for sales and rows recorded before this field existed. */
   selfAssessedTaxAmount: number;
   /** Why it was self-assessed. USE_TAX is reserved for US consumer's use tax and is not returned yet. */
@@ -2273,16 +2284,16 @@ export interface GetSiiReconciliationResponse {
 
 // ── Data Query Tool ──────────────────────────────────────────────────────────
 
-export type QueryDataset = 'einvoicing_records' | 'tax_calculations';
+export type QueryDataset = 'einvoicing_records' | 'tax_calculations' | 'tax_calculation_line_items';
 
-export type QueryFilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains';
+export type QueryFilterOperator = 'eq' | 'ne' | 'gt' | 'lt' | 'between' | 'in' | 'contains' | 'isNull';
 
 export interface QueryFilter {
   field: string;
   operator: QueryFilterOperator;
-  /** Required for every operator except 'in', which uses `values` instead. */
+  /** Required for every operator except 'in' and 'between' (which use `values`) and 'isNull' (optional boolean). */
   value?: string | number | boolean;
-  /** Only valid with operator 'in'. */
+  /** Valid with operator 'in' (a list) and 'between' ([min, max]). */
   values?: Array<string | number | boolean>;
 }
 
@@ -2313,10 +2324,27 @@ export interface QueryFieldDefinition {
   field: string;
   type: string;
   operators: QueryFilterOperator[];
-  enumValues?: string[];
+  /** Allowed values with their labels. Absent in compact mode on an enum of more than 25 values (see enumCount). */
+  enumValues?: Array<{ code: string; label: string }>;
+  /** Compact mode only: size of the omitted enum list. */
+  enumCount?: number;
+  /** Compact mode only: the first few codes of the omitted list. */
+  enumSample?: string[];
+  /** Compact mode only: how to fetch the complete list (pass `dataset` and `field`). */
+  valuesHint?: string;
   indexed: boolean;
   computed?: boolean;
+  sortable?: boolean;
   currencySemantics?: string;
+}
+
+export interface QueryFieldsParams {
+  /** Return this dataset only. */
+  dataset?: QueryDataset;
+  /** Reference enums of more than 25 values (countries, tax codes) as enumCount / enumSample instead of inlining them. */
+  compact?: boolean;
+  /** With `dataset`: return only this field, with its complete enum list. */
+  field?: string;
 }
 
 export interface QueryDatasetSchema {
@@ -2330,7 +2358,10 @@ export interface QueryDatasetSchema {
 
 export interface QueryFieldsResponse {
   schemaVersion: string;
-  datasets: Record<QueryDataset, QueryDatasetSchema>;
+  /** Present (true) only on a compact response. */
+  compact?: boolean;
+  /** Every dataset, or only the one asked for with `dataset`. */
+  datasets: Partial<Record<QueryDataset, QueryDatasetSchema>>;
 }
 
 export type ClientTaxCodeDirection = 'sale' | 'purchase';
@@ -3861,8 +3892,12 @@ export interface TaxCalcUseTax {
   taxChargedByVendor: number | null;
   /** What the vendor should have charged at the use location; null when it could not be determined. */
   taxExpectedFromVendor: number | null;
-  /** Vendor tax credited against the use tax due (tax charged for the same state only). 0 when the charge matches another state's rate or is unexplained. */
+  /** The combined sales rate behind `taxExpectedFromVendor`, as a fraction (0.0925 = 9.25%); null when unknown. Absent on a calculation made before this field existed. */
+  taxExpectedFromVendorRate?: number | null;
+  /** Vendor tax credited against the use tax due, capped at it. A charge matching no known rate is assumed local and credited; a charge at another state's rate is credited only when the delivery state's rule allows it (otherwise 0). */
   creditAllowed: number;
+  /** What to claim back from the supplier; null when nothing. Absent on a calculation made before this field existed. `OVERCHARGE_VS_EXPECTED`: charge above `taxExpectedFromVendor`. `TAX_NOT_DUE`: the whole charge is treated as not legally due on this delivery. */
+  vendorClaim?: { amount: number; basis: 'OVERCHARGE_VS_EXPECTED' | 'TAX_NOT_DUE' } | null;
   /** What the buyer self-assesses and accrues. `taxDueAtUseLocation = creditAllowed + selfAssessedTaxAmount + toleranceWaived + acceptedShortfall`. */
   selfAssessedTaxAmount: number;
   /** Use tax above what the vendor charged that is not self-assessed because the vendor's charge is accepted (origin-based in-state charge, remote seller's flat local rate); 0 otherwise. */
@@ -3880,7 +3915,7 @@ export interface TaxCalcUseTax {
     creditApplied: number;
     selfAssessed: number;
   }>;
-  /** Closed list of machine-readable assumptions, e.g. `USE_LOCATION_ASSUMED_ENTITY_ADDRESS`, `VENDOR_TAX_NOT_PROVIDED_ASSUMED_ZERO`. */
+  /** Closed list of machine-readable assumptions, e.g. `USE_LOCATION_ASSUMED_ENTITY_ADDRESS`, `VENDOR_TAX_NOT_PROVIDED_ASSUMED_ZERO`, `UNEXPLAINED_CHARGE_ASSUMED_LOCAL`, `OTHER_STATE_CHARGE_NOT_CREDITED`, `OTHER_STATE_CHARGE_CREDITED`. */
   assumptions: string[];
   vendorChargeStory: TaxCalcVendorChargeStory | null;
   /** True when a person should look at this line; never changes the arithmetic. */

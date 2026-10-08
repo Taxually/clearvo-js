@@ -115,6 +115,7 @@ export type {
   QueryFieldDefinition,
   QueryDatasetSchema,
   QueryFieldsResponse,
+  QueryFieldsParams,
   ClientTaxCodeDirection,
   ClientTaxCodeMovement,
   ClientTaxCodeTaxability,

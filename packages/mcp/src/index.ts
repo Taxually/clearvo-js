@@ -273,9 +273,9 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       type: 'object',
       description: 'Purchase only (transactionDirection "purchase"): where the goods or service are delivered, i.e. where use tax is owed. A US address makes the line US consumer\'s use tax at that address (only for a state enabled for use tax; any other US state returns 422 us_jurisdiction_purchase_unsupported); an address in your own country refines a goods line\'s destination; an address in any other country is not used and the response warns (ship_to_country_not_supported). Omitted: your own registered address is used, as before. A line-level shipTo overrides this for that line. A sale ignores it.',
       properties: {
-        line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
+        line1: { type: 'string', description: 'Street address.' }, line2: { type: 'string', description: 'Second address line.' }, city: { type: 'string', description: 'City.' },
         region: { type: 'string', description: 'State/region code, REQUIRED for a US address, e.g. "TX"' },
-        postalCode: { type: 'string' },
+        postalCode: { type: 'string', description: 'Postal / ZIP code.' },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
       },
       required: ['country'],
@@ -319,13 +319,20 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
           commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff; for rate-band lookup, matching is jurisdiction-scoped by the line\'s own resolved country; with duties on, this is the code the duty is priced at, see commodityCodeScheme). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
           commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block). Not the AP fact customProperties.commodityCodeScheme.' },
           countryOfOrigin: { type: 'string', description: 'Two-letter country the goods were made in, read only when duties are on. Never inferred from shipFrom. Falls back to the product catalogue, then defaultCountryOfOrigin.' },
+          supplyType: {
+            type: 'string',
+            enum: ['GOODS', 'SERVICES'],
+            description: 'Purchase only: whether this line buys goods or services (upper case). Drives place of supply, reverse charge and US use tax. A purchase line without it still gets a rate, but its outcome is UNKNOWN_TREATMENT with reasonCode missing_supply_type. Ignored on a sale.',
+          },
           shipTo: {
             type: 'object',
-            description: 'Purchase only: where THIS line is delivered, overriding the transaction-level shipTo. A US address makes the line US consumer\'s use tax at that address (see the calculate_tax description). Omitted: the transaction-level shipTo, then your own address.',
+            description: 'Purchase only: where THIS purchase line is delivered; used for US use tax and as the destination. Overrides the transaction-level shipTo. A US address makes the line US consumer\'s use tax at that address (see the calculate_tax description). Omitted: the transaction-level shipTo, then the entity address.',
             properties: {
-              line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
+              line1: { type: 'string', description: 'Street address, max 200 characters.' },
+              line2: { type: 'string', description: 'Second address line, max 200 characters.' },
+              city: { type: 'string', description: 'City, max 100 characters.' },
               region: { type: 'string', description: 'State code, REQUIRED for a US address, e.g. "TX"' },
-              postalCode: { type: 'string' },
+              postalCode: { type: 'string', description: 'Postal / ZIP code, max 20 characters; a full ZIP code gives the most precise local use tax.' },
               country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
             },
             required: ['country'],
@@ -843,7 +850,7 @@ const TOOLS = [
       'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
       'which block is your own entity. ' +
-      'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, creditAllowed (same-state vendor tax is credited), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full (a purchase invoice with no statedTaxAmount is treated as charged 0; a purchase order is not); a charge matching another state\'s rate or unexplained earns no credit and is flagged for review; the trusted supplier flag does not apply to use tax; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. A state with no local use tax on general purchases is calculated at the state level only.',
+      'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, taxExpectedFromVendorRate, creditAllowed (vendor tax credited up to the use tax), vendorClaim ({ amount, basis OVERCHARGE_VS_EXPECTED | TAX_NOT_DUE } to claim back from the supplier, or null), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full (a purchase invoice with no statedTaxAmount is treated as charged 0; a purchase order is not); a charge matching no known rate is assumed to be a local tax for the delivery state and compared with taxExpectedFromVendor (an excess is OVERCHARGED with a vendorClaim and flagged for review), and a charge at another state\'s rate is credited only when the delivery state\'s rule allows it, otherwise it is claimed from the supplier (TAX_NOT_DUE); taxVerification.overchargeVsExpected is the charge above the expected tax; the trusted supplier flag does not apply to use tax; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. A state with no local use tax on general purchases is calculated at the state level only.',
     inputSchema: CALCULATE_TAX_INPUT_SCHEMA,
   },
   {
@@ -1877,7 +1884,10 @@ const TOOLS = [
       'that fed into compliance threshold monitoring. ' +
       'Purchase rows also return selfAssessedTaxAmount (number; reverse charge / postponed import VAT you ' +
       'self-assessed, 0 when none) and selfAssessedKind (REVERSE_CHARGE | IMPORT_VAT_POSTPONED | USE_TAX | null). ' +
-      'USE_TAX is US consumer\'s use tax on a purchase delivered to an enabled US state.',
+      'USE_TAX is US consumer\'s use tax on a purchase delivered to an enabled US state. ' +
+      'Each row\'s poLink.status is NONE (no purchase order referenced), LINKED (the referenced purchase order exists) or NOT_FOUND ' +
+      '(the invoice references a purchase order that does not exist for this entity); a row committed before this was recorded reads ' +
+      'LINKED when it carries a purchase order reference.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1920,19 +1930,28 @@ const TOOLS = [
     name: 'get_query_fields',
     description:
       'Discover the allowlisted fields, operators, enum values, and limits for query_data, per dataset ' +
-      '("einvoicing_records" or "tax_calculations"). Call this before building filters for query_data — ' +
+      '("einvoicing_records", "tax_calculations" — one row per calculation, including the purchase AP decision: apOutcome, ' +
+      'apReasonCode, useTaxReviewRequired, poLinkStatus — or "tax_calculation_line_items" — one row per line: apOutcome, ' +
+      'apReasonCode, statedTaxAmount, taxAmount, useTax ...). Call this before building filters for query_data — ' +
       'it is the source of truth for what field/operator combinations are currently supported, since the ' +
       'allowlist can change over time. Also returns each dataset\'s default page size, max page size, ' +
-      'max date-range span in days, and default response columns.',
+      'max date-range span in days, and default response columns. Pass dataset to get one dataset only. The answer is ' +
+      'compact by default: an enum with more than 25 values (countries, tax codes) comes back as enumCount, enumSample and ' +
+      'valuesHint instead of the full list; call again with dataset and field for one field with its complete list, or ' +
+      'set compact false to inline everything (very large).',
     inputSchema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        dataset: { type: 'string', enum: ['einvoicing_records', 'tax_calculations', 'tax_calculation_line_items'], description: 'Return this dataset only. Strongly recommended.' },
+        compact: { type: 'boolean', description: 'Default true: reference enums of more than 25 values instead of inlining them. False inlines every enum (about 70 KB for all datasets).' },
+        field: { type: 'string', description: 'With dataset: return only this field, with its complete enum list.' },
+      },
     },
   },
   {
     name: 'query_data',
     description:
-      'Ad-hoc filtered, paginated query over your own einvoicing_records or tax_calculations — the same ' +
+      'Ad-hoc filtered, paginated query over your own einvoicing_records, tax_calculations or tax_calculation_line_items — the same ' +
       'engine behind the Clearvo dashboard\'s "Explore" page. Use this for self-service analysis beyond ' +
       'list_invoices/list_tax_calculations\' fixed filters: arbitrary combinations of allowlisted fields ' +
       '(date range, jurisdiction, status, tax ID, amount, etc.) via `filters`. Call get_query_fields first ' +
@@ -1943,15 +1962,19 @@ const TOOLS = [
       'internals. Rate-limited per API key, stricter than list_invoices/list_tax_calculations. Paginate by ' +
       'passing the previous response\'s nextCursor back in as `cursor` (the cursor is bound to the exact ' +
       'same filters — changing filters mid-pagination invalidates it). Read access is enough — this is the ' +
-      'dashboard\'s Explore tool, available to every member role.',
+      'dashboard\'s Explore tool, available to every member role. Purchase AP decision fields are filterable: on ' +
+      'tax_calculations (and per line on tax_calculation_line_items) apOutcome (ACCEPTED_AS_CHARGED, OVERCHARGED, UNDERCHARGED, HELD), ' +
+      'apReasonCode, useTaxReviewRequired, poLinkStatus (NONE, LINKED, NOT_FOUND), and on line items statedTaxAmount (tax the vendor charged); these are Purchases (AP) data (Enterprise), 403 ap_not_included otherwise. ' +
+      'Example: dataset tax_calculations, filters [{"field":"transactionDirection","operator":"eq","value":"purchase"},' +
+      '{"field":"apOutcome","operator":"in","values":["OVERCHARGED","HELD"]}] with a from date.',
     inputSchema: {
       type: 'object' as const,
       required: ['dataset'],
       properties: {
         dataset: {
           type: 'string',
-          enum: ['einvoicing_records', 'tax_calculations'],
-          description: 'Which dataset to query. See get_query_fields for each dataset\'s allowlisted fields.',
+          enum: ['einvoicing_records', 'tax_calculations', 'tax_calculation_line_items'],
+          description: 'Which dataset to query: einvoicing_records (e-invoices), tax_calculations (one row per calculation) or tax_calculation_line_items (one row per calculation line). See get_query_fields for each dataset\'s allowlisted fields.',
         },
         filters: {
           type: 'array',
@@ -1961,7 +1984,7 @@ const TOOLS = [
             required: ['field', 'operator'],
             properties: {
               field:    { type: 'string', description: 'A field named in this dataset\'s schema (see get_query_fields).' },
-              operator: { type: 'string', enum: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'contains'], description: '"in" requires `values`; every other operator requires `value`.' },
+              operator: { type: 'string', enum: ['eq', 'ne', 'gt', 'lt', 'between', 'in', 'contains', 'isNull'], description: 'Which operators a field accepts is listed per field in get_query_fields. "in" requires `values`; "between" requires `values` [min, max]; "isNull" takes an optional boolean `value`; every other operator requires `value`.' },
               value:    { description: 'Comparison value. Required for every operator except "in".' },
               values:   { type: 'array', description: 'Comparison values. Only valid with operator "in".' },
             },
@@ -3799,8 +3822,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', `/tax/calculation-ledger${q ? `?${q}` : ''}`);
     }
 
-    case 'get_query_fields':
-      return callApi('GET', '/query/fields');
+    case 'get_query_fields': {
+      const { dataset, compact, field } = args as { dataset?: string; compact?: boolean; field?: string };
+      // Compact unless the caller asks otherwise: the full payload is too large for an assistant to use.
+      const qs = new URLSearchParams();
+      if (dataset) qs.set('dataset', dataset);
+      if (field) qs.set('field', field);
+      qs.set('compact', compact === false ? 'false' : 'true');
+      return callApi('GET', `/query/fields?${qs.toString()}`);
+    }
 
     case 'query_data': {
       const { dataset, filters, columns, limit, from, to, cursor } = args as {
