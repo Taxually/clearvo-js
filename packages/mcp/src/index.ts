@@ -1964,7 +1964,7 @@ const TOOLS = [
       'same filters — changing filters mid-pagination invalidates it). Read access is enough — this is the ' +
       'dashboard\'s Explore tool, available to every member role. Purchase AP decision fields are filterable: on ' +
       'tax_calculations (and per line on tax_calculation_line_items) apOutcome (ACCEPTED_AS_CHARGED, OVERCHARGED, UNDERCHARGED, HELD), ' +
-      'apReasonCode, useTaxReviewRequired, poLinkStatus (NONE, LINKED, NOT_FOUND), and on line items statedTaxAmount (tax the vendor charged). ' +
+      'apReasonCode, useTaxReviewRequired, poLinkStatus (NONE, LINKED, NOT_FOUND), and on line items statedTaxAmount (tax the vendor charged); these are Purchases (AP) data (Enterprise), 403 ap_not_included otherwise. ' +
       'Example: dataset tax_calculations, filters [{"field":"transactionDirection","operator":"eq","value":"purchase"},' +
       '{"field":"apOutcome","operator":"in","values":["OVERCHARGED","HELD"]}] with a from date.',
     inputSchema: {
