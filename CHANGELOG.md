@@ -2,6 +2,16 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend buyer-held exemption certificates PR is deployed
+
+Additive: exemption certificates gain `holderRole`: `SELLER_COLLECTED` (a certificate one of this entity's customers gave it; the existing behaviour) or `BUYER_HELD` (a certificate this entity holds as a buyer and gives its suppliers; applied only to its own purchase-direction calculations). Buyer-held certificates belong to Purchases (AP), an Enterprise-only sub-solution: without it `BUYER_HELD` returns 403 `ap_not_included` or `ap_not_enabled`; with it `holderRole` is required on `POST` and `GET /v1/tax/exemptions` (400 `holder_role_required`). `customerRef` is required for `SELLER_COLLECTED` and must be omitted for `BUYER_HELD`. A buyer-held certificate is created active. `certificateType` gains `INGREDIENT_COMPONENT`; Ireland's `EXPORT_AUTHORIZATION` (form 56B) is allowed for both roles.
+
+- MCP: `create_exemption_certificate` gains `holderRole`, `customerRef` is now optional (SELLER_COLLECTED only), `certificateType` adds `INGREDIENT_COMPONENT`, and the description is rewritten. New read-only tool `list_exemption_certificates` (`holderRole`, `status`, `country`, `region`, `page`, `limit`, `entityId`).
+- SDK types: `ExemptionHolderRole`, `ExemptionCertificateApplied`, `CertificateHint`, `HeldCertificateRecovery`, `ApDecisionWebhookPayload`; purchase calculation lines gain `exemption`, `certificateHint` and `recovery`; `taxVerification.reasonCode` gains `EXEMPT_CERT_ON_FILE_TAX_CHARGED` (outcome OVERCHARGED: the charged tax is non-deductible; recover it from the supplier first, there is no state refund path).
+- Webhook: `ap.decision` payload gains `certificateId` and `recovery`.
+- Certificates apply conservatively: only when category-scoped or the line's intended use (`customProperties.intendedUse`, or `accountAssignment: "stock"` for resale) matches the certificate type; validity is judged on the document date. Otherwise the line carries a `certificateHint` and its tax is unchanged.
+- SDK and CLI have no exemption-certificate methods or commands today, so none were added.
+
 ## Unreleased — publish only AFTER the backend Explore AP decision fields PR is deployed
 
 Additive: Explore can filter the purchase decision, the calculation list distinguishes a missing purchase order, and the field list can be requested in a small form.

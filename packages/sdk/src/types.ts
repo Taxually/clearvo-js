@@ -1233,6 +1233,22 @@ export interface TaxCalculateResponse {
     /** US consumer's use tax detail; present only on a purchase line delivered to a US state enabled for use tax. */
     useTax?: TaxCalcUseTax;
     /**
+     * An exemption certificate was applied to this line. On a purchase line this is a buyer-held certificate
+     * (`holderRole: 'BUYER_HELD'`), applied only when it is category-scoped or the line's intended use maps to its type.
+     * Absent when no certificate was applied.
+     */
+    exemption?: ExemptionCertificateApplied;
+    /**
+     * Purchase lines only: a buyer-held certificate was found for this line's destination but not applied (the use is not
+     * confirmed to be the exempt use, or the certificate had lapsed on the document date). The line's tax is unchanged.
+     */
+    certificateHint?: CertificateHint;
+    /**
+     * Purchase lines only: present on a line an applied buyer-held certificate covers and the supplier charged tax on.
+     * `amount` is the tax charged; recover it from the supplier first (credit or refund). There is no state refund path.
+     */
+    recovery?: HeldCertificateRecovery;
+    /**
      * `transactionDirection: 'purchase'` only — the vendor-charged-tax
      * verification result for this line (AP decision layer, lib/ap/decision.ts
      * on the backend). Always present alongside a supplied statedTaxAmount on
@@ -1246,7 +1262,8 @@ export interface TaxCalculateResponse {
         | 'WITHIN_TOLERANCE' | 'TRUSTED_SUPPLIER_OVERRIDE' | 'OVERCHARGE_EXCEEDS_TOLERANCE'
         | 'UNDERCHARGE_EXCEEDS_TOLERANCE' | 'PO_DISPOSITION_HOLD' | 'REVERSE_CHARGE_VAT_WRONGLY_CHARGED'
         | 'TAX_CHARGED_ON_ZERO_LIABILITY_LINE' | 'NO_TAX_DUE_NONE_CHARGED' | 'IMPORT_TAX_PAID_AT_BORDER'
-        | 'USE_TAX_SELF_ASSESSED' | 'USE_TAX_SHORTFALL_SELF_ASSESSED' | 'USE_TAX_VENDOR_CHARGE_REVIEW';
+        | 'USE_TAX_SELF_ASSESSED' | 'USE_TAX_SHORTFALL_SELF_ASSESSED' | 'USE_TAX_VENDOR_CHARGE_REVIEW'
+        | 'EXEMPT_CERT_ON_FILE_TAX_CHARGED';
       /** statedTaxAmount - calculatedTaxAmount, rounded to 2dp. */
       legalDelta: number;
       /** 0 when outcome is ACCEPTED_AS_CHARGED; equal to legalDelta otherwise — the true remaining reportable exposure. */
@@ -3808,6 +3825,45 @@ export interface TaxCalcShipTo {
   line1?: string;
   line2?: string;
   city?: string;
+}
+
+/** Who holds an exemption certificate. SELLER_COLLECTED: a certificate one of this entity's customers gave it. BUYER_HELD: a certificate this entity holds as a buyer (needs Purchases/AP, Enterprise); applied only to its own purchase-direction calculations. */
+export type ExemptionHolderRole = 'SELLER_COLLECTED' | 'BUYER_HELD';
+
+/** The certificate applied to a calculation line. */
+export interface ExemptionCertificateApplied {
+  certificateId: string;
+  certificateRef: string;
+  certificateType: string;
+  effectiveTo: string | null;
+}
+
+/** A certificate was found for the line's destination but not applied; the tax is unchanged. */
+export type CertificateHint = 'CERT_COVERS_JURISDICTION_USE_UNCONFIRMED' | 'CERT_LAPSED_ON_PURCHASE_DATE';
+
+/** Vendor-first recovery signal: the supplier charged tax on a line an applied certificate covers. */
+export interface HeldCertificateRecovery {
+  path: 'VENDOR_CREDIT_OR_REFUND';
+  amount: number;
+  certificateId: string;
+}
+
+/** Payload of the `ap.decision` webhook. */
+export interface ApDecisionWebhookPayload {
+  event: 'ap.decision';
+  calculationId: string;
+  entityId: string;
+  supplierRef: string | null;
+  outcome: 'ACCEPTED_AS_CHARGED' | 'UNDERCHARGED' | 'OVERCHARGED' | 'HELD';
+  reasonCode: string;
+  legalDelta: number;
+  appliedDelta: number;
+  warning: string | null;
+  /** The buyer-held certificate applied to the calculation's lines; null when none. */
+  certificateId: string | null;
+  /** Vendor-first recovery across the covered lines the supplier charged tax on (amounts summed); null when none. */
+  recovery: HeldCertificateRecovery | null;
+  recordedAt: string;
 }
 
 /** What the vendor most plausibly charged, inferred from the stated tax (US use tax). */
