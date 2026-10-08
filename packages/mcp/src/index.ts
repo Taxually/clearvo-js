@@ -2146,21 +2146,26 @@ const TOOLS = [
   {
     name: 'create_exemption_certificate',
     description:
-      'Record a tax exemption certificate belonging to one of this entity\'s CUSTOMERS — not a certificate for the ' +
-      'entity itself. An exemption certificate is a document a customer provides (e.g. a US resale certificate, ' +
-      'manufacturing exemption, nonprofit exemption letter, or Ireland\'s Section 56 export authorisation) ' +
-      'proving they do not owe tax on a purchase. Only call this when you know a specific customer holds one; ' +
-      'there is no default or fallback certificate. Valid certificateType/formType combinations depend on ' +
-      'country and are validated server-side — an unsupported combination (including any country other than ' +
-      'US or IE) is rejected with an error, not silently accepted. Once created, reference it via customer.ref ' +
-      'matching customerRef during calculate_tax so the exemption is automatically applied to eligible line ' +
-      'items. Call upload_exemption_document afterwards if you have the signed PDF to attach.',
+      'Record a tax exemption certificate. holderRole SELLER_COLLECTED (the default when this entity has no ' +
+      'Purchases/AP): a certificate one of this entity\'s CUSTOMERS gave it, proving they do not owe sales tax on ' +
+      'their purchase (e.g. a US resale certificate, manufacturing exemption, nonprofit letter); reference it via ' +
+      'customer.ref matching customerRef during calculate_tax so the exemption is applied to eligible lines. ' +
+      'holderRole BUYER_HELD (needs Purchases/AP, Enterprise): a certificate THIS entity holds as a buyer and gives ' +
+      'its suppliers (e.g. a resale or ingredient/component certificate, or Ireland\'s 56B authorisation); it has no ' +
+      'customerRef and is applied to this entity\'s own purchase calculations (transactionDirection "purchase") only ' +
+      'when it is category-scoped or the line\'s intended use matches. Clearvo stores the certificate; the holder ' +
+      'makes the declaration and Clearvo gives no liability shield. When this entity has Purchases/AP, holderRole is ' +
+      'required (400 holder_role_required). Only call this when you know a specific certificate exists; there is no ' +
+      'default or fallback certificate. Valid certificateType/formType combinations depend on country and are ' +
+      'validated server-side — an unsupported combination (including any country other than US or IE) is rejected ' +
+      'with an error, not silently accepted. Call upload_exemption_document afterwards if you have the signed PDF to attach.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         certificateRef: { type: 'string', description: 'Your internal reference for this certificate (e.g. "EXEMPT-2024-001").' },
-        customerRef: { type: 'string', description: 'Your internal customer reference. Matched against customer.ref on calculate_tax requests to auto-apply this exemption.' },
-        certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER', 'EXPORT_AUTHORIZATION'], description: 'Type of exemption claimed. RESALE/MANUFACTURING/AGRICULTURAL/ENERGY/EXEMPT_ORG/GOVERNMENT/DIRECT_PAY/BLANKET_OTHER are for country="US". EXPORT_AUTHORIZATION is for country="IE" only — Ireland\'s Revenue-issued Section 56 ("56B") authorisation letting a habitual exporter buy most goods/services at 0% VAT (excludes food/drink, accommodation, entertainment, personal services).' },
+        holderRole: { type: 'string', enum: ['SELLER_COLLECTED', 'BUYER_HELD'], description: 'Who holds the certificate: SELLER_COLLECTED = a customer gave it to this entity; BUYER_HELD = this entity holds it as a buyer (needs Purchases/AP; 403 ap_not_included / ap_not_enabled without it). Required when this entity has Purchases/AP; omit otherwise (it is SELLER_COLLECTED).' },
+        customerRef: { type: 'string', description: 'SELLER_COLLECTED only (required there, must be omitted for BUYER_HELD): your internal customer reference. Matched against customer.ref on calculate_tax requests to auto-apply this exemption.' },
+        certificateType: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'INGREDIENT_COMPONENT', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER', 'EXPORT_AUTHORIZATION'], description: 'Type of exemption claimed. RESALE/MANUFACTURING/INGREDIENT_COMPONENT/AGRICULTURAL/ENERGY/EXEMPT_ORG/GOVERNMENT/DIRECT_PAY/BLANKET_OTHER are for country="US". INGREDIENT_COMPONENT covers goods that become an ingredient or component of a product the holder makes and sells. EXPORT_AUTHORIZATION is for country="IE" only — Ireland\'s Revenue-issued Section 56 ("56B") authorisation letting a habitual exporter buy most goods/services at 0% VAT (excludes food/drink, accommodation, entertainment, personal services); allowed for both holder roles.' },
         formType: { type: 'string', enum: ['SST', 'MTC', 'CUSTOM', '56B'], description: 'Standard form type. Optional for US (SST/MTC/CUSTOM, or a state-specific form code not in this enum). Required and must be "56B" when certificateType is EXPORT_AUTHORIZATION.' },
         customerName: { type: 'string', description: 'Exempt customer\'s name.' },
         customerTaxId: { type: 'string', description: 'Exempt customer\'s tax ID.' },
@@ -2171,7 +2176,27 @@ const TOOLS = [
         effectiveTo: { type: 'string', description: 'Expiry date, YYYY-MM-DD. Omit for open-ended certificates. For IE, use the expiry date printed on the Revenue authorisation.' },
         entityId: { type: 'string', description: 'Entity to create the certificate under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
-      required: ['certificateRef', 'customerRef', 'certificateType', 'effectiveFrom'],
+      required: ['certificateRef', 'certificateType', 'effectiveFrom'],
+    },
+  },
+  {
+    name: 'list_exemption_certificates',
+    description:
+      'List this entity\'s exemption certificates, grouped by certificateRef (regions aggregated). holderRole selects which ' +
+      'kind: SELLER_COLLECTED = certificates its customers gave it, BUYER_HELD = certificates it holds as a buyer (needs ' +
+      'Purchases/AP). When this entity has Purchases/AP, holderRole is required (400 holder_role_required); without ' +
+      'it the list is SELLER_COLLECTED and BUYER_HELD returns 403 ap_not_included / ap_not_enabled.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        holderRole: { type: 'string', enum: ['SELLER_COLLECTED', 'BUYER_HELD'], description: 'Which certificates to list. Required when this entity has Purchases/AP.' },
+        status: { type: 'string', enum: ['ACTIVE', 'EXPIRING_SOON', 'EXPIRED', 'REVOKED'], description: 'Filter by status.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code filter.' },
+        region: { type: 'string', description: 'State or region code filter.' },
+        page: { type: 'number', description: 'Page number, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Results per page (default 25, max 100)' },
+        entityId: { type: 'string', description: 'Entity to list certificates for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
     },
   },
   {
@@ -3624,6 +3649,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'create_exemption_certificate': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/tax/exemptions', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_exemption_certificates': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      const qs = new URLSearchParams();
+      for (const k of ['holderRole', 'status', 'country', 'region', 'page', 'limit'] as const) if (rest[k] !== undefined) qs.set(k, String(rest[k]));
+      const q = qs.toString();
+      return callApi('GET', `/tax/exemptions${q ? `?${q}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'upload_exemption_document': {
