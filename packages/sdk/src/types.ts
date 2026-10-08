@@ -1003,8 +1003,10 @@ export interface TaxCalculateRequest {
     weight?: { value: number; unit: 'kg' | 'g' | 'lb' | 'oz' };
     /** Per-line dispatch address; overrides the transaction `shipFrom` for this line (a second warehouse is a second consignment). */
     shipFrom?: TaxCalcShipFrom;
-    /** Purchase only: where this line is delivered; overrides the transaction `shipTo`. A US address makes the line US consumer's use tax. */
+    /** Purchase only: where this line is delivered; used for US use tax and as the destination. Overrides the transaction `shipTo`; omitted falls back to it, then to the entity address. A US address makes the line US consumer's use tax. */
     shipTo?: TaxCalcShipTo;
+    /** Purchase only: goods or services (upper case). Without it the line still gets a rate but its outcome is `UNKNOWN_TREATMENT` / `missing_supply_type`. Ignored on a sale. */
+    supplyType?: 'GOODS' | 'SERVICES';
     amountIncludesTax?: boolean;
     /**
      * When true, the customer claims exemption for this line item with no
@@ -1760,8 +1762,12 @@ export interface TaxCalculationSummary {
   /** The purchase-order reference: a purchase_order row's own id, otherwise the first line's purchaseOrderId; null when not linked. */
   purchaseOrderId: string | null;
   purchaseOrderLineNumber: string | null;
-  /** Cheap link summary (null on a purchase_order row): LINKED when a reference exists, else NONE. */
-  poLink: { status: 'NONE' | 'LINKED'; purchaseOrderId: string | null; purchaseOrderLineNumber: string | null } | null;
+  /**
+   * Link summary (null on a purchase_order row): NONE (no PO referenced), LINKED (the referenced PO exists) or NOT_FOUND (the
+   * invoice references a PO that does not exist for this entity), resolved when the calculation was committed. A row committed
+   * before this was recorded reads LINKED when it carries a reference.
+   */
+  poLink: { status: 'NONE' | 'LINKED' | 'NOT_FOUND'; purchaseOrderId: string | null; purchaseOrderLineNumber: string | null } | null;
   /** Tax self-assessed on a purchase (reverse charge / postponed import VAT). 0 for sales and rows recorded before this field existed. */
   selfAssessedTaxAmount: number;
   /** Why it was self-assessed. USE_TAX is reserved for US consumer's use tax and is not returned yet. */
@@ -2256,16 +2262,16 @@ export interface GetSiiReconciliationResponse {
 
 // ── Data Query Tool ──────────────────────────────────────────────────────────
 
-export type QueryDataset = 'einvoicing_records' | 'tax_calculations';
+export type QueryDataset = 'einvoicing_records' | 'tax_calculations' | 'tax_calculation_line_items';
 
-export type QueryFilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains';
+export type QueryFilterOperator = 'eq' | 'ne' | 'gt' | 'lt' | 'between' | 'in' | 'contains' | 'isNull';
 
 export interface QueryFilter {
   field: string;
   operator: QueryFilterOperator;
-  /** Required for every operator except 'in', which uses `values` instead. */
+  /** Required for every operator except 'in' and 'between' (which use `values`) and 'isNull' (optional boolean). */
   value?: string | number | boolean;
-  /** Only valid with operator 'in'. */
+  /** Valid with operator 'in' (a list) and 'between' ([min, max]). */
   values?: Array<string | number | boolean>;
 }
 
@@ -2296,10 +2302,27 @@ export interface QueryFieldDefinition {
   field: string;
   type: string;
   operators: QueryFilterOperator[];
-  enumValues?: string[];
+  /** Allowed values with their labels. Absent in compact mode on an enum of more than 25 values (see enumCount). */
+  enumValues?: Array<{ code: string; label: string }>;
+  /** Compact mode only: size of the omitted enum list. */
+  enumCount?: number;
+  /** Compact mode only: the first few codes of the omitted list. */
+  enumSample?: string[];
+  /** Compact mode only: how to fetch the complete list (pass `dataset` and `field`). */
+  valuesHint?: string;
   indexed: boolean;
   computed?: boolean;
+  sortable?: boolean;
   currencySemantics?: string;
+}
+
+export interface QueryFieldsParams {
+  /** Return this dataset only. */
+  dataset?: QueryDataset;
+  /** Reference enums of more than 25 values (countries, tax codes) as enumCount / enumSample instead of inlining them. */
+  compact?: boolean;
+  /** With `dataset`: return only this field, with its complete enum list. */
+  field?: string;
 }
 
 export interface QueryDatasetSchema {
@@ -2313,7 +2336,10 @@ export interface QueryDatasetSchema {
 
 export interface QueryFieldsResponse {
   schemaVersion: string;
-  datasets: Record<QueryDataset, QueryDatasetSchema>;
+  /** Present (true) only on a compact response. */
+  compact?: boolean;
+  /** Every dataset, or only the one asked for with `dataset`. */
+  datasets: Partial<Record<QueryDataset, QueryDatasetSchema>>;
 }
 
 export type ClientTaxCodeDirection = 'sale' | 'purchase';

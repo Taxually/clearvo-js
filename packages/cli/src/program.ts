@@ -1420,7 +1420,7 @@ export function createProgram(): Command {
   // Ad-hoc filtered/paginated query over einvoicing_records or tax_calculations —
   // the same engine behind the dashboard's "Explore" page. Run `query fields`
   // first to see the allowlisted fields/operators/enums for a dataset.
-  const query = program.command('query').description('Filtered, paginated query over einvoicing_records or tax_calculations');
+  const query = program.command('query').description('Filtered, paginated query over einvoicing_records, tax_calculations or tax_calculation_line_items');
   
   function parseFilterOption(raw: string): { field: string; operator: string; value?: string; values?: string[] } {
     const [field, operator, ...rest] = raw.split(':');
@@ -1429,7 +1429,7 @@ export function createProgram(): Command {
       process.exit(1);
     }
     const rawValue = rest.join(':');
-    if (operator === 'in') {
+    if (operator === 'in' || operator === 'between') {
       return { field, operator, values: rawValue.split(',') };
     }
     return { field, operator, value: rawValue };
@@ -1437,18 +1437,23 @@ export function createProgram(): Command {
   
   query
     .command('fields <dataset>')
-    .description('List the allowlisted fields, operators, enum values, and limits for a dataset (einvoicing_records | tax_calculations)')
+    .description('List the allowlisted fields, operators, enum values, and limits for a dataset (einvoicing_records | tax_calculations | tax_calculation_line_items)')
+    .option('--compact', 'Reference enums of more than 25 values (countries, tax codes) as a count and sample instead of listing them')
+    .option('--field <field>', 'Show only this field, with its complete enum list')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (dataset: string, opts: { pretty?: boolean }) => {
-      const result = await api('GET', '/query/fields') as { datasets: Record<string, unknown> };
+    .action(async (dataset: string, opts: { compact?: boolean; field?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams({ dataset });
+      if (opts.compact) qs.set('compact', 'true');
+      if (opts.field) qs.set('field', opts.field);
+      const result = await api('GET', `/query/fields?${qs}`) as { datasets: Record<string, unknown> };
       print(result.datasets?.[dataset] ?? result, !!opts.pretty);
     });
   
   query
     .command('run')
     .description('Run a filtered, paginated query. Use "query fields <dataset>" to see valid --filter field:operator:value combinations. Read access is enough.')
-    .requiredOption('--dataset <dataset>', 'einvoicing_records | tax_calculations')
-    .option('--filter <field:operator:value>', 'Repeatable. operator is one of eq|neq|gt|gte|lt|lte|in|contains ("in" takes comma-separated values)', (val: string, prev: string[]) => [...prev, val], [] as string[])
+    .requiredOption('--dataset <dataset>', 'einvoicing_records | tax_calculations | tax_calculation_line_items')
+    .option('--filter <field:operator:value>', 'Repeatable. operator is one of eq|ne|gt|lt|between|in|contains|isNull ("in" and "between" take comma-separated values; e.g. apOutcome:in:OVERCHARGED,HELD)', (val: string, prev: string[]) => [...prev, val], [] as string[])
     .option('--columns <fields>', 'Comma-separated allowlisted field names to return (default: dataset defaults)')
     .option('--limit <n>', 'Rows per page (default 25, max 100)')
     .option('--from <date>', 'Inclusive lower bound on the dataset\'s canonical timestamp field')

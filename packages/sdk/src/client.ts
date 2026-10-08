@@ -74,6 +74,7 @@ import type {
   QueryRequestParams,
   QueryResponse,
   QueryFieldsResponse,
+  QueryFieldsParams,
   ListClientTaxCodesResponse,
   CreateClientTaxCodeInput,
   UpdateClientTaxCodeInput,
@@ -654,7 +655,8 @@ export class ClearvoClient {
   // ── Data Query Tool ────────────────────────────────────────────────────────
 
   /**
-   * Filtered, paginated query over einvoicing_records or tax_calculations.
+   * Filtered, paginated query over einvoicing_records, tax_calculations or tax_calculation_line_items (purchase decision fields:
+   * apOutcome, apReasonCode, useTaxReviewRequired, poLinkStatus, statedTaxAmount).
    * Fields, operators, and enum values are allowlisted per dataset — call
    * getQueryFields() to discover what's currently supported before building
    * `filters`/`columns`. Read access is enough — this is the dashboard's
@@ -665,9 +667,17 @@ export class ClearvoClient {
     return this.request('POST', '/query', { dataset, filters, columns, limit, from, to, cursor });
   }
 
-  /** Discoverable schema for queryData(): allowlisted fields, operators, enums, and limits per dataset. */
-  getQueryFields(): Promise<QueryFieldsResponse> {
-    return this.request('GET', '/query/fields');
+  /**
+   * Discoverable schema for queryData(): allowlisted fields, operators, enums, and limits per dataset. With no
+   * parameters it returns every dataset with every enum inlined (about 70 KB); pass `dataset`, `compact` or `field` to narrow it.
+   */
+  getQueryFields(params: QueryFieldsParams = {}): Promise<QueryFieldsResponse> {
+    const qs = new URLSearchParams();
+    if (params.dataset) qs.set('dataset', params.dataset);
+    if (params.compact !== undefined) qs.set('compact', String(params.compact));
+    if (params.field) qs.set('field', params.field);
+    const q = qs.toString();
+    return this.request('GET', `/query/fields${q ? `?${q}` : ''}`);
   }
 
   // ── Client Tax Codes ──────────────────────────────────────────────────────
