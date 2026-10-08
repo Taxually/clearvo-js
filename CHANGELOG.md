@@ -2,6 +2,14 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend use tax vendor claim PR is deployed
+
+Additive: US use tax `lineItems[].useTax` gains `vendorClaim` (`{ amount, basis: "OVERCHARGE_VS_EXPECTED" | "TAX_NOT_DUE" }` or `null`) and `taxExpectedFromVendorRate`; `taxVerification.overchargeVsExpected` and `poComparison.poTaxExpectedFromVendor` / `invoiceTaxExpectedFromVendor` on use tax lines. New assumptions `UNEXPLAINED_CHARGE_ASSUMED_LOCAL`, `OTHER_STATE_CHARGE_NOT_CREDITED`, `OTHER_STATE_CHARGE_CREDITED`.
+
+- SDK: `TaxCalcUseTax.vendorClaim`, `taxExpectedFromVendorRate`; `taxVerification.overchargeVsExpected` and the two poComparison fields.
+- MCP `calculate_tax`: the use tax description names the vendor claim and the new treatment.
+- Behaviour: a charge matching no known rate is assumed local for the delivery state and credited up to the use tax; above the expected tax it is `OVERCHARGED` with a claim. A charge at another state's rate is credited only where the delivery state's rule allows it, else claimed whole (`TAX_NOT_DUE`). CLI: no change.
+
 ## Unreleased — publish only AFTER the backend US use tax PR is deployed
 
 Additive: US consumer's use tax on purchases. `POST /v1/tax/calculate` with `transactionDirection: "purchase"` accepts `shipTo` (request level) and `lineItems[].shipTo`; a purchase delivered to a US state enabled for use tax returns `lineItems[].useTax` (use location with basis, tax due, tax charged by the vendor, credit allowed, self-assessed amount, per-authority breakdown, assumptions, vendor-charge story) and the response header `selfAssessedTaxAmount` / `selfAssessedKind: "USE_TAX"`. New `taxVerification.reasonCode` values `USE_TAX_SELF_ASSESSED`, `USE_TAX_SHORTFALL_SELF_ASSESSED`, `USE_TAX_VENDOR_CHARGE_REVIEW`.
