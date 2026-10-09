@@ -106,6 +106,7 @@ async function callApi(
       `HTTP ${res.status}: ${errorText}`,
       err.hint ? `Hint: ${err.hint}` : null,
       err.field ? `Field: ${err.field}` : null,
+      err.code ? `Code: ${err.code}` : null,
     ].filter(Boolean).join('\n');
     throw new Error(msg);
   }
@@ -257,6 +258,10 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
         },
       },
     },
+    customProperties: {
+      type: 'object',
+      description: 'Header-level open, customer-defined fact bag. For data that is NOT part of our schema: every key must already be defined via the rules-engine property-definition API (create_rule_property_definition) — an undefined key returns a 400 UNKNOWN_CUSTOM_PROPERTY naming the key and a fixUrl to define it, and a key that names a built-in field (e.g. glAccount, costCenter, intendedUse, accountAssignment, commodityCode) returns a 400 BUILT_IN_PROPERTY_AS_CUSTOM. Values are string/number/boolean.',
+    },
     shipFrom: {
       type: 'object',
       description: 'Where the goods are dispatched from. With duties on, a dispatch place in a different customs territory from the destination makes the consignment a customs crossing; a line-level shipFrom overrides it for that line (a second warehouse is a second consignment). customsStatus "bonded" marks stock held under customs control, so leaving it is a crossing even within one territory.',
@@ -317,8 +322,13 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
           classificationCodes: CLASSIFICATION_CODES_SCHEMA,
           taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
           commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff; for rate-band lookup, matching is jurisdiction-scoped by the line\'s own resolved country; with duties on, this is the code the duty is priced at, see commodityCodeScheme). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
-          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block). Not the AP fact customProperties.commodityCodeScheme.' },
+          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block).' },
           countryOfOrigin: { type: 'string', description: 'Two-letter country the goods were made in, read only when duties are on. Never inferred from shipFrom. Falls back to the product catalogue, then defaultCountryOfOrigin.' },
+          glAccount: { type: 'string', description: 'Purchase side: the general-ledger account this line is booked to (max 50 characters). Rules can read and write it as the property "glAccount" (e.g. map a GL account to a tax category). Echoed post-rule on the response line. Not accepted inside customProperties.' },
+          costCenter: { type: 'string', description: 'Purchase side: the cost centre this line is booked to (max 50 characters). Rules can read and write it as "costCenter". Echoed post-rule. Not accepted inside customProperties.' },
+          intendedUse: { type: 'string', description: 'Purchase side: what the buyer intends to use the goods/services for, free text (max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate to the line. Rules can read and write it as "intendedUse". Echoed post-rule. Not accepted inside customProperties.' },
+          accountAssignment: { type: 'string', description: 'Purchase side: how the line is assigned in your books — "stock", "expense", "asset" or "project". A raw ERP code (SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string) is also accepted and mapped onto those four by the account_assignment_map dataset; a code with no mapping is dropped with a warning. The response always echoes one of the four. "stock" means a resale line for buyer-held certificate matching. Rules can read and write it as "accountAssignment". Not accepted inside customProperties.' },
+          customProperties: { type: 'object', description: 'Per-line open, customer-defined fact bag for data that is NOT part of our schema — same validation contract as the header-level field of the same name. Response echoes the post-rule (effective) value.' },
           supplyType: {
             type: 'string',
             enum: ['GOODS', 'SERVICES'],
@@ -3297,12 +3307,12 @@ const TOOLS = [
   },
   {
     name: 'list_rule_property_definitions',
-    description: 'List custom property definitions visible to this key — its own scope\'s definitions plus every platform (Global/system) one, e.g. the AP facts glAccount/costCenter/accountAssignment/intendedUse. A condition/action names one as "customProperties.<propertyKey>".',
+    description: 'List the custom property definitions visible to this key — its own scope\'s definitions only. Built-in fields (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) are NOT custom properties; get_rules_engine_schema lists them. A condition/action names a custom one as "customProperties.<propertyKey>".',
     inputSchema: { type: 'object' as const, properties: { entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } } },
   },
   {
     name: 'create_rule_property_definition',
-    description: 'Define a new custom property (referenced by rules as "customProperties.<propertyKey>"). 409 if propertyKey already exists at this scope.',
+    description: 'Define a new custom property for data that is NOT part of our schema (referenced by rules as "customProperties.<propertyKey>"). 409 if propertyKey already exists at this scope; 422 if propertyKey is a built-in field name (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) — those are regular fields, not custom ones.',
     inputSchema: {
       type: 'object' as const,
       properties: {

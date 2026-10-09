@@ -213,7 +213,8 @@ export class ClearvoClient {
         response.status,
         String(data.error ?? `HTTP ${response.status}`),
         typeof data.hint === 'string' ? data.hint : undefined,
-        typeof data.field === 'string' ? data.field : undefined
+        typeof data.field === 'string' ? data.field : undefined,
+        typeof data.code === 'string' ? data.code : undefined
       );
     }
 
@@ -1011,7 +1012,7 @@ export class ClearvoClient {
     return this.request('POST', '/rules-engine/rules/simulate', body, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
-  /** Custom property definitions visible to this key — its own scope plus every platform (Global/system) one. */
+  /** Custom property definitions of this key's own scope. Built-in fields (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) are not custom properties; getRulesEngineSchema() lists them. */
   listRulePropertyDefinitions(entityId?: string): Promise<ListRulePropertyDefinitionsResponse> {
     return this.request('GET', '/rules-engine/properties', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
