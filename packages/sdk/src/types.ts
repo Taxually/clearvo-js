@@ -838,6 +838,19 @@ export interface TaxCalcPartyInput {
  * `'customer'` for a purchase) tells you which response party block is
  * your own entity.
  */
+/** The closed set of stored and echoed `accountAssignment` values on a tax calculation line. */
+export type AccountAssignment = 'stock' | 'expense' | 'asset' | 'project';
+
+/**
+ * Error `code` values on the calculate and rules-engine routes that concern `customProperties`.
+ * `BUILT_IN_PROPERTY_AS_CUSTOM` (HTTP 400): a built-in field name (glAccount, costCenter, intendedUse, accountAssignment,
+ * commodityCode, commodityCodeScheme, ...) was sent under `customProperties`, or named as `customProperties.<built-in>` in a rule.
+ * Its message names the flat field to send instead, e.g. `lineItems[1].glAccount`.
+ * `UNKNOWN_CUSTOM_PROPERTY` (HTTP 400): a `customProperties` key has no property definition.
+ * `ClearvoError.code` is typed as this union plus an open string, because the API has other codes.
+ */
+export type CustomPropertyErrorCode = 'BUILT_IN_PROPERTY_AS_CUSTOM' | 'UNKNOWN_CUSTOM_PROPERTY';
+
 export interface TaxCalculateRequest {
   currency: string;
   commit?: boolean;
@@ -1034,11 +1047,25 @@ export interface TaxCalculateRequest {
     purchaseOrderId?: string;
     /** Which PO line `poLink` resolves against, when the PO header may omit it. */
     purchaseOrderLineNumber?: string;
+    /** Purchase side: the general-ledger account this line is booked to (free text, max 50 characters). Rules read and write it as `glAccount`. Echoed post-rule on the response line. Never goes inside `customProperties`. */
+    glAccount?: string;
+    /** Purchase side: the cost centre this line is booked to (free text, max 50 characters). Rules read and write it as `costCenter`. Echoed post-rule. Never goes inside `customProperties`. */
+    costCenter?: string;
+    /** Purchase side: what the buyer intends to use the goods or services for (free text, max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate. Rules read and write it as `intendedUse`. Echoed post-rule. */
+    intendedUse?: string;
     /**
-     * Per-line custom facts a rules-engine condition/action can read/write
-     * as `customProperties.<key>` — e.g. glAccount, costCenter,
-     * commodityCode, accountAssignment, intendedUse (the AP buyer-side
-     * inputs). Call getRulePropertyDefinitions() for the closed set.
+     * Purchase side: how the line is assigned in the buyer's books. On input, one of `stock`, `expense`, `asset`, `project`, or a raw ERP code (an SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string),
+     * which the `account_assignment_map` dataset maps onto those four; a code with no mapping is dropped with the `AP_ACCOUNT_ASSIGNMENT_UNKNOWN` warning.
+     * The response always echoes one of the four (see {@link AccountAssignment}). Max 50 characters. Rules read and write it as `accountAssignment`.
+     */
+    accountAssignment?: AccountAssignment | (string & {});
+    /**
+     * Per-line custom facts for data that is NOT part of the platform schema.
+     * A rules-engine condition/action reads/writes one as `customProperties.<key>`.
+     * Every key must be defined first with createRulePropertyDefinition(); an undefined key
+     * is a 400 `UNKNOWN_CUSTOM_PROPERTY`. A built-in field name here (glAccount, costCenter,
+     * intendedUse, accountAssignment, commodityCode, commodityCodeScheme, ...) is a
+     * 400 `BUILT_IN_PROPERTY_AS_CUSTOM`: send it as the regular line field instead.
      */
     customProperties?: Record<string, string | number | boolean>;
   }>;
@@ -1054,10 +1081,11 @@ export interface TaxCalculateRequest {
    */
   documentStage?: 'purchase_order' | 'invoice';
   /**
-   * Header-level custom facts a rules-engine condition/action can read/write
-   * as `customProperties.<key>` (call getRulePropertyDefinitions() for the
-   * closed set of keys visible to this key's own scope). Same contract as
-   * the per-line `customProperties` below.
+   * Header-level custom facts for data that is NOT part of the platform schema,
+   * read/written by a rules-engine condition/action as `customProperties.<key>`
+   * (listRulePropertyDefinitions() returns the keys defined in this key's own
+   * scope). Same contract as the per-line `customProperties` below, including the
+   * 400 `BUILT_IN_PROPERTY_AS_CUSTOM` for a built-in field name.
    */
   customProperties?: Record<string, string | number | boolean>;
 }
@@ -1300,6 +1328,14 @@ export interface TaxCalculateResponse {
     poLink?: 'NONE' | 'NOT_FOUND' | 'LINKED';
     /** This line's customProperties bag, post-rule (the effective values the engine actually used, echoing back any rule-authored writes). */
     customProperties?: Record<string, string | number | boolean>;
+    /** Post-rule value, including one carried through from the linked purchase order line. Omitted when the line has none. */
+    glAccount?: string;
+    /** Post-rule value (see `glAccount`). Omitted when the line has none. */
+    costCenter?: string;
+    /** Post-rule value, including one carried through from the linked purchase order line when the request did not state it. Omitted when the line has none. */
+    intendedUse?: string;
+    /** Post-rule value; always one of the four, never a raw ERP code (an unmappable code is dropped, not echoed). Omitted when the line has none. */
+    accountAssignment?: AccountAssignment;
   }>;
   /**
    * Rules-engine (docs/features/rules-engine/discovery.md's Resolved
@@ -3345,14 +3381,13 @@ export interface RulePropertyDefinition {
   tenantId: string | null;
   organisationId: string | null;
   entityId: string | null;
-  /** The catalog path a condition/action actually names, e.g. "customProperties.glAccount". */
+  /** The catalog path a condition/action actually names, e.g. "customProperties.poApprover". */
   property: string;
   propertyKey: string;
   label: string;
   dataType: 'string' | 'number' | 'boolean';
   appliesTo: 'line' | 'header';
   isWritable: boolean;
-  isSystem: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -3363,7 +3398,7 @@ export interface ListRulePropertyDefinitionsResponse {
 }
 
 export interface CreateRulePropertyDefinitionInput {
-  /** Must start with a letter; letters/numbers/underscore only. */
+  /** Must start with a letter; letters/numbers/underscore only. For data that is not in the platform schema: a built-in field name (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) is refused with HTTP 422. */
   propertyKey: string;
   label: string;
   dataType: 'string' | 'number' | 'boolean';
@@ -3805,7 +3840,9 @@ export class ClearvoError extends Error {
     public readonly status: number,
     message: string,
     public readonly hint?: string,
-    public readonly field?: string
+    public readonly field?: string,
+    /** The API's machine-readable error code when it sent one, e.g. `BUILT_IN_PROPERTY_AS_CUSTOM` (see {@link CustomPropertyErrorCode}). */
+    public readonly code?: CustomPropertyErrorCode | (string & {})
   ) {
     super(message);
     this.name = 'ClearvoError';

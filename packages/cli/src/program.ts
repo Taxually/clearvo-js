@@ -81,6 +81,7 @@ export function createProgram(): Command {
       const parts = [`HTTP ${res.status}: ${data.error ?? 'Unknown error'}`];
       if (data.hint) parts.push(`Hint: ${data.hint}`);
       if (data.field) parts.push(`Field: ${data.field}`);
+      if (data.code) parts.push(`Code: ${data.code}`);
       console.error(parts.join('\n'));
       process.exit(1);
     }
@@ -359,7 +360,7 @@ export function createProgram(): Command {
   // no per-field CLI override for them; edit the file instead.
   program
     .command('calculate <file>')
-    .description('Calculate tax for a transaction from a JSON file')
+    .description('Calculate tax for a transaction from a JSON file. Purchase lines (--direction purchase) take glAccount, costCenter, intendedUse and accountAssignment (stock|expense|asset|project, or a raw ERP code) as plain line fields; customProperties is only for data that is not in the schema, and a built-in field name there is rejected with 400 BUILT_IN_PROPERTY_AS_CUSTOM')
     .option('--commit', 'Record in audit trail (redundant — this is the default; kept for backward compatibility)')
     .option('--dry-run', 'Preview only — do not record or bill this calculation')
     .option('--direction <sale|purchase>', '"sale" (default) — the entity is the supplier and the customer (from the file) is required. "purchase" — the entity is the customer and the supplier (from the file) is required. Overrides transactionDirection in the file when both are given.')
@@ -1710,11 +1711,11 @@ export function createProgram(): Command {
     });
 
   // ── clearvo rules properties ──────────────────────────────────────────────
-  const ruleProperties = rules.command('properties').description('Custom rule-property definitions (customProperties.<key>)');
+  const ruleProperties = rules.command('properties').description('Custom rule-property definitions (customProperties.<key>) for data that is not in the platform schema; built-in fields such as glAccount are regular fields, not custom ones');
 
   ruleProperties
     .command('list')
-    .description('List custom property definitions visible to this key — its own scope plus every platform (Global/system) one')
+    .description('List the custom property definitions of this key\'s own scope. Built-in fields (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) are not custom properties; `clearvo rules schema` lists them')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { entity?: string; pretty?: boolean }) => {

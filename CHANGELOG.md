@@ -2,6 +2,17 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend AP first-class line fields PR (Taxually-einvoicing 17405) is deployed
+
+Breaking (pre-launch hard cut, matches the backend): `glAccount`, `costCenter`, `intendedUse` and `accountAssignment` are regular flat fields on `lineItems[]` of `POST /v1/tax/calculate` (purchase side) and are echoed post-rule on the response lines; they are no longer custom properties. `commodityCode` / `commodityCodeScheme` are unchanged on the wire. Custom properties are only for data that is not in the platform schema.
+
+- Sending any built-in field name (these four, `commodityCode`, `commodityCodeScheme`, any other built-in catalog name) under `customProperties` returns `400 BUILT_IN_PROPERTY_AS_CUSTOM`; the message names the flat field to send. `POST /v1/rules-engine/properties` with a `propertyKey` equal to a built-in name returns `422`. Property definitions no longer carry `isSystem`.
+- `accountAssignment` accepts `stock | expense | asset | project` or a raw ERP code (SAP KNTTP letter, Coupa account type) on input; the response always echoes one of the four. A code with no mapping is dropped with the `AP_ACCOUNT_ASSIGNMENT_UNKNOWN` warning.
+- SDK: `TaxCalculateRequest.lineItems[]` and `TaxCalculateResponse.lineItems[]` gain the four fields; new types `AccountAssignment` and `CustomPropertyErrorCode`; `ClearvoError.code` carries the API's `code` (e.g. `BUILT_IN_PROPERTY_AS_CUSTOM`); `RulePropertyDefinition.isSystem` is removed (the `isSystem` on rules and templates is a different concept and stays).
+- MCP: `calculate_tax` line schema gains the four fields and documents header and line `customProperties` as for non-schema data only; `list_rule_property_definitions` / `create_rule_property_definition` descriptions no longer call the AP fields system-seeded custom properties and state the 422. Tool errors now include the API `Code:`.
+- CLI: `clearvo calculate` help documents the four line fields; `rules properties` help is reworded; API errors print a `Code:` line.
+- Rules that used `customProperties.glAccount|costCenter|intendedUse|accountAssignment` use the flat names `glAccount`, `costCenter`, `intendedUse`, `accountAssignment` (the backend rewrites stored rules).
+
 ## Unreleased — publish only AFTER the backend buyer-held exemption certificates PR is deployed
 
 Additive: exemption certificates gain `holderRole`: `SELLER_COLLECTED` (a certificate one of this entity's customers gave it; the existing behaviour) or `BUYER_HELD` (a certificate this entity holds as a buyer and gives its suppliers; applied only to its own purchase-direction calculations). Buyer-held certificates belong to Purchases (AP), an Enterprise-only sub-solution: without it `BUYER_HELD` returns 403 `ap_not_included` or `ap_not_enabled`; with it `holderRole` is required on `POST` and `GET /v1/tax/exemptions` (400 `holder_role_required`). `customerRef` is required for `SELLER_COLLECTED` and must be omitted for `BUYER_HELD`. A buyer-held certificate is created active. `certificateType` gains `INGREDIENT_COMPONENT`; Ireland's `EXPORT_AUTHORIZATION` (form 56B) is allowed for both roles.
@@ -9,7 +20,7 @@ Additive: exemption certificates gain `holderRole`: `SELLER_COLLECTED` (a certif
 - MCP: `create_exemption_certificate` gains `holderRole`, `customerRef` is now optional (SELLER_COLLECTED only), `certificateType` adds `INGREDIENT_COMPONENT`, and the description is rewritten. New read-only tool `list_exemption_certificates` (`holderRole`, `status`, `country`, `region`, `page`, `limit`, `entityId`).
 - SDK types: `ExemptionHolderRole`, `ExemptionCertificateApplied`, `CertificateHint`, `HeldCertificateRecovery`, `ApDecisionWebhookPayload`; purchase calculation lines gain `exemption`, `certificateHint` and `recovery`; `taxVerification.reasonCode` gains `EXEMPT_CERT_ON_FILE_TAX_CHARGED` (outcome OVERCHARGED: the charged tax is non-deductible; recover it from the supplier first, there is no state refund path).
 - Webhook: `ap.decision` payload gains `certificateId` and `recovery`.
-- Certificates apply conservatively: only when category-scoped or the line's intended use (`customProperties.intendedUse`, or `accountAssignment: "stock"` for resale) matches the certificate type; validity is judged on the document date. Otherwise the line carries a `certificateHint` and its tax is unchanged.
+- Certificates apply conservatively: only when category-scoped or the line's intended use (`intendedUse`, or `accountAssignment: "stock"` for resale) matches the certificate type; validity is judged on the document date. Otherwise the line carries a `certificateHint` and its tax is unchanged.
 - SDK and CLI have no exemption-certificate methods or commands today, so none were added.
 
 ## Unreleased — publish only AFTER the backend Explore AP decision fields PR is deployed
