@@ -383,7 +383,7 @@ export interface SubmitInvoiceInput {
   /**
    * Optional company code (a division of the entity; Enterprise plans only). Trimmed, max 50, matched without regard
    * to case against the entity's active codes (`listCompanyCodes()`). Omitted: the entity's default company code,
-   * else none. An unknown or archived code is a 422 `company_code_unknown` before anything is calculated or stored;
+   * else none. An unknown or archived code is a 422 `company_code_unknown` before anything is calculated or stored; a code not valid on the transaction's own invoice/tax-point date (outside its `validFrom`/`validTo` window) is a 422 `company_code_not_valid_on_date` (an entity default outside its window is just not applied: `companyCodeSource` 'none' plus a warning);
    * a plan without company codes is a 403 `company_codes_not_included`.
    */
   companyCode?: string;
@@ -851,7 +851,7 @@ export interface TaxCalculateRequest {
   /**
    * Optional company code (a division of the entity; Enterprise plans only). Trimmed, max 50, matched without regard
    * to case against the entity's active codes (`listCompanyCodes()`). Omitted: the entity's default company code,
-   * else none. An unknown or archived code is a 422 `company_code_unknown` before anything is calculated or stored;
+   * else none. An unknown or archived code is a 422 `company_code_unknown` before anything is calculated or stored; a code not valid on the transaction's own invoice/tax-point date (outside its `validFrom`/`validTo` window) is a 422 `company_code_not_valid_on_date` (an entity default outside its window is just not applied: `companyCodeSource` 'none' plus a warning);
    * a plan without company codes is a 403 `company_codes_not_included`.
    */
   companyCode?: string;
@@ -1108,10 +1108,10 @@ export interface TaxCalcParty {
 
 export interface TaxCalculateResponse {
   calculationId: string;
-  /** The company code this calculation was recorded under (the casing configured on the entity). Present only when one applied. */
+  /** The company code this calculation was recorded under (the casing configured on the entity). Present only when a code resolved or the entity uses company codes. */
   companyCode?: string;
-  /** Where `companyCode` came from. A lapsed plan with a default still configured keeps applying it and adds a `company_codes_entitlement_lapsed` warning. */
-  companyCodeSource?: 'request' | 'entity_default';
+  /** Where `companyCode` came from ('none' when no code resolved, e.g. the entity default is outside its validity window, with a warning). A lapsed plan with a default still configured keeps applying it and adds a `company_codes_entitlement_lapsed` warning. */
+  companyCodeSource?: 'request' | 'entity_default' | 'none';
   /** US use tax only: the sum of the lines' `useTax.selfAssessedTaxAmount`. */
   selfAssessedTaxAmount?: number;
   /** Present with `selfAssessedTaxAmount`; `USE_TAX` for a use tax calculation. */
@@ -1673,6 +1673,10 @@ export interface CompanyCode {
   code: string;
   name: string | null;
   status: 'active' | 'archived';
+  /** First day (YYYY-MM-DD, inclusive) the code may be used on a transaction; null = no start limit. */
+  validFrom: string | null;
+  /** Last day (YYYY-MM-DD, inclusive) the code may be used on a transaction; null = no end limit. */
+  validTo: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1692,6 +1696,10 @@ export interface CreateCompanyCodeInput {
   /** The code as your ERP writes it, trimmed, 1 to 50 characters. A repeat (case-insensitive) is a 409 `company_code_exists`. */
   code: string;
   name?: string | null;
+  /** First day (YYYY-MM-DD, inclusive) the code is valid. Omitted or null: no start limit. */
+  validFrom?: string | null;
+  /** Last day (YYYY-MM-DD, inclusive) the code is valid. Omitted or null: no end limit. Must not be before `validFrom`. */
+  validTo?: string | null;
   entityId?: string;
 }
 
@@ -1699,6 +1707,10 @@ export interface UpdateCompanyCodeInput {
   name?: string | null;
   /** 'archived' stops the code being accepted on new transactions. Archiving the entity default is a 409 `company_code_is_default`. */
   status?: 'active' | 'archived';
+  /** `null` clears the start limit; omit to leave unchanged. */
+  validFrom?: string | null;
+  /** `null` clears the end limit; omit to leave unchanged. Must not be before `validFrom`. */
+  validTo?: string | null;
   entityId?: string;
 }
 

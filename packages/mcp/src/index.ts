@@ -231,7 +231,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
   properties: {
     currency: { type: 'string', description: 'ISO 4217 currency code' },
     commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
-    companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a plan without company codes fails with 403 company_codes_not_included. The resolved code and its source (request, entity_default) are echoed on the result, and company-code-scoped rules fire only for it. List codes with list_company_codes.' },
+    companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a code not valid on the transaction\'s own invoice/tax-point date (outside its validFrom/validTo window) fails with 422 company_code_not_valid_on_date (an entity default outside its window is not applied: source "none" plus a warning); a plan without company codes fails with 403 company_codes_not_included. The resolved code and its source (request, entity_default, none) are echoed on the result, and company-code-scoped rules fire only for it. List codes with list_company_codes.' },
     transactionDirection: {
       type: 'string',
       enum: ['sale', 'purchase'],
@@ -484,7 +484,7 @@ const TOOLS = [
       properties: {
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 destination country (e.g. "IT", "PL", "DE")' },
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
-        companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
+        companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a code not valid on the transaction\'s own invoice/tax-point date (outside its validFrom/validTo window) fails with 422 company_code_not_valid_on_date (an entity default outside its window is not applied: source "none" plus a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
         taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
@@ -2665,12 +2665,15 @@ const TOOLS = [
     description:
       'Add a company code to an entity. Codes are compared without regard to case or surrounding spaces — a repeat is a 409 ' +
       '"company_code_exists". A code never changes once created and is never deleted (archive it with update_company_code). ' +
+      'Optional validFrom/validTo (YYYY-MM-DD, both inclusive, null = no limit) restrict the transaction dates the code may be used on: a request naming it on a date outside the window is 422 "company_code_not_valid_on_date". ' +
       'Enterprise only (403 "company_codes_not_included" otherwise).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         code: { type: 'string', description: 'The company code as your ERP writes it, e.g. "1000". 1 to 50 characters.' },
         name: { type: ['string', 'null'], description: 'Optional display name, e.g. "Germany GmbH".' },
+        validFrom: { type: ['string', 'null'], description: 'Optional first day (YYYY-MM-DD, inclusive) the code is valid. Omitted or null: no start limit.' },
+        validTo: { type: ['string', 'null'], description: 'Optional last day (YYYY-MM-DD, inclusive) the code is valid. Omitted or null: no end limit. Must not be before validFrom.' },
         entityId: { type: 'string', description: 'Entity to add the company code to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['code'],
@@ -2679,7 +2682,7 @@ const TOOLS = [
   {
     name: 'update_company_code',
     description:
-      'Rename a company code and/or archive or reactivate it. The code itself cannot be changed and there is no delete: ' +
+      'Rename a company code, archive or reactivate it, and/or set or clear (null) its validFrom/validTo dates. The code itself cannot be changed and there is no delete: ' +
       'rules and stored calculations that carry the code stay readable. Archiving the entity\'s default company code is refused (409 "company_code_is_default") — ' +
       'change the default with update_tax_settings first. Enterprise only (403 "company_codes_not_included" otherwise).',
     inputSchema: {
@@ -2688,6 +2691,8 @@ const TOOLS = [
         companyCodeId: { type: 'string', description: 'The company code id (from list_company_codes or create_company_code).' },
         name: { type: ['string', 'null'], description: 'New display name; null clears it.' },
         status: { type: 'string', enum: ['active', 'archived'], description: "'archived' stops the code being accepted on new transactions; 'active' reinstates it." },
+        validFrom: { type: ['string', 'null'], description: 'First day (YYYY-MM-DD, inclusive) the code is valid; null clears the start limit; omit to leave unchanged.' },
+        validTo: { type: ['string', 'null'], description: 'Last day (YYYY-MM-DD, inclusive) the code is valid; null clears the end limit; omit to leave unchanged. Must not be before validFrom.' },
         entityId: { type: 'string', description: 'Entity the company code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['companyCodeId'],

@@ -778,11 +778,15 @@ export function createProgram(): Command {
     .description('Add a company code')
     .requiredOption('--code <code>', 'The code as your ERP writes it (1 to 50 characters)')
     .option('--name <name>', 'Display name')
+    .option('--valid-from <date>', 'First day (YYYY-MM-DD, inclusive) the code is valid. Omit for no start limit')
+    .option('--valid-to <date>', 'Last day (YYYY-MM-DD, inclusive) the code is valid. Omit for no end limit')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { code: string; name?: string; entity?: string; pretty?: boolean }) => {
+    .action(async (opts: { code: string; name?: string; validFrom?: string; validTo?: string; entity?: string; pretty?: boolean }) => {
       const body: Record<string, string> = { code: opts.code };
       if (opts.name) body.name = opts.name;
+      if (opts.validFrom) body.validFrom = opts.validFrom;
+      if (opts.validTo) body.validTo = opts.validTo;
       const result = await api('POST', '/company-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
@@ -793,11 +797,19 @@ export function createProgram(): Command {
     .option('--name <name>', 'New display name')
     .option('--archive', 'Set status=archived')
     .option('--activate', 'Set status=active')
+    .option('--valid-from <date>', 'First day (YYYY-MM-DD, inclusive) the code is valid; "none" clears the start limit')
+    .option('--valid-to <date>', 'Last day (YYYY-MM-DD, inclusive) the code is valid; "none" clears the end limit')
+    .option('--clear-valid-from', 'Clear the start limit (same as --valid-from none)')
+    .option('--clear-valid-to', 'Clear the end limit (same as --valid-to none)')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (id: string, opts: { name?: string; archive?: boolean; activate?: boolean; entity?: string; pretty?: boolean }) => {
-      const body: Record<string, string> = {};
+    .action(async (id: string, opts: { name?: string; archive?: boolean; activate?: boolean; validFrom?: string; validTo?: string; clearValidFrom?: boolean; clearValidTo?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, string | null> = {};
       if (opts.name) body.name = opts.name;
+      if (opts.clearValidFrom || opts.validFrom?.toLowerCase() === 'none') body.validFrom = null;
+      else if (opts.validFrom) body.validFrom = opts.validFrom;
+      if (opts.clearValidTo || opts.validTo?.toLowerCase() === 'none') body.validTo = null;
+      else if (opts.validTo) body.validTo = opts.validTo;
       if (opts.archive) body.status = 'archived';
       if (opts.activate) body.status = 'active';
       const result = await api('PATCH', `/company-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);

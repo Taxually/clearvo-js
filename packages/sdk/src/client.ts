@@ -431,7 +431,7 @@ export class ClearvoClient {
     return this.request('POST', '/company-codes', body, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
-  /** PATCH /company-codes/{id} — rename, archive or reactivate. There is no delete and `code` never changes. */
+  /** PATCH /company-codes/{id} — rename, archive or reactivate, or set/clear (`null`) the `validFrom`/`validTo` dates. There is no delete and `code` never changes. */
   updateCompanyCode(companyCodeId: string, input: UpdateCompanyCodeInput): Promise<CompanyCodeResponse> {
     const { entityId, ...body } = input;
     return this.request('PATCH', `/company-codes/${encodeURIComponent(companyCodeId)}`, body, entityId ? { 'x-entity-id': entityId } : undefined);
