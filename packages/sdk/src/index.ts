@@ -1,6 +1,17 @@
 export { ClearvoClient } from './client.js';
 export { ClearvoError } from './types.js';
 export type {
+  CompanyCode,
+  ListCompanyCodesParams,
+  ListCompanyCodesResponse,
+  CreateCompanyCodeInput,
+  UpdateCompanyCodeInput,
+  CompanyCodeResponse,
+  CreateFieldMappingInput,
+  CreateFieldMappingResponse,
+  RuleConditionLeaf,
+  RuleConditionGroup,
+  RuleConditionItem,
   ClearvoClientOptions,
   Entity,
   CreateEntityInput,

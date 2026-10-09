@@ -179,6 +179,32 @@ const CUSTOMER_REFERENCES_SCHEMA = {
   },
 } as const;
 
+const RULE_CONDITION_LEAF_SCHEMA = { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } as const
+// Groups nest at most 2 deep (the server enforces the cap); a JSON schema can't express a depth limit, so the second level is spelled out.
+const RULE_CONDITION_GROUP_LEAF_ITEMS = { anyOf: [RULE_CONDITION_LEAF_SCHEMA] } as const
+const RULE_CONDITION_INNER_GROUP_SCHEMA = {
+  type: 'object',
+  description: "A group: exactly one of 'any' (at least one child matches) or 'all' (every child matches); at least one child.",
+  properties: { any: { type: 'array', minItems: 1, items: RULE_CONDITION_GROUP_LEAF_ITEMS }, all: { type: 'array', minItems: 1, items: RULE_CONDITION_GROUP_LEAF_ITEMS } },
+} as const
+const RULE_CONDITIONS_SCHEMA = {
+  type: 'array',
+  description: "ANDed at the top level. Each element is a leaf {property, operator, value?} or a group {any: [...]} / {all: [...]}; groups may contain leaves or one more level of groups. At most 50 leaves in total.",
+  items: {
+    anyOf: [
+      RULE_CONDITION_LEAF_SCHEMA,
+      {
+        type: 'object',
+        description: "A group: exactly one of 'any' (OR) or 'all' (AND); at least one child.",
+        properties: {
+          any: { type: 'array', minItems: 1, items: { anyOf: [RULE_CONDITION_LEAF_SCHEMA, RULE_CONDITION_INNER_GROUP_SCHEMA] } },
+          all: { type: 'array', minItems: 1, items: { anyOf: [RULE_CONDITION_LEAF_SCHEMA, RULE_CONDITION_INNER_GROUP_SCHEMA] } },
+        },
+      },
+    ],
+  },
+} as const
+
 const CLASSIFICATION_CODES_SCHEMA = {
   type: 'array' as const,
   maxItems: 5,
@@ -205,6 +231,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
   properties: {
     currency: { type: 'string', description: 'ISO 4217 currency code' },
     commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
+    companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a plan without company codes fails with 403 company_codes_not_included. The resolved code and its source (request, entity_default) are echoed on the result, and company-code-scoped rules fire only for it. List codes with list_company_codes.' },
     transactionDirection: {
       type: 'string',
       enum: ['sale', 'purchase'],
@@ -457,6 +484,7 @@ const TOOLS = [
       properties: {
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 destination country (e.g. "IT", "PL", "DE")' },
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
+        companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
         taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
@@ -2064,6 +2092,7 @@ const TOOLS = [
           description: 'Purchase-side (AP) vendor-charged-tax verification tolerance. Set to { absoluteAmount, percent } (both non-negative), or null to clear it back to the platform default (zero tolerance).',
           properties: { absoluteAmount: { type: 'number' }, percent: { type: 'number' } },
         },
+        defaultCompanyCode: { type: ['string', 'null'], description: "Entity-level default company code: the company code a calculation or send that names none is recorded under. Must be an active code from list_company_codes; null clears it. Enterprise only (403 \"company_codes_not_included\" otherwise)." },
         apPoDisposition: { type: ['string', 'null'], enum: ['warn', 'hold', 'ignore', null], description: "How a purchase-order fact mismatch (poComparison) affects the AP decision outcome — 'warn' (default) surfaces it without blocking, 'hold' forces outcome HELD, 'ignore' skips PO comparison for outcome purposes. null clears it back to the platform default ('warn')." },
         confirmed: { type: 'boolean', description: 'Set true once the user has reviewed these settings — marks the onboarding step complete, independent of whether any value changed.' },
       },
@@ -2618,6 +2647,53 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_company_codes',
+    description:
+      'List an entity\'s company codes (archived ones included). A company code is an internal split of ONE entity\'s ' +
+      'transactions (an SAP company code, a Coupa business unit) — same taxable person, same registrations — used to ' +
+      'scope rules and to filter Explore. Enterprise only: any other plan fails with HTTP 403 code "company_codes_not_included" and an upgradeUrl.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        status: { type: 'string', enum: ['active'], description: "Pass 'active' to leave archived codes out." },
+        entityId: { type: 'string', description: 'Entity to list company codes for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'create_company_code',
+    description:
+      'Add a company code to an entity. Codes are compared without regard to case or surrounding spaces — a repeat is a 409 ' +
+      '"company_code_exists". A code never changes once created and is never deleted (archive it with update_company_code). ' +
+      'Enterprise only (403 "company_codes_not_included" otherwise).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'The company code as your ERP writes it, e.g. "1000". 1 to 50 characters.' },
+        name: { type: ['string', 'null'], description: 'Optional display name, e.g. "Germany GmbH".' },
+        entityId: { type: 'string', description: 'Entity to add the company code to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['code'],
+    },
+  },
+  {
+    name: 'update_company_code',
+    description:
+      'Rename a company code and/or archive or reactivate it. The code itself cannot be changed and there is no delete: ' +
+      'rules and stored calculations that carry the code stay readable. Archiving the entity\'s default company code is refused (409 "company_code_is_default") — ' +
+      'change the default with update_tax_settings first. Enterprise only (403 "company_codes_not_included" otherwise).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        companyCodeId: { type: 'string', description: 'The company code id (from list_company_codes or create_company_code).' },
+        name: { type: ['string', 'null'], description: 'New display name; null clears it.' },
+        status: { type: 'string', enum: ['active', 'archived'], description: "'archived' stops the code being accepted on new transactions; 'active' reinstates it." },
+        entityId: { type: 'string', description: 'Entity the company code belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['companyCodeId'],
+    },
+  },
+  {
     name: 'list_check_families',
     description:
       'List the optional (BUSINESS_POLICY) validation check families this entity can turn on or off — e.g. ' +
@@ -3107,7 +3183,9 @@ const TOOLS = [
       'x-entity-id) sees its Organisation-scope rules. Never the wider "effective set" a Global row would also ' +
       'contribute at evaluation time — this is "rules I own/can edit", not a preview of what actually fires. ' +
       '`direction` is INCLUSIVE — it returns a row explicitly conditioned on that transactionDirection PLUS every ' +
-      'direction-less row (which applies to both).',
+      'direction-less row (which applies to both). `companyCode` narrows to the rules scoped ' +
+      'to that company code (an entity-scoped key lists company-code rules alongside its entity-wide ones, each ' +
+      'carrying `companyCode`).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3117,6 +3195,7 @@ const TOOLS = [
         conditionProperty: { type: 'string', description: 'Only rules with a condition on this catalog property.' },
         conditionValue: { type: 'string', description: 'Combined with conditionProperty — narrows to a condition whose value equals this.' },
         includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing).' },
+        companyCode: { type: 'string', description: 'Only rules scoped to this company code (case-insensitive).' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
     },
@@ -3144,10 +3223,15 @@ const TOOLS = [
     description:
       'Create a rule — always starts status=DRAFT (call activate_rule separately to make it fire). `code` is unique ' +
       'per (domain, recordType, scope) — re-POSTing the same code+scope returns the EXISTING rule (200), not an error. ' +
-      'conditions is a flat, ANDed array of {property, operator, value?} (empty = always matches); actions is an array ' +
+      'conditions is an ANDed array (empty = always matches) whose elements are {property, operator, value?} or an OR/AND ' +
+      'group {any: [...]} / {all: [...]} (at most 50 conditions in total, groups nested at most 2 deep, no empty groups); actions is an array ' +
       'of either {property, value} (a literal) or {property, fn, args?} (a closed function dispatch — call ' +
       'get_rules_engine_schema first for the allowed property/operator/fn vocabulary). Simulate before activating: ' +
-      'call simulate_rule on the returned id to preview matchedCount/sample/conflicts over recent records.',
+      'call simulate_rule on the returned id to preview matchedCount/sample/conflicts over recent records. `companyCode` (an ACTIVE company code of the entity — ' +
+      'Enterprise only, 403 company_codes_not_included; 422 company_code_unknown otherwise) scopes the rule to ' +
+      'requests carrying that code: it fires only for them and outranks an entity-wide rule with the same `code`. ' +
+      'Omit it for an entity-wide rule. Any rule can also read the request\'s code via the read-only `companyCode` ' +
+      'condition property. Not available for an organisation-scoped key or a CONFIGURATION rule.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3159,11 +3243,12 @@ const TOOLS = [
         description: { type: 'string' },
         legalBasisTag: { type: 'string', enum: ['LEGAL_MANDATE', 'BUSINESS_POLICY'], description: 'Default BUSINESS_POLICY.' },
         sortOrder: { type: 'number' },
-        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+        conditions: RULE_CONDITIONS_SCHEMA,
         actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
         templateId: { type: 'string' },
         effectiveFrom: { type: 'string', description: 'ISO datetime.' },
         effectiveTo: { type: 'string', description: 'ISO datetime.' },
+        companyCode: { type: 'string', description: 'Scope the rule to one of the entity\'s active company codes — see tool description. Omit for an entity-wide rule.' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['domain', 'ruleKind', 'code', 'name'],
@@ -3175,7 +3260,8 @@ const TOOLS = [
       'Edit a rule. `version` (optimistic concurrency — read it from get_rule/list_rules first) is REQUIRED; a stale ' +
       'version returns 409 with the current version so you can reload and retry. status may only ever be set to ' +
       '"ARCHIVED" here (a one-way, terminal retirement — there is no DELETE); reaching ACTIVE is only ever done via ' +
-      'activate_rule. `enabled` is the separate day-to-day on/off switch — an ACTIVE rule with enabled=false never fires.',
+      'activate_rule. `enabled` is the separate day-to-day on/off switch — an ACTIVE rule with enabled=false never fires. ' +
+      '`companyCode` re-scopes the rule to another of the entity\'s active company codes (null makes it entity-wide again; omit to leave it unchanged) — same rules as create_rule.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3185,10 +3271,11 @@ const TOOLS = [
         description: { type: 'string' },
         legalBasisTag: { type: 'string', enum: ['LEGAL_MANDATE', 'BUSINESS_POLICY'] },
         sortOrder: { type: 'number' },
-        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+        conditions: RULE_CONDITIONS_SCHEMA,
         actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
         effectiveFrom: { type: 'string' },
         effectiveTo: { type: 'string' },
+        companyCode: { type: ['string', 'null'], description: 'Re-scope to another active company code; null = entity-wide; omit to leave unchanged.' },
         enabled: { type: 'boolean' },
         status: { type: 'string', enum: ['ARCHIVED'] },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
@@ -3256,7 +3343,7 @@ const TOOLS = [
             domain: { type: 'string', enum: ['ap', 'ar'] },
             recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'] },
             ruleKind: { type: 'string', enum: ['NORMALIZATION', 'ENRICHMENT', 'ADJUSTMENT', 'WARNING', 'ERROR'] },
-            conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+            conditions: RULE_CONDITIONS_SCHEMA,
             actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
           },
         },
@@ -3356,14 +3443,29 @@ const TOOLS = [
   // organisation-wide mapping set).
   {
     name: 'list_field_mappings',
-    description: 'List an entity\'s own field-mapping rows for one source system (e.g. "xero") — the mapping-config replacement for that integration\'s hand-written date/address/country normalization. Each row carries a backend-authored plain-English `sentence` and `isDefault` (false once a customer has edited it).',
+    description: 'List an entity\'s own field-mapping rows for one source system ("xero" or "coupa") — the mapping-config replacement for that integration\'s hand-written payload mapping. Each row carries a backend-authored plain-English `sentence` and `isDefault` (false once a customer has edited it).',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        sourceSystem: { type: 'string', description: 'e.g. "xero".' },
+        sourceSystem: { type: 'string', description: 'e.g. "xero" or "coupa".' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['sourceSystem'],
+    },
+  },
+  {
+    name: 'create_field_mapping',
+    description: 'Add one row to an entity\'s field mapping for a source that maps a whole calculation request (today "coupa"): fieldPath is "companyCode", or "customProperties.<key>" / "lineItems[].customProperties.<key>" for a custom property already defined for the entity; sourcePath is where in the source payload the value is read from. Fails with 409 if the entity already has a row for that fieldPath (use update_field_mapping).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        sourceSystem: { type: 'string', description: 'e.g. "coupa".' },
+        fieldPath: { type: 'string', description: '"companyCode", "customProperties.<key>" or "lineItems[].customProperties.<key>".' },
+        sourcePath: { type: 'string', description: 'Dot path into the source payload; "a||b" tries a then b.' },
+        transform: { type: 'object', properties: { fn: { type: 'string' }, args: { type: 'object' } }, required: ['fn'] },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['sourceSystem', 'fieldPath', 'sourcePath'],
     },
   },
   {
@@ -3389,7 +3491,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        sourceSystem: { type: 'string', description: 'e.g. "xero".' },
+        sourceSystem: { type: 'string', description: 'e.g. "xero" or "coupa".' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['sourceSystem'],
@@ -3846,8 +3948,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/tax/settings');
 
     case 'update_tax_settings': {
-      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, confirmed } = args;
-      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, confirmed });
+      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, defaultCompanyCode, confirmed } = args;
+      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, defaultCompanyCode, confirmed });
     }
 
     case 'get_reporting_obligations':
@@ -3938,6 +4040,18 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/bank-accounts', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'list_company_codes': {
+      const { entityId, status } = args as { entityId?: string; status?: string };
+      return callApi('GET', `/company-codes${status === 'active' ? '?status=active' : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'create_company_code': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/company-codes', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'update_company_code': {
+      const { companyCodeId, entityId, ...updates } = args as { companyCodeId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/company-codes/${encodeURIComponent(companyCodeId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
     case 'create_bank_account': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/bank-accounts', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
@@ -4105,7 +4219,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'list_rules': {
       const { entityId, includeDefaults } = args as { entityId?: string; includeDefaults?: boolean };
       const qs = new URLSearchParams();
-      for (const k of ['domain', 'recordType', 'direction', 'conditionProperty', 'conditionValue'] as const) {
+      for (const k of ['domain', 'recordType', 'direction', 'conditionProperty', 'conditionValue', 'companyCode'] as const) {
         if (args[k] !== undefined) qs.set(k, String(args[k]));
       }
       if (includeDefaults) qs.set('includeDefaults', '1');
@@ -4188,6 +4302,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const { sourceSystem, entityId } = args as { sourceSystem: string; entityId?: string };
       const qs = new URLSearchParams({ sourceSystem });
       return callApi('GET', `/rules-engine/mappings?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'create_field_mapping': {
+      const { entityId, ...body } = args as Record<string, unknown> & { entityId?: string };
+      return callApi('POST', '/rules-engine/mappings', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
     case 'update_field_mapping': {
       const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
