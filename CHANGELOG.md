@@ -2,6 +2,14 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend send-pipeline PR (Taxually-einvoicing 17436) is deployed
+
+Behaviour change in the API, mirrored here: `POST /v1/send` accepts a malformed or incomplete invoice, runs the rules (normalise, enrich), then validates. A failure returns `422 { ok: false, error: { code, message, ... }, errors: [{ path, errorCode, message, ... }] }` and stores the document as NEEDS_INFO or REJECTED. `error` is now an object, not a string, and the old `details[]` is gone. If the validation rules cannot load the call returns `503 VALIDATION_RULES_UNAVAILABLE` with nothing stored. Rule windows (`effectiveFrom` / `effectiveTo`) are judged against the time the platform ingested the document, not the document's date.
+
+- SDK: `ClearvoError.message` is now the real message (it read "[object Object]" for the new 422 body), `ClearvoError.code` is filled from `error.code`, and the new `ClearvoError.errors` carries the per-field failures. New types `SendRejectionEntry`, `SendRejectionBody`, `InvoiceRecordTimestamps` (`ingestedAt`). `RuleCondition` gains `caseSensitive`; `Rule.legalBasisTag` can be `PLATFORM_INVARIANT` on a platform default; `SimulateRuleInput.evaluatedAt`; `RulesEngineSchema.formatVocabulary`. Documented: the new operators `on_or_after`, `before`, `matches_format`, `not_matches_format` and the functions `REGEX_REPLACE`, `NEGATE`, `MULTIPLY`, `DIVIDE`, named `PARSE_DATE` formats (all discoverable through `getRulesEngineSchema()`), and `422 SYSTEM_RULE_SHAPE_FROZEN` on editing the shape of a platform LEGAL_MANDATE or PLATFORM_INVARIANT rule.
+- MCP: API errors list the `errors[]` (path, code, message); `submit_invoice` documents the accept-then-validate behaviour, the 422 shape and the 503; `list_invoices` / `get_invoice` mention `ingestedAt`; `create_rule` / `update_rule` / `simulate_rule` gain `caseSensitive` on conditions, ingestion-time wording on the rule window, and `simulate_rule` gains `evaluatedAt`.
+- CLI: API errors print the `errors[]` and the object-shaped `error` message.
+
 ## Unreleased — publish only AFTER the backend AP first-class line fields PR (Taxually-einvoicing 17405) is deployed
 
 Breaking (pre-launch hard cut, matches the backend): `glAccount`, `costCenter`, `intendedUse` and `accountAssignment` are regular flat fields on `lineItems[]` of `POST /v1/tax/calculate` (purchase side) and are echoed post-rule on the response lines; they are no longer custom properties. `commodityCode` / `commodityCodeScheme` are unchanged on the wire. Custom properties are only for data that is not in the platform schema.
