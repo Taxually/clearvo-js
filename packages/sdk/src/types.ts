@@ -1747,6 +1747,91 @@ export interface TaxRegistration {
   canCollectTax: boolean;
   /** Jurisdiction-specific secondary identifiers on file (e.g. France's SIRET, Germany's Steuernummer). */
   secondaryIdentifiers: RegistrationSecondaryIdentifier[];
+  /** Whether this jurisdiction is charged the Growth per-jurisdiction fee. Informational: the registration works the same either way. */
+  billing: RegistrationBilling;
+}
+
+/**
+ * The `billing` object on every registration row (list and create). Billing starts when collections are turned on, so a
+ * registration with no collection date is not billed. `message` is present when the jurisdiction needs a quote or
+ * collections cannot be turned on without contacting us (`canTurnOn` false): show it and point the user at `contactSalesUrl`.
+ */
+export interface RegistrationBilling {
+  /** Charged the per-jurisdiction fee right now (collections are on and the start date has arrived). */
+  billable: boolean;
+  /** ISO timestamp of the collection start date, from which it is charged; null when it is not on the billing ledger. */
+  billableFrom: string | null;
+  /** Collections are on for it (a future start date included), so it counts toward the self-serve limit. */
+  countedTowardLimit: boolean;
+  /** One plain sentence saying when it is charged from; null when it is not on the billing ledger. */
+  copy: string | null;
+  /** False only when turning collections on here would pass the self-serve limit. */
+  canTurnOn: boolean;
+  message: string | null;
+  contactSalesUrl: string | null;
+}
+
+/** Organisation-level billing sentences for a collection-date control; `collectionBilling` is null where no per-jurisdiction billing applies. */
+export interface CollectionBilling {
+  turnOnCopy: string;
+  turnOffCopy: string;
+  /** Jurisdictions with collections on now or scheduled: the count the limit applies to. */
+  collecting: number;
+  max: number;
+  limitReached: boolean;
+  /** The limit sentence; present only when `limitReached`. */
+  limitCopy: string | null;
+  contactSalesUrl: string | null;
+}
+
+/**
+ * The 409 body when turning collections on would pass the self-serve limit of jurisdictions (`POST` with `collectFromDate`,
+ * or `PATCH` setting it). Nothing was changed. The sandbox is never limited, so it cannot occur there.
+ */
+export interface JurisdictionLimitReachedBody {
+  error: string;
+  code: 'jurisdiction_limit_reached';
+  limit: number;
+  collecting: number;
+  contactSalesUrl: string;
+  hint: string;
+}
+
+/** Thrown for `409 jurisdiction_limit_reached`. Show `message` and point the user at `contactSalesUrl`. */
+export class ClearvoJurisdictionLimitError extends Error {
+  readonly code = 'jurisdiction_limit_reached' as const;
+  readonly status = 409;
+  constructor(
+    message: string,
+    public readonly limit: number,
+    public readonly collecting: number,
+    public readonly contactSalesUrl: string,
+    public readonly hint?: string,
+  ) {
+    super(message);
+    this.name = 'ClearvoJurisdictionLimitError';
+  }
+}
+
+/** `GET /v1/usage`: plan and billable transaction usage for the current billing period, plus jurisdiction counts. */
+export interface UsageSummary {
+  plan: string;
+  billingStatus: string;
+  period: { start: string; end: string } | null;
+  used: number;
+  included: number | null;
+  remaining: number | null;
+  percentUsed: number | null;
+  overageUsd: number | null;
+  overage: number;
+  inTrial: boolean;
+  updatedAt: string | null;
+  /** `active` is charged now, `countedTowardLimit` has collections on (a future start date included), `max` is the self-serve limit (null where the plan has none). */
+  jurisdictions: { active: number; countedTowardLimit: number; max: number | null };
+}
+
+export interface GetUsageResponse {
+  usage: UsageSummary;
 }
 
 export interface ListRegistrationsResponse {
@@ -1757,10 +1842,14 @@ export interface ListRegistrationsResponse {
   iossNumber: string | null;
   taxCalcEnabled: boolean;
   taxCalcSetupRequired: boolean;
+  /** The worded "collection date not set" alert; null when nothing is unset. */
+  taxCalcSetupCopy: { title: string; body: string } | null;
+  collectionBilling: CollectionBilling | null;
   registrations: TaxRegistration[];
 }
 
 export interface SetCollectionInput {
+  /** Turning collections on past the self-serve limit throws {@link ClearvoJurisdictionLimitError}; re-dating a counted jurisdiction never does. */
   collectFromDate: string | null;
 }
 
@@ -1775,6 +1864,11 @@ export interface AddRegistrationInput {
   country?: string;
   taxNumber?: string;
   iossNumber?: string;
+  /**
+   * Turns collections on: `null` starts now, a `YYYY-MM-DD` date defers. Omit to record the registration without collections.
+   * On self-serve Growth, an eleventh jurisdiction is refused with {@link ClearvoJurisdictionLimitError} (409) and nothing is stored.
+   */
+  collectFromDate?: string | null;
   entityId?: string;
 }
 

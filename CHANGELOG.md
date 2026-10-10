@@ -10,6 +10,14 @@ Behaviour change in the API, mirrored here: `POST /v1/send` accepts a malformed 
 - MCP: API errors list the `errors[]` (path, code, message); `submit_invoice` documents the accept-then-validate behaviour, the 422 shape and the 503; `list_invoices` / `get_invoice` mention `ingestedAt`; `create_rule` / `update_rule` / `simulate_rule` gain `caseSensitive` on conditions, ingestion-time wording on the rule window, and `simulate_rule` gains `evaluatedAt`.
 - CLI: API errors print the `errors[]` and the object-shaped `error` message.
 
+## Unreleased — publish only AFTER the backend growth billing mechanics PR is deployed
+
+Mirrors the backend change: Growth billing starts when collections are turned on, registrations are unlimited, and turning collections on for an eleventh jurisdiction on self-serve Growth is refused.
+
+- SDK: `ClearvoJurisdictionLimitError` (409 `jurisdiction_limit_reached`: `limit`, `collecting`, `contactSalesUrl`, `hint`; nothing was changed) is thrown by `addRegistration` with `collectFromDate` and by `setCollectionDate`; re-dating a jurisdiction that already has collections on is never refused. `TaxRegistration.billing` (`RegistrationBilling`: `billable`, `billableFrom`, `countedTowardLimit`, `copy`, `canTurnOn`, `message`, `contactSalesUrl`), `ListRegistrationsResponse.collectionBilling` (`CollectionBilling`, null where no per-jurisdiction billing applies) and `taxCalcSetupCopy`, `AddRegistrationInput.collectFromDate`. New `getUsage()` with `UsageSummary.jurisdictions { active, countedTowardLimit, max }`.
+- MCP: new read-only `get_usage`; `list_registrations`, `add_registration` and `set_registration_collection` descriptions document `billing`, `collectionBilling` and the 409 body. A tool error for the 409 includes `Contact us: <url>`.
+- CLI: new `clearvo usage`; `registrations add` gains `--collect-now` and `--collect-from <date>`; a 409 `jurisdiction_limit_reached` prints the message and the contact link and exits 1.
+
 ## Unreleased — publish only AFTER the backend AP first-class line fields PR (Taxually-einvoicing 17405) is deployed
 
 Breaking (pre-launch hard cut, matches the backend): `glAccount`, `costCenter`, `intendedUse` and `accountAssignment` are regular flat fields on `lineItems[]` of `POST /v1/tax/calculate` (purchase side) and are echoed post-rule on the response lines; they are no longer custom properties. `commodityCode` / `commodityCodeScheme` are unchanged on the wire. Custom properties are only for data that is not in the platform schema.

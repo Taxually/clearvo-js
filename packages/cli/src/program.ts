@@ -80,6 +80,13 @@ export function createProgram(): Command {
     if (!res.ok) {
       // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
       const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
+      // Turning collections on past the self-serve limit (409 jurisdiction_limit_reached): nothing was changed.
+      if (res.status === 409 && data.code === 'jurisdiction_limit_reached') {
+        console.error(String(data.error ?? 'You have reached the limit of jurisdictions on self-serve pricing.'));
+        console.error(`Nothing was changed${typeof data.limit === 'number' ? ` (limit ${data.limit}, collecting in ${data.collecting})` : ''}.`);
+        if (data.contactSalesUrl) console.error(`Contact us: ${data.contactSalesUrl}`);
+        process.exit(1);
+      }
       const parts = [`HTTP ${res.status}: ${errObj ? (errObj.message ?? errObj.code ?? 'Unknown error') : (data.error ?? 'Unknown error')}`];
       if (data.hint) parts.push(`Hint: ${data.hint}`);
       if (data.field) parts.push(`Field: ${data.field}`);
@@ -394,6 +401,18 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo usage ────────────────────────────────────────────────────────────
+  // GET /v1/usage: plan and billable transaction usage for the current billing period, plus
+  // jurisdictions { active, countedTowardLimit, max }. Organisation-wide, so no --entity flag.
+  program
+    .command('usage')
+    .description('Show your plan and billable tax-calculation usage against the plan allowance for the current billing period, plus jurisdictions { active, countedTowardLimit, max }: active is charged now, countedTowardLimit has collections on (a future start date included) against the self-serve limit, max is that limit (null where the plan has none). Only committed live calculations count; counts can trail live traffic by up to an hour (see updatedAt).')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      const result = await api('GET', '/usage');
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo duties quote <file> ──────────────────────────────────────────────
   // POST /v1/duties/quote: estimated import duty, import VAT/GST and customs
   // fees for a cross-border cart. The JSON file is the same body as `clearvo
@@ -911,7 +930,7 @@ export function createProgram(): Command {
   
   registrations
     .command('list')
-    .description('List tax registrations and obligations for an entity')
+    .description('List tax registrations and obligations for an entity. Each row carries billing { billable, billableFrom, countedTowardLimit, copy, canTurnOn, message, contactSalesUrl }; the response also carries collectionBilling (the sentences to show beside a collection date, how many jurisdictions are collecting and the limit; null where no per-jurisdiction billing applies).')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { entity?: string; pretty?: boolean }) => {
@@ -922,7 +941,7 @@ export function createProgram(): Command {
   
   registrations
     .command('set-collection <id>')
-    .description('Set the collection start date for a registration')
+    .description('Set the collection start date for a registration. Registrations are unlimited; Growth billing starts when collections are turned on, and turning collections on for an eleventh jurisdiction on self-serve Growth is refused (409 jurisdiction_limit_reached: prints the message and where to contact us, exits 1, nothing changed). Re-dating a jurisdiction that already has collections on is never refused.')
     .option('--immediately', 'Start collecting tax immediately (today)')
     .option('--from <date>', 'Defer collection to a future date (YYYY-MM-DD)')
     .option('--pretty', 'Pretty-print JSON output')
@@ -963,14 +982,18 @@ export function createProgram(): Command {
   
   registrations
     .command('add')
-    .description('Record a new tax registration (VAT, IOSS, OSS, VOEC)')
+    .description('Record a new tax registration (VAT, IOSS, OSS, VOEC). Without --collect-now or --collect-from it is stored without collections (no tax is collected and nothing is billed); with either, collections start and the 10-jurisdiction self-serve limit applies (409 jurisdiction_limit_reached: nothing is stored).')
     .requiredOption('--type <type>', 'Registration type: VAT, IOSS, UNION_OSS, NON_UNION_OSS, VOEC')
     .requiredOption('--number <taxNumber>', 'The registration number issued by the authority')
     .option('--country <code>', 'ISO 3166-1 alpha-2 country code (not required for IOSS)')
     .option('--entity <entityId>', 'Entity to register (required for account-scoped keys)')
+    .option('--collect-now', 'Start collecting tax immediately (turns collections on)')
+    .option('--collect-from <date>', 'Start collecting tax on a future date, YYYY-MM-DD (turns collections on)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { type: string; number: string; country?: string; entity?: string; pretty?: boolean }) => {
-      const body: Record<string, string> = { type: opts.type.toUpperCase(), taxNumber: opts.number };
+    .action(async (opts: { type: string; number: string; country?: string; entity?: string; collectNow?: boolean; collectFrom?: string; pretty?: boolean }) => {
+      const body: Record<string, string | null> = { type: opts.type.toUpperCase(), taxNumber: opts.number };
+      if (opts.collectNow) body.collectFromDate = null;
+      else if (opts.collectFrom) body.collectFromDate = opts.collectFrom;
       if (opts.country) body.country = opts.country.toUpperCase();
       if (opts.entity) body.entityId = opts.entity;
       const result = await api('POST', '/tax/registrations', body);

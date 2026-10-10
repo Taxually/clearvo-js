@@ -154,7 +154,9 @@ import type {
   ListManualAdjustmentsResponse,
   ManualAdjustmentStatus,
   ManualAdjustmentOptions,
+  GetUsageResponse,
 } from './types.js';
+import { ClearvoJurisdictionLimitError } from './types.js';
 import { ClearvoError } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
@@ -212,6 +214,16 @@ export class ClearvoClient {
       const data = await response.json().catch(() => ({})) as Record<string, unknown>;
       // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
       const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
+      // Turning collections on past the self-serve limit: a typed error carrying the limit and where to contact us.
+      if (response.status === 409 && data.code === 'jurisdiction_limit_reached') {
+        throw new ClearvoJurisdictionLimitError(
+          String(data.error ?? 'Jurisdiction limit reached'),
+          Number(data.limit),
+          Number(data.collecting),
+          String(data.contactSalesUrl ?? ''),
+          typeof data.hint === 'string' ? data.hint : undefined,
+        );
+      }
       throw new ClearvoError(
         response.status,
         errObj ? String(errObj.message ?? errObj.code ?? `HTTP ${response.status}`) : String(data.error ?? `HTTP ${response.status}`),
@@ -479,6 +491,13 @@ export class ClearvoClient {
     return this.request('POST', '/tax-numbers/validate-batch', { items });
   }
 
+  // ── Usage ──────────────────────────────────────────────────────────────────────
+
+  /** Plan and billable usage for the current billing period (organisation-wide), with `jurisdictions { active, countedTowardLimit, max }`. */
+  getUsage(): Promise<GetUsageResponse> {
+    return this.request('GET', '/usage');
+  }
+
   // ── Tax Registrations ──────────────────────────────────────────────────────────
 
   listRegistrations(entityId?: string): Promise<ListRegistrationsResponse> {
@@ -486,6 +505,11 @@ export class ClearvoClient {
     return this.request('GET', `/tax/registrations${qs}`);
   }
 
+  /**
+   * Record a tax registration. Registrations are unlimited; passing `collectFromDate` turns collections on, which is when
+   * Growth billing starts. Throws ClearvoJurisdictionLimitError (409) for an eleventh collecting jurisdiction on self-serve
+   * Growth, with nothing stored. The created registration carries `billing`.
+   */
   addRegistration(input: AddRegistrationInput): Promise<{ ok: boolean; registration?: object }> {
     return this.request('POST', '/tax/registrations', input);
   }
