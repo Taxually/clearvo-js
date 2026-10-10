@@ -757,6 +757,13 @@ export interface ReceivedInvoiceFields {
   supersededBy?: { id: string; invoiceNumber?: string; status?: string; statusLabel?: string } | null;
 }
 
+/** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
+export interface InvoiceRecordTimestamps {
+  submittedAt: string | null;
+  /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
+  ingestedAt: string | null;
+}
+
 export interface ListInvoicesResponse {
   invoices: unknown[];
   total: number;
@@ -3168,15 +3175,23 @@ export type RuleLegalBasisTag = 'LEGAL_MANDATE' | 'BUSINESS_POLICY';
 
 export interface RuleCondition {
   property: string;
+  /**
+   * One of the operators getRulesEngineSchema() lists for the property, including the date operators
+   * `on_or_after` / `before` (strict ISO date; an absent or unparseable date never matches) and the
+   * closed-vocabulary format checks `matches_format` / `not_matches_format` (value is a name from
+   * the schema's `formatVocabulary`, e.g. `ISO_DATE`, `ISO_CURRENCY`, `MAX_LENGTH:n`).
+   */
   operator: string;
   value?: unknown;
+  /** String comparisons only. true = exact-case match, false = case-insensitive. Omit to use the property's default case handling. */
+  caseSensitive?: boolean;
 }
 
 export interface RuleAction {
   property: string;
   /** A literal value to write. Mutually exclusive with `fn`. */
   value?: unknown;
-  /** A closed function dispatch (see getRulesEngineSchema()'s `fns`). Mutually exclusive with `value`. */
+  /** A closed function dispatch (see getRulesEngineSchema()'s `fns`, which carries each function's argument schema: REGEX_REPLACE, NEGATE, MULTIPLY, DIVIDE, PARSE_DATE with a named `format`, and the text/lookup functions). Mutually exclusive with `value`. */
   fn?: string;
   args?: Record<string, unknown>;
 }
@@ -3195,14 +3210,18 @@ export interface Rule {
   description: string | null;
   status: RuleStatus;
   enabled: boolean;
-  legalBasisTag: RuleLegalBasisTag;
+  /** A platform default (isSystem) can also be 'PLATFORM_INVARIANT' (a shape/vocabulary check) — system-authored only, never settable through createRule()/updateRule(). */
+  legalBasisTag: RuleLegalBasisTag | 'PLATFORM_INVARIANT';
   sortOrder: number;
   conditions: RuleCondition[];
   actions: RuleAction[];
   templateId: string | null;
+  /** A platform default. A system LEGAL_MANDATE or PLATFORM_INVARIANT rule keeps its shape: changing its window, conditions, actions, checkpoint, sortOrder or legalBasisTag is rejected with 422 SYSTEM_RULE_SHAPE_FROZEN; name and description stay editable. */
   isSystem: boolean;
   version: number;
+  /** The rule goes live on the platform at this instant, judged against when the platform ingests each document (`ingestedAt`), not the document's own date. A rule that applies only to documents dated from some day carries a date condition instead. */
   effectiveFrom: string | null;
+  /** The rule stops being live on the platform at this instant (exclusive), judged against ingestion time. */
   effectiveTo: string | null;
   /** A citation link (legal basis, internal policy doc, ticket) — never required. */
   documentUrl: string | null;
@@ -3281,7 +3300,9 @@ export interface CreateRuleInput {
   conditions?: RuleCondition[];
   actions?: RuleAction[];
   templateId?: string;
+  /** ISO datetime. Live from this instant, judged against ingestion time (not the document date). */
   effectiveFrom?: string;
+  /** ISO datetime. Live until this instant (exclusive), judged against ingestion time. */
   effectiveTo?: string;
   entityId?: string;
 }
@@ -3302,7 +3323,9 @@ export interface UpdateRuleInput {
   sortOrder?: number;
   conditions?: RuleCondition[];
   actions?: RuleAction[];
+  /** ISO datetime. Live from this instant, judged against ingestion time (not the document date). */
   effectiveFrom?: string;
+  /** ISO datetime. Live until this instant (exclusive), judged against ingestion time. */
   effectiveTo?: string;
   enabled?: boolean;
   /** The only status this may ever set — a one-way, terminal retirement. Reaching ACTIVE is only ever done via activateRule(). */
@@ -3365,6 +3388,8 @@ export interface SimulateRuleInput {
   sampleSize?: number;
   /** Required when simulating a not-yet-saved rule (no ruleId in simulateRule's own argument); optional override when simulating an existing rule's in-flight edit. */
   draft?: SimulateRuleDraft;
+  /** ISO 8601 instant to evaluate rule windows (effective from/to) at. Default: now, i.e. which rules are live on the platform right now. */
+  evaluatedAt?: string;
   entityId?: string;
 }
 
@@ -3741,6 +3766,8 @@ export interface RulesEngineSchema {
     ruleKinds: readonly string[];
     statuses: readonly string[];
     operators: readonly string[];
+    /** The closed names `matches_format` / `not_matches_format` accept as a bare code; parameterised forms (MAX_LENGTH:n, NONBLANK_MAX_LENGTH:n, MAX_ENTRIES:n, TAX_ID:CC) are listed with their pattern. */
+    formatVocabulary?: readonly string[];
     /** @deprecated use `fns` instead, which carries `simulatesOutcome` per entry. */
     functions: readonly string[];
     fns: Array<{ fn: string; simulatesOutcome: boolean; [key: string]: unknown }>;
@@ -3835,14 +3862,57 @@ export interface ManualAdjustmentOptions {
   overrideColumns: string[];
 }
 
+/**
+ * One entry of a `POST /v1/send` rejection's `errors[]` — one per failed check, in primary-first order.
+ * `path` is a JSON pointer into the request body (`/lines/2/quantity`, `/customer/address/country`).
+ */
+export interface SendRejectionEntry {
+  errorCode: string;
+  severity: 'ERROR' | 'WARNING';
+  path: string;
+  message: string;
+  suggestedAction?: string;
+  fixUrl?: string | null;
+  isMerchantResolvable?: boolean;
+  /** Present when a rule produced the entry: the rule's own name (the message a caller reads). */
+  ruleName?: string;
+  source?: 'rule';
+  /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or NEEDS_INFO (a required fact is missing; Fix & Resubmit applies). */
+  clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  [key: string]: unknown;
+}
+
+/**
+ * The `POST /v1/send` 422 body. A malformed or incomplete invoice is accepted, normalised, enriched and then
+ * checked by the platform's rules: `error` is an object (never a string), `errors[]` carries every failure, and
+ * the document is stored (NEEDS_INFO or REJECTED) unless it cannot be identified. The old `details[]` is gone.
+ * A 503 with code `VALIDATION_RULES_UNAVAILABLE` means the rules could not be loaded — nothing was checked or stored;
+ * retry with the same idempotency key.
+ */
+export interface SendRejectionBody {
+  ok: false;
+  error: { code: string; message: string; isMerchantResolvable?: boolean; fixUrl?: string | null; retryable?: boolean };
+  errors: SendRejectionEntry[];
+  /** What NORMALIZATION / ENRICHMENT rules changed before the failing check ran. */
+  adjustments?: unknown[];
+  warnings?: SendRejectionEntry[];
+  code?: string;
+  clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  terminal?: boolean;
+  /** Present only when a record was stored. */
+  referenceId?: string;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,
     message: string,
     public readonly hint?: string,
     public readonly field?: string,
-    /** The API's machine-readable error code when it sent one, e.g. `BUILT_IN_PROPERTY_AS_CUSTOM` (see {@link CustomPropertyErrorCode}). */
-    public readonly code?: CustomPropertyErrorCode | (string & {})
+    /** The API's machine-readable error code when it sent one, e.g. `BUILT_IN_PROPERTY_AS_CUSTOM` (see {@link CustomPropertyErrorCode}) or `VALIDATION_RULES_UNAVAILABLE`. */
+    public readonly code?: CustomPropertyErrorCode | (string & {}),
+    /** The per-field failures of a `POST /v1/send` rejection (see {@link SendRejectionBody}). */
+    public readonly errors?: SendRejectionEntry[]
   ) {
     super(message);
     this.name = 'ClearvoError';

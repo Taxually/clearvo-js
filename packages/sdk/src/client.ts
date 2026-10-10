@@ -1,4 +1,5 @@
 import type {
+  SendRejectionEntry,
   ClearvoClientOptions,
   Entity,
   CreateEntityInput,
@@ -209,12 +210,15 @@ export class ClearvoClient {
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+      // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
+      const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
       throw new ClearvoError(
         response.status,
-        String(data.error ?? `HTTP ${response.status}`),
+        errObj ? String(errObj.message ?? errObj.code ?? `HTTP ${response.status}`) : String(data.error ?? `HTTP ${response.status}`),
         typeof data.hint === 'string' ? data.hint : undefined,
         typeof data.field === 'string' ? data.field : undefined,
-        typeof data.code === 'string' ? data.code : undefined
+        typeof data.code === 'string' ? data.code : typeof errObj?.code === 'string' ? errObj.code : undefined,
+        Array.isArray(data.errors) ? data.errors as SendRejectionEntry[] : undefined
       );
     }
 
@@ -1092,7 +1096,8 @@ export class ClearvoClient {
     const response = await fetch(`${this.baseUrl}/rules-engine/datasets/${encodeURIComponent(datasetId)}/export`, { method: 'GET', headers });
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as Record<string, unknown>;
-      throw new ClearvoError(response.status, String(data.error ?? `HTTP ${response.status}`));
+      const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
+      throw new ClearvoError(response.status, errObj ? String(errObj.message ?? errObj.code ?? `HTTP ${response.status}`) : String(data.error ?? `HTTP ${response.status}`));
     }
     return response.text();
   }

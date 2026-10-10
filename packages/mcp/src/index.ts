@@ -94,7 +94,14 @@ async function callApi(
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = data as Record<string, unknown>;
-    const errorText = String(err.error ?? 'Unknown error');
+    // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection, which
+    // also carries errors[] (one entry per failed check, JSON-pointer path and stable code).
+    const errObj = err.error !== null && typeof err.error === 'object' ? err.error as Record<string, unknown> : null;
+    const errorText = errObj ? String(errObj.message ?? errObj.code ?? 'Unknown error') : String(err.error ?? 'Unknown error');
+    const errorList = Array.isArray(err.errors)
+      ? (err.errors as Array<Record<string, unknown>>).slice(0, 25).map(e =>
+          `  - ${String(e.path ?? '/')} ${String(e.errorCode ?? e.code ?? '')}: ${String(e.message ?? '')}`)
+      : [];
     if (res.status === 400 && errorText.toLowerCase().includes('entity context')) {
       throw new Error(
         'This operation requires an entity context. ' +
@@ -107,6 +114,7 @@ async function callApi(
       err.hint ? `Hint: ${err.hint}` : null,
       err.field ? `Field: ${err.field}` : null,
       err.code ? `Code: ${err.code}` : null,
+      errorList.length > 0 ? `Errors:\n${errorList.join('\n')}` : null,
     ].filter(Boolean).join('\n');
     throw new Error(msg);
   }
@@ -442,7 +450,7 @@ const TOOLS = [
       'customer-address requirement above. ' +
       'A request that still carries any of the retired `buyer`, `buyerType`, `lines[].buyerType`, ' +
       '`notifyBuyer`, or `countrySpecific.*.buyer*` keys (e.g. `countrySpecific.pl.buyerNip`) is rejected ' +
-      'with 422 `{ error, details: [{ field, code, message }] }` — each detail carries ' +
+      'with 422 `{ ok: false, error: { code, message }, errors: [{ path, errorCode, message }] }` — each entry carries ' +
       '`code: "UNKNOWN_FIELD_BUYER_RENAMED"` and a `message` naming the exact `customer`-named ' +
       'replacement — there is no silent alias. ' +
       'Line items carry `taxRate` and `taxAmount` (the platform is global — no tax-type-specific field names). A request ' +
@@ -451,6 +459,11 @@ const TOOLS = [
       'there is no silent alias. The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), ' +
       '`unitOfMeasure` and `sellerItemId` — the retired `discount`/`unit`/`itemCode`/`exemption` line keys are rejected with 422 ' +
       '`code: "UNKNOWN_FIELD_LINE_RENAMED"` the same way. ' +
+      'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
+      'a failure returns 422 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
+      'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
+      'Correct it and resend the same invoiceNumber. If the validation rules cannot be loaded the call returns 503 VALIDATION_RULES_UNAVAILABLE ' +
+      'with nothing stored: retry with the same idempotency key. GET /v1/validations lists every code. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -1524,7 +1537,7 @@ const TOOLS = [
     description:
       'List invoices previously submitted through Clearvo. ' +
       'Filter by country, clearance status, or date. ' +
-      'Returns submission timestamps, clearance status labels, and authority reference numbers. ' +
+      'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), clearance status labels, and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
       'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
@@ -1554,7 +1567,7 @@ const TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt) plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
@@ -3169,11 +3182,11 @@ const TOOLS = [
         description: { type: 'string' },
         legalBasisTag: { type: 'string', enum: ['LEGAL_MANDATE', 'BUSINESS_POLICY'], description: 'Default BUSINESS_POLICY.' },
         sortOrder: { type: 'number' },
-        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {}, caseSensitive: { type: 'boolean', description: 'String comparisons only. Overrides the default case handling of the property: true = exact-case match, false = case-insensitive. Omit to use the property default.' } }, required: ['property', 'operator'] } },
         actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
         templateId: { type: 'string' },
-        effectiveFrom: { type: 'string', description: 'ISO datetime.' },
-        effectiveTo: { type: 'string', description: 'ISO datetime.' },
+        effectiveFrom: { type: 'string', description: 'ISO datetime. The rule goes live on the platform at this instant, judged against when the platform ingests each document (not the document\'s own date).' },
+        effectiveTo: { type: 'string', description: 'ISO datetime. The rule stops being live on the platform at this instant (exclusive), judged against when the platform ingests each document.' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['domain', 'ruleKind', 'code', 'name'],
@@ -3185,7 +3198,9 @@ const TOOLS = [
       'Edit a rule. `version` (optimistic concurrency — read it from get_rule/list_rules first) is REQUIRED; a stale ' +
       'version returns 409 with the current version so you can reload and retry. status may only ever be set to ' +
       '"ARCHIVED" here (a one-way, terminal retirement — there is no DELETE); reaching ACTIVE is only ever done via ' +
-      'activate_rule. `enabled` is the separate day-to-day on/off switch — an ACTIVE rule with enabled=false never fires.',
+      'activate_rule. `enabled` is the separate day-to-day on/off switch — an ACTIVE rule with enabled=false never fires. ' +
+      'A platform default (is_system) LEGAL_MANDATE or PLATFORM_INVARIANT rule keeps its shape: changing its window, ' +
+      'conditions, actions, checkpoint, sortOrder or legalBasisTag is rejected with SYSTEM_RULE_SHAPE_FROZEN; name and description stay editable.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3195,10 +3210,10 @@ const TOOLS = [
         description: { type: 'string' },
         legalBasisTag: { type: 'string', enum: ['LEGAL_MANDATE', 'BUSINESS_POLICY'] },
         sortOrder: { type: 'number' },
-        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+        conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {}, caseSensitive: { type: 'boolean', description: 'String comparisons only. Overrides the default case handling of the property: true = exact-case match, false = case-insensitive. Omit to use the property default.' } }, required: ['property', 'operator'] } },
         actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
-        effectiveFrom: { type: 'string' },
-        effectiveTo: { type: 'string' },
+        effectiveFrom: { type: 'string', description: 'ISO datetime. The rule goes live on the platform at this instant (ingestion time, not document date).' },
+        effectiveTo: { type: 'string', description: 'ISO datetime. The rule stops being live on the platform at this instant (exclusive).' },
         enabled: { type: 'boolean' },
         status: { type: 'string', enum: ['ARCHIVED'] },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
@@ -3259,6 +3274,7 @@ const TOOLS = [
       properties: {
         id: { type: 'string', description: 'An existing rule id. Omit to simulate a draft that has never been saved (draft is then required).' },
         sampleSize: { type: 'number', description: 'How many of the most recent records to sample against (1-500, default 50).' },
+        evaluatedAt: { type: 'string', description: 'ISO 8601 instant to evaluate rule windows (effective from/to) at. Default: now, i.e. which rules are live on the platform right now.' },
         draft: {
           type: 'object',
           description: 'Required when id is omitted; optional override (of domain/recordType/ruleKind/conditions/actions) when id is present.',
@@ -3266,7 +3282,7 @@ const TOOLS = [
             domain: { type: 'string', enum: ['ap', 'ar'] },
             recordType: { type: 'string', enum: ['calculation', 'purchase_order', 'invoice'] },
             ruleKind: { type: 'string', enum: ['NORMALIZATION', 'ENRICHMENT', 'ADJUSTMENT', 'WARNING', 'ERROR'] },
-            conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } },
+            conditions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {}, caseSensitive: { type: 'boolean', description: 'String comparisons only. Overrides the default case handling of the property: true = exact-case match, false = case-insensitive. Omit to use the property default.' } }, required: ['property', 'operator'] } },
             actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
           },
         },

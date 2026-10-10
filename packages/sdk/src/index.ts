@@ -2,6 +2,9 @@ export { ClearvoClient } from './client.js';
 export { ClearvoError } from './types.js';
 export type {
   ClearvoClientOptions,
+  SendRejectionEntry,
+  SendRejectionBody,
+  InvoiceRecordTimestamps,
   Entity,
   CreateEntityInput,
   CreateEntityResponse,
