@@ -154,6 +154,26 @@ import type {
   ListManualAdjustmentsResponse,
   ManualAdjustmentStatus,
   ManualAdjustmentOptions,
+  ListFilingsParams,
+  ListFilingsResponse,
+  GetFilingResponse,
+  FilingActionResponse,
+  ListFilingChangeRequestsResponse,
+  FilingBankAccountResponse,
+  GenerateSandboxFilingInput,
+  ListFilingSetupsResponse,
+  GetRegistrationFilingSetupResponse,
+  UpdateRegistrationFilingSetupInput,
+  ListFilingUploadMonthsResponse,
+  GetFilingUploadMonthResponse,
+  UploadFilingDataFileInput,
+  UploadFilingDataFileResponse,
+  DeleteFilingDataFileResponse,
+  ProcessFilingUploadMonthInput,
+  ProcessFilingUploadMonthResponse,
+  FilingUploadErrorReportResponse,
+  FilingUploadTemplate,
+  FilingUploadTemplateFormat,
 } from './types.js';
 import { ClearvoError } from './types.js';
 
@@ -175,6 +195,11 @@ function csvFormData(csvContent: string, filename: string): FormData {
   const formData = new FormData();
   formData.append('file', new Blob([csvContent], { type: 'text/csv' }), filename);
   return formData;
+}
+
+/** The x-entity-id header for an account-scoped key, or none. */
+function entityHeaders(entityId?: string): Record<string, string> | undefined {
+  return entityId ? { 'x-entity-id': entityId } : undefined;
 }
 
 export class ClearvoClient {
@@ -208,22 +233,34 @@ export class ClearvoClient {
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
 
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({})) as Record<string, unknown>;
-      // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
-      const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
-      throw new ClearvoError(
-        response.status,
-        errObj ? String(errObj.message ?? errObj.code ?? `HTTP ${response.status}`) : String(data.error ?? `HTTP ${response.status}`),
-        typeof data.hint === 'string' ? data.hint : undefined,
-        typeof data.field === 'string' ? data.field : undefined,
-        typeof data.code === 'string' ? data.code : typeof errObj?.code === 'string' ? errObj.code : undefined,
-        Array.isArray(data.errors) ? data.errors as SendRejectionEntry[] : undefined
-      );
-    }
+    if (!response.ok) throw await this.errorFrom(response);
 
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
+  }
+
+  /** The ClearvoError for a non-2xx response. */
+  private async errorFrom(response: Response): Promise<ClearvoError> {
+    const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+    // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
+    const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
+    // The Filings routes put the stable code in `error` and the sentence in `message` or `detail`.
+    const filingsCode = !errObj && typeof data.error === 'string' && (typeof data.message === 'string' || typeof data.detail === 'string') ? data.error : undefined;
+    return new ClearvoError(
+      response.status,
+      errObj ? String(errObj.message ?? errObj.code ?? `HTTP ${response.status}`) : String(filingsCode ? (data.message ?? data.detail) : (data.error ?? `HTTP ${response.status}`)),
+      typeof data.hint === 'string' ? data.hint : undefined,
+      typeof data.field === 'string' ? data.field : undefined,
+      typeof data.code === 'string' ? data.code : typeof errObj?.code === 'string' ? errObj.code : filingsCode,
+      Array.isArray(data.errors) ? data.errors as SendRejectionEntry[] : undefined
+    );
+  }
+
+  /** A GET that returns a file (CSV, XLSX, PDF/image), not JSON. */
+  private async requestFile(path: string, extraHeaders?: Record<string, string>): Promise<Response> {
+    const response = await fetch(`${this.baseUrl}${path}`, { method: 'GET', headers: { 'x-api-key': this.apiKey, ...extraHeaders } });
+    if (!response.ok) throw await this.errorFrom(response);
+    return response;
   }
 
   // ── E-Invoicing ──────────────────────────────────────────────────────────────
@@ -1159,5 +1196,172 @@ export class ClearvoClient {
   /** The backend-owned closed option lists for proposeManualAdjustment() — call before proposing rather than guessing a property name. */
   getManualAdjustmentOptions(calculationId: string, entityId?: string): Promise<ManualAdjustmentOptions> {
     return this.request('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustment-options`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Filings ───────────────────────────────────────────────────────────────────
+  // US sales tax returns Clearvo prepares and files. The key needs the `filings` product; every change needs a write key.
+  // Account-scoped keys pass `entityId` (sent as x-entity-id). Display labels in the responses are written to be shown as is.
+
+  /** GET /filings/setups: where filing setup stands for each registration, and the next step. */
+  listFilingSetups(entityId?: string): Promise<ListFilingSetupsResponse> {
+    return this.request('GET', '/filings/setups', undefined, entityHeaders(entityId));
+  }
+
+  /** GET /tax/registrations/{id}/filing: the full filing setup of one US state sales tax registration (frequency options, start periods, bank requirement). */
+  getRegistrationFilingSetup(registrationId: string, entityId?: string): Promise<GetRegistrationFilingSetupResponse> {
+    return this.request('GET', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, undefined, entityHeaders(entityId));
+  }
+
+  /**
+   * PUT /tax/registrations/{id}/filing: request filing (`frequencyCode`, `frequencyAttested: true`, `startChoice`),
+   * defer the first period (`deferFirstPeriodTo`) or stop filing (`stop: true`). Send exactly one of the three bodies.
+   * Requesting without a subscription is refused 402 `plan_required`.
+   */
+  updateRegistrationFilingSetup(registrationId: string, input: UpdateRegistrationFilingSetupInput, entityId?: string): Promise<GetRegistrationFilingSetupResponse> {
+    return this.request('PUT', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, input, entityHeaders(entityId));
+  }
+
+  /** GET /filings/bank-account: the account the state debits (last four digits only). Bank details are changed in the dashboard. */
+  getFilingBankAccount(entityId?: string): Promise<FilingBankAccountResponse> {
+    return this.request('GET', '/filings/bank-account', undefined, entityHeaders(entityId));
+  }
+
+  /** GET /filings: your returns. `entityId` in the params is sent as x-entity-id. */
+  listFilings(params: ListFilingsParams = {}): Promise<ListFilingsResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/filings${q ? `?${q}` : ''}`, undefined, entityHeaders(entityId));
+  }
+
+  /** GET /filings/{id}: one return with totals, lines by tax authority, scope notes and a timeline. `allowedActions` says what is possible now. */
+  getFiling(filingId: string, entityId?: string): Promise<GetFilingResponse> {
+    return this.request('GET', `/filings/${encodeURIComponent(filingId)}`, undefined, entityHeaders(entityId));
+  }
+
+  /** POST /filings/{id}/approve. `snapshotVersion` is the one from getFiling or listFilings; a mismatch is 409 FILING_STALE. Repeating on an approved filing returns `alreadyApplied: true`. */
+  approveFiling(filingId: string, snapshotVersion: number, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/approve`, { snapshotVersion }, entityHeaders(entityId));
+  }
+
+  /** POST /filings/{id}/undo: take an approval back to PENDING_APPROVAL before the filing is submitted (409 ALREADY_SUBMITTED afterwards). */
+  undoFilingApproval(filingId: string, snapshotVersion: number, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/undo`, { snapshotVersion }, entityHeaders(entityId));
+  }
+
+  /** POST /filings/{id}/pause: stop automatic approval. Limited per year; the on-time filing commitment is lost while paused. */
+  pauseFiling(filingId: string, snapshotVersion: number, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/pause`, { snapshotVersion }, entityHeaders(entityId));
+  }
+
+  /** POST /filings/{id}/resume: a PAUSED filing returns to PENDING_APPROVAL. */
+  resumeFiling(filingId: string, snapshotVersion: number, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/resume`, { snapshotVersion }, entityHeaders(entityId));
+  }
+
+  /** POST /filings/{id}/skip: the filing becomes NOT_FILED and is not filed. Only before submission. `reason` is required (up to 500 characters). */
+  skipFiling(filingId: string, input: { snapshotVersion: number; reason: string }, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/skip`, input, entityHeaders(entityId));
+  }
+
+  /** POST /filings/{id}/prepayment: record an amount already paid for the period. Only before approval. */
+  setFilingPrepayment(filingId: string, input: { snapshotVersion: number; amount: number }, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/prepayment`, input, entityHeaders(entityId));
+  }
+
+  /** GET /filings/{id}/change-requests: the requests already sent to Clearvo for this filing, oldest first. */
+  listFilingChangeRequests(filingId: string, entityId?: string): Promise<ListFilingChangeRequestsResponse> {
+    return this.request('GET', `/filings/${encodeURIComponent(filingId)}/change-requests`, undefined, entityHeaders(entityId));
+  }
+
+  /** POST /filings/{id}/change-requests: ask Clearvo to change something that cannot be edited directly (the transactions in a filing are frozen). Up to 2000 characters. */
+  requestFilingChange(filingId: string, message: string, entityId?: string): Promise<{ ok: boolean }> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/change-requests`, { message }, entityHeaders(entityId));
+  }
+
+  /** GET /filings/{id}/csv: the summary by authority, ending in a TOTAL row. */
+  async getFilingSummaryCsv(filingId: string, entityId?: string): Promise<string> {
+    return (await this.requestFile(`/filings/${encodeURIComponent(filingId)}/csv`, entityHeaders(entityId))).text();
+  }
+
+  /** GET /filings/{id}/transactions.csv: the transaction lines frozen into the filing. */
+  async getFilingTransactionsCsv(filingId: string, entityId?: string): Promise<string> {
+    return (await this.requestFile(`/filings/${encodeURIComponent(filingId)}/transactions.csv`, entityHeaders(entityId))).text();
+  }
+
+  /** GET /filings/{id}/proof: the proof-of-filing document (PDF, PNG or JPEG). 404 PROOF_NOT_AVAILABLE until it is attached. */
+  async getFilingProof(filingId: string, entityId?: string): Promise<{ contentType: string; data: ArrayBuffer }> {
+    const response = await this.requestFile(`/filings/${encodeURIComponent(filingId)}/proof`, entityHeaders(entityId));
+    return { contentType: response.headers.get('content-type') ?? 'application/octet-stream', data: await response.arrayBuffer() };
+  }
+
+  /** POST /filings/sandbox/generate: sandbox keys only. Build a filing on demand for a registration whose filing frequency is set (a live key gets 409 SANDBOX_ONLY). */
+  generateSandboxFiling(input: GenerateSandboxFilingInput): Promise<{ ok: boolean; created?: boolean; filing?: unknown }> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/filings/sandbox/generate', body, entityHeaders(entityId));
+  }
+
+  // ── Filings: data upload ────────────────────────────────────────────────────────
+  // Add your own transaction data to a filing month: one or several files per month, then confirm and process the month once.
+  // A month takes data from when its period closes until the end of the day the return is approved automatically
+  // (the 5th of the following month by default).
+
+  /** GET /filings/upload/months: the months you can add data to, newest first, with their window state. */
+  listFilingUploadMonths(entityId?: string): Promise<ListFilingUploadMonthsResponse> {
+    return this.request('GET', '/filings/upload/months', undefined, entityHeaders(entityId));
+  }
+
+  /** GET /filings/upload/months/{month}: the files (with counts), window, `canUpload` / `canConfirm` and the `declaration` to accept. `month` is yyyy-MM. */
+  getFilingUploadMonth(month: string, entityId?: string): Promise<GetFilingUploadMonthResponse> {
+    return this.request('GET', `/filings/upload/months/${encodeURIComponent(month)}`, undefined, entityHeaders(entityId));
+  }
+
+  /**
+   * POST /filings/upload/months/{month}/files: add a data file (.csv, .xlsx or .xls, up to 25 MB) to the month. Call it again for each
+   * further file; every file in the month is processed together. A file with the same name or content as one already added is 409
+   * FILE_ALREADY_ADDED (carries `existingId`): to replace a file, delete it and upload the new one.
+   */
+  uploadFilingDataFile(month: string, input: UploadFilingDataFileInput, entityId?: string): Promise<UploadFilingDataFileResponse> {
+    const lower = input.fileName.toLowerCase();
+    const type = input.contentType ?? (lower.endsWith('.csv') ? 'text/csv' : lower.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel');
+    const part = input.content instanceof Blob ? input.content : new Blob([input.content as never], { type });
+    const form = new FormData();
+    form.append('file', part, input.fileName);
+    return this.request('POST', `/filings/upload/months/${encodeURIComponent(month)}/files`, form, entityHeaders(entityId));
+  }
+
+  /** DELETE /filings/upload/months/{month}/files/{fileId}: remove a file you added while the month is open. The calculated (system) file cannot be removed. */
+  deleteFilingDataFile(month: string, fileId: string, entityId?: string): Promise<DeleteFilingDataFileResponse> {
+    return this.request('DELETE', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}`, undefined, entityHeaders(entityId));
+  }
+
+  /**
+   * POST /filings/upload/months/{month}/process: confirm that all data for the month is added and process it once. The person confirming
+   * accepts the declaration shown with the month: send `declarationAccepted: true` and its `declarationVersion` (otherwise 422
+   * DECLARATION_REQUIRED / DECLARATION_VERSION_MISMATCH). If some rows were rejected the first call is 409 ACKNOWLEDGEMENT_REQUIRED;
+   * repeat with `acknowledgeRejectedRows: true` to go ahead. Resolves with 202 while processing runs: poll getFilingUploadMonth until
+   * `state` is `done` or `errors`.
+   */
+  processFilingUploadMonth(month: string, input: ProcessFilingUploadMonthInput, entityId?: string): Promise<ProcessFilingUploadMonthResponse> {
+    return this.request('POST', `/filings/upload/months/${encodeURIComponent(month)}/process`, input, entityHeaders(entityId));
+  }
+
+  /** GET /filings/upload/months/{month}/files/{fileId}/error-report: a fresh download link for the rows of a file that were rejected (404 no_error_report when none). Do not store the link. */
+  getFilingUploadErrorReport(month: string, fileId: string, entityId?: string): Promise<FilingUploadErrorReportResponse> {
+    return this.request('GET', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}/error-report`, undefined, entityHeaders(entityId));
+  }
+
+  /** GET /filings/upload/template: the columns Clearvo expects. `json` (default here) is the definition, `csv` the template text, `xlsx` the workbook. */
+  getFilingUploadTemplate(format?: 'json', entityId?: string): Promise<FilingUploadTemplate>;
+  getFilingUploadTemplate(format: 'csv', entityId?: string): Promise<string>;
+  getFilingUploadTemplate(format: 'xlsx', entityId?: string): Promise<ArrayBuffer>;
+  async getFilingUploadTemplate(format: FilingUploadTemplateFormat = 'json', entityId?: string): Promise<FilingUploadTemplate | string | ArrayBuffer> {
+    const response = await this.requestFile(`/filings/upload/template?format=${format}`, entityHeaders(entityId));
+    if (format === 'json') return (await response.json()) as FilingUploadTemplate;
+    if (format === 'csv') return response.text();
+    return response.arrayBuffer();
   }
 }

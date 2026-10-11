@@ -44,6 +44,9 @@ const READ_ONLY = new Set<string>([
   'list_platform_rule_changes', 'list_rule_property_definitions', 'list_rule_templates', 'get_rule_template',
   'list_field_mappings', 'list_rules_engine_datasets', 'get_rules_engine_dataset', 'list_rules_engine_dataset_rows',
   'query_data', 'simulate_rule', 'quote_duties', 'estimate_duties', 'get_import_settlement',
+  // Filings (GET routes).
+  'get_registration_filing_setup', 'list_filings', 'get_filing', 'list_filing_change_requests', 'get_filing_bank_account',
+  'list_filing_setups', 'list_filing_upload_months', 'get_filing_upload_month', 'get_filing_upload_error_report', 'get_filing_upload_template',
 ]);
 
 const DESTRUCTIVE = new Set<string>([
@@ -59,6 +62,10 @@ const DESTRUCTIVE = new Set<string>([
   // Overwrites previously stored authority credentials.
   'set_ar_credentials', 'set_pl_credentials', 'set_fr_credentials', 'set_hu_credentials', 'set_pt_credentials',
   'set_eg_credentials', 'set_jo_credentials', 'set_mx_credentials', 'set_br_credentials',
+  // Approving commits the return to be filed with the state; skipping closes it as NOT_FILED for good.
+  'approve_filing', 'skip_filing',
+  // Removes uploaded data (replace deletes before it re-adds); closing a month is the customer's "all uploaded".
+  'delete_filing_data_file', 'replace_filing_data_file', 'close_filing_upload_month',
 ]);
 
 const NON_IDEMPOTENT = new Set<string>([
@@ -69,11 +76,17 @@ const NON_IDEMPOTENT = new Set<string>([
   'receive_invoice_document', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
   'move_rule', 'amend_sii_report',
+  // Each call appends a new request to the filing's timeline.
+  'request_filing_change',
+  // A second upload of the same file is refused 409 FILE_ALREADY_ADDED; a repeated replace re-deletes a file id that is gone.
+  'upload_filing_data_file', 'replace_filing_data_file',
   // Second call fails (409: batch no longer awaiting confirmation).
   'confirm_tax_calculation_import', 'confirm_reporting_batch',
 ]);
 
 const OPEN_WORLD = new Set<string>([
+  // Data files, processing and closing go to the filing processing partner.
+  'upload_filing_data_file', 'replace_filing_data_file', 'delete_filing_data_file', 'process_filing_upload_month', 'close_filing_upload_month',
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
   'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
   'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',

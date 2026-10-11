@@ -4457,3 +4457,359 @@ export interface ImportSettlementVariance {
     byCurrency: Array<{ currency: string; count: number; estimated: number; actual: number; variance: number }>;
   }>;
 }
+
+// ── Filings (US sales tax returns) ───────────────────────────────────────────────────────────────────────────────
+// Routes: /v1/filings/*, /v1/filings/setups, /v1/tax/registrations/{id}/filing and /v1/filings/upload/*.
+// The key needs the `filings` product; reads accept a read key, every POST/PUT/DELETE needs a write key. Account-scoped
+// keys pass an entityId (sent as x-entity-id). Display labels (statusLabel, nextStepLabel, ...) are written to be shown as is.
+
+export type FilingStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'PAUSED' | 'APPROVED' | 'SUBMITTED' | 'FILED' | 'NOT_FILED';
+
+export interface FilingAllowedActions {
+  approve: boolean;
+  undoApproval: boolean;
+  pause: boolean;
+  resume: boolean;
+  skip: boolean;
+  editPrepayment: boolean;
+}
+
+export interface FilingSummary {
+  id: string;
+  jurisdictionId: string;
+  returnType: string;
+  periodKey: string;
+  periodStart: string;
+  periodEnd: string;
+  dueDate: string | null;
+  filingClass: string;
+  status: FilingStatus;
+  /** Display text for `status`; render it as is. */
+  statusLabel: string;
+  jurisdictionLabel: string;
+  periodLabel: string;
+  dueDateLabel: string | null;
+  /** What happens next, e.g. "Approves automatically on 5 Oct, 23:59 UTC". Null when nothing is pending. */
+  nextStepLabel: string | null;
+  paymentStatus: string;
+  currency: string;
+  amountDue: number;
+  taxCollected: number;
+  /** Send this back with every action. A mismatch is 409 FILING_STALE. */
+  snapshotVersion: number;
+  pauseEndsAt: string | null;
+  actionNeeded: Array<{ code: string; label: string }>;
+  allowedActions: FilingAllowedActions;
+}
+
+export interface FilingDetail extends FilingSummary {
+  contentMissing: boolean;
+  totals: Record<string, number>;
+  lines: Array<{ rate: number | null; rateLabel: string; [key: string]: unknown }>;
+  totalLine: Record<string, unknown> | null;
+  adjustments: Array<Record<string, unknown>>;
+  /** What the return includes and excludes, in words. */
+  scopeNotes: string[];
+  approval: { by: 'customer' | 'system' | null; at: string | null; channel: string | null };
+  policy: Record<string, unknown>;
+  payment: { status: string; method: string | null; initiatedOn: string | null; nothingToPay: boolean; note: string | null };
+  bank: { required: boolean; account: { last4: string } | null };
+  filed: { confirmationNumber: string | null; filedAmount: number | null; differenceReason: string | null; proofAvailable: boolean };
+  autoApproveBlockers: string[];
+  timeline: Array<{ type: string; label: string; at: string; actor: 'customer' | 'system' | 'operations' }>;
+}
+
+export interface ListFilingsParams {
+  /** upcoming = open returns; filed = FILED or NOT_FILED. */
+  view?: 'upcoming' | 'filed';
+  status?: string;
+  /** e.g. US_CA */
+  jurisdictionId?: string;
+  /** 1 to 100, default 25. */
+  limit?: number;
+  offset?: number;
+  /** Required for account-scoped keys. */
+  entityId?: string;
+}
+
+export interface ListFilingsResponse {
+  ok: boolean;
+  filings: FilingSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface GetFilingResponse {
+  ok: boolean;
+  filing: FilingDetail;
+}
+
+/** Response of approve, undo, pause, resume, skip and prepayment. `alreadyApplied` is true when the filing already held that state. */
+export interface FilingActionResponse {
+  ok: boolean;
+  alreadyApplied?: boolean;
+  filing: FilingSummary;
+}
+
+export interface FilingChangeRequest {
+  at: string;
+  message: string;
+}
+
+export interface ListFilingChangeRequestsResponse {
+  ok: boolean;
+  changeRequests: FilingChangeRequest[];
+}
+
+export interface FilingBankAccountResponse {
+  ok: boolean;
+  /** Null when no account is on file. Only the last four digits are ever returned. */
+  bankAccount: {
+    id: string;
+    holderName: string;
+    routingLast4: string;
+    accountLast4: string;
+    accountType: string | null;
+    country: string;
+    currency: string;
+    verifiedAt: string | null;
+    createdAt: string;
+  } | null;
+}
+
+export interface GenerateSandboxFilingInput {
+  /** A registration whose filing frequency is set (from listRegistrations). */
+  registrationId: string;
+  /** Monthly "2026-09" or quarterly "2026-Q3". Omitted: the most recent closed period. */
+  periodKey?: string;
+  entityId?: string;
+}
+
+export type FilingSetupState = 'NOT_SET_UP' | 'REQUESTED' | 'ENABLED' | 'STOPPED_AFTER';
+
+/** Whether the account may set up filing now (a subscription is required once billing is live; sandbox is exempt). */
+export interface FilingAccess {
+  canSetUp: boolean;
+  /** The sentence to show; null when canSetUp. Equals the 402 message. */
+  message: string | null;
+  subscribeUrl: string | null;
+  subscribeLabel: string | null;
+}
+
+export interface FilingSetupSummary {
+  registrationId: string;
+  jurisdictionId: string;
+  jurisdictionLabel: string;
+  registrationLabel: string;
+  state: FilingSetupState;
+  stateLabel: string;
+  nextStep: 'SET_UP' | 'ADD_PAYMENT_ACCOUNT' | 'WAIT_FOR_ONBOARDING' | 'NONE' | 'RESTART';
+  nextStepLabel: string | null;
+  actionLabel: string | null;
+  frequencyLabel: string | null;
+  startPeriodLabel: string | null;
+  eligible: boolean;
+  ineligibleReason: string | null;
+}
+
+export interface ListFilingSetupsResponse {
+  ok: boolean;
+  filingAccess: FilingAccess;
+  setups: FilingSetupSummary[];
+}
+
+export interface FilingPeriodOption {
+  /** YYYY-MM or YYYY-Qn */
+  key: string;
+  label: string;
+  startsOn: string;
+  endsOn: string;
+  /** True when the state due dates were unavailable and the approximation was used. */
+  estimated?: boolean;
+}
+
+export interface FilingStartOptions {
+  earliestStartLabel: string;
+  earliestStartNote?: string;
+  firstAvailable: FilingPeriodOption;
+  /** The next 8 periods after firstAvailable. */
+  later: FilingPeriodOption[];
+}
+
+export interface FilingSetup {
+  filingAccess: FilingAccess;
+  registrationId: string;
+  state: FilingSetupState;
+  frequencyCode: string | null;
+  proposedStartDate: string | null;
+  startChoice: string | null;
+  startPeriodKey: string | null;
+  startPeriodLabel: string | null;
+  frequencyOptions: Array<{ code: string; label: string; description: string }>;
+  /** `fallback` while the state's own list of frequencies is unreachable; any other value means the live list was used. */
+  frequencyOptionsSource: string;
+  startOptionsByFrequency: Record<string, FilingStartOptions>;
+  frequencyQuestion: string;
+  frequencyHelp: string;
+  frequencyWarning: string;
+  frequencyAttestationLabel: string;
+  startQuestion: string;
+  canStart: boolean;
+  startBlockedReason: string | null;
+}
+
+export interface GetRegistrationFilingSetupResponse {
+  ok: boolean;
+  filingSetup: FilingSetup;
+}
+
+/** Request filing: frequencyCode from frequencyOptions[].code, attested, and a start. `later` also needs startPeriodKey. */
+export interface RequestFilingSetupInput {
+  frequencyCode: string;
+  frequencyAttested: true;
+  startChoice: 'asap' | 'later';
+  startPeriodKey?: string;
+}
+
+/** Move the first filing period later (YYYY-MM-DD), before it has been prepared. */
+export interface DeferFilingSetupInput {
+  deferFirstPeriodTo: string;
+}
+
+/** Stop filing from the next period. */
+export interface StopFilingSetupInput {
+  stop: true;
+}
+
+/** Exactly one of the three bodies. */
+export type UpdateRegistrationFilingSetupInput = RequestFilingSetupInput | DeferFilingSetupInput | StopFilingSetupInput;
+
+export type FilingUploadMonthState = 'not_open' | 'open' | 'processing' | 'done' | 'errors' | 'closed' | 'locked' | 'unavailable';
+
+export interface FilingUploadWindow {
+  state: 'not_yet_open' | 'open' | 'closed' | 'locked';
+  opensAt: string;
+  /** The end (23:59 UTC) of the day the return is approved automatically: the 5th of the following month by default. */
+  closesAt: string | null;
+  lockReason: 'filing_approved' | 'filing_submitted' | 'return_submitted' | null;
+}
+
+export interface FilingUploadDeclaration {
+  /** Send this back as declarationVersion. */
+  version: string;
+  text: string;
+}
+
+export interface FilingUploadFile {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  /** `system` is the file of transactions Clearvo calculated for you; it cannot be deleted. */
+  source: 'customer' | 'system';
+  system: boolean;
+  deletable: boolean;
+  note?: string;
+  uploadedAt: string;
+  /** uploaded = not processed yet; processed; had_errors = some rows rejected (see the error report); failed. */
+  status: 'uploaded' | 'processed' | 'had_errors' | 'failed';
+  statusLabel: string;
+  /** Counts are null until the file has been processed. */
+  transactionCount: number | null;
+  errorCount: number | null;
+  warningCount: number | null;
+  errorReportAvailable: boolean;
+  errorReportLabel: string | null;
+}
+
+export interface FilingUploadMonthSummary {
+  /** yyyy-MM */
+  period: string;
+  periodLabel: string;
+  kind: string;
+  state: FilingUploadMonthState;
+  stateLabel: string;
+  windowLabel: string | null;
+  window: FilingUploadWindow;
+}
+
+export interface FilingUploadMonth extends FilingUploadMonthSummary {
+  message: string | null;
+  contactUrl?: string;
+  confirmation: { confirmedAt: string; confirmedBy: string; declarationVersion: string } | null;
+  declaration: FilingUploadDeclaration;
+  counts: { transactions: number; errors: number; warnings: number };
+  canUpload: boolean;
+  canConfirm: boolean;
+  allowedActions: { upload: boolean; delete: boolean; process: boolean };
+  files: FilingUploadFile[];
+}
+
+export interface ListFilingUploadMonthsResponse {
+  ok: boolean;
+  /** False until the business profile is set up for filing. */
+  linked: boolean;
+  months: FilingUploadMonthSummary[];
+  openPeriod?: string | null;
+  message?: string;
+}
+
+export interface GetFilingUploadMonthResponse {
+  ok: boolean;
+  month: FilingUploadMonth;
+}
+
+export interface UploadFilingDataFileInput {
+  /** File name including the extension: .csv, .xlsx or .xls. */
+  fileName: string;
+  /** The file content, up to 25 MB. */
+  content: Blob | ArrayBuffer | Uint8Array | string;
+  /** Defaults from the extension. */
+  contentType?: string;
+}
+
+export interface UploadFilingDataFileResponse {
+  ok: boolean;
+  file: FilingUploadFile;
+}
+
+export interface DeleteFilingDataFileResponse {
+  ok: boolean;
+  deleted: boolean;
+  id: string;
+}
+
+/** The body of POST /v1/filings/upload/months/{month}/process. */
+export interface ProcessFilingUploadMonthInput {
+  /** Must be true: the person confirming accepted the declaration text (month.declaration.text). */
+  declarationAccepted: boolean;
+  /** month.declaration.version as shown with the month. A stale version is 422 DECLARATION_VERSION_MISMATCH. */
+  declarationVersion: string;
+  /** Go ahead although some rows were rejected (otherwise 409 ACKNOWLEDGEMENT_REQUIRED). */
+  acknowledgeRejectedRows?: boolean;
+}
+
+/** 202 while processing runs (poll getFilingUploadMonth until state is done or errors); 200 with alreadyApplied when nothing changed. */
+export interface ProcessFilingUploadMonthResponse {
+  ok: boolean;
+  alreadyApplied?: boolean;
+  month: FilingUploadMonth;
+}
+
+export interface FilingUploadErrorReportResponse {
+  ok: boolean;
+  name: string;
+  /** A fresh download link, new on every call. Do not store it. */
+  url: string;
+  label: string;
+}
+
+export interface FilingUploadTemplate {
+  version: number;
+  name: string;
+  dateFormat: string;
+  decimalSeparator: string;
+  columns: Array<{ column: string; required: boolean; format: string; example: string; guide: string }>;
+}
+
+export type FilingUploadTemplateFormat = 'csv' | 'xlsx' | 'json';

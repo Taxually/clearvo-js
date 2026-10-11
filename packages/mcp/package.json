@@ -18,6 +18,7 @@
     "test:tool-annotations": "node scripts/verify-tool-annotations.js",
     "test:supplier-tools": "node scripts/verify-supplier-tools.js",
     "test:rules-engine-tools": "node scripts/verify-rules-engine-tools.js",
+    "test:filings-tools": "node scripts/verify-filings-tools.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch"
   },

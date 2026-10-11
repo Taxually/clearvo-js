@@ -1,7 +1,7 @@
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { homedir } from 'os';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { Command } from 'commander';
 
 /** Commander collector for the repeatable --classification-code flag. */
@@ -80,10 +80,13 @@ export function createProgram(): Command {
     if (!res.ok) {
       // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
       const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
-      const parts = [`HTTP ${res.status}: ${errObj ? (errObj.message ?? errObj.code ?? 'Unknown error') : (data.error ?? 'Unknown error')}`];
+      // The Filings routes put the stable code in `error` and the sentence in `message` or `detail`.
+      const filingsCode = !errObj && typeof data.error === 'string' && (typeof data.message === 'string' || typeof data.detail === 'string') ? data.error : undefined;
+      const parts = [`HTTP ${res.status}: ${errObj ? (errObj.message ?? errObj.code ?? 'Unknown error') : filingsCode ? (data.message ?? data.detail) : (data.error ?? 'Unknown error')}`];
       if (data.hint) parts.push(`Hint: ${data.hint}`);
       if (data.field) parts.push(`Field: ${data.field}`);
       if (data.code) parts.push(`Code: ${data.code}`);
+      else if (filingsCode) parts.push(`Code: ${filingsCode}`);
       if (Array.isArray(data.errors) && data.errors.length > 0) {
         parts.push('Errors:');
         for (const e of (data.errors as Array<Record<string, unknown>>).slice(0, 25)) {
@@ -96,6 +99,17 @@ export function createProgram(): Command {
     return data;
   }
   
+  /** A GET that returns a file (CSV, XLSX, PDF/image) rather than JSON. Exits on a non-2xx response, printing the error like api(). */
+  async function apiFile(path: string, extraHeaders?: Record<string, string>): Promise<Response> {
+    const res = await fetch(`${getBaseUrl()}${path}`, { method: 'GET', headers: { 'x-api-key': getApiKey(), ...extraHeaders } });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+      console.error(`HTTP ${res.status}: ${data.message ?? data.detail ?? data.error ?? 'Unknown error'}${typeof data.error === 'string' && (data.message || data.detail) ? `\nCode: ${data.error}` : ''}`);
+      process.exit(1);
+    }
+    return res;
+  }
+
   function print(data: unknown, pretty: boolean) {
     console.log(pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data));
   }
@@ -2027,6 +2041,343 @@ export function createProgram(): Command {
     .action(async (calculationId: string, opts: { entity?: string; pretty?: boolean }) => {
       const result = await api('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/adjustment-options`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
+    });
+
+  // ── clearvo filings ──────────────────────────────────────────────────────────
+  // US sales tax filing: setup (GET /filings/setups, GET|PUT /tax/registrations/{id}/filing), the return lifecycle
+  // (/filings/*) and the data upload (/filings/upload/*). The key needs the `filings` product; changes need a write key.
+  const filings = program.command('filings').description('US sales tax filing: set up, review and approve returns, upload your data');
+  const entityHdr = (entity?: string): Record<string, string> | undefined => (entity ? { 'x-entity-id': entity } : undefined);
+  const parseVersion = (v: string): number => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) {
+      console.error('Error: --snapshot-version must be the filing\'s snapshotVersion (a whole number from `clearvo filings get`)');
+      process.exit(1);
+    }
+    return n;
+  };
+  const writeOut = (out: string | undefined, data: Uint8Array | string, label: string) => {
+    if (out) {
+      writeFileSync(out, data);
+      console.log(`Saved ${label} to ${out}`);
+    } else if (typeof data === 'string') {
+      process.stdout.write(data);
+    } else {
+      console.error(`Error: ${label} is a binary file — pass --out <file>`);
+      process.exit(1);
+    }
+  };
+
+  filings
+    .command('list')
+    .description('List your returns')
+    .option('--view <view>', 'upcoming (open returns) or filed (FILED or NOT_FILED)')
+    .option('--status <status>', 'Only returns with this exact status')
+    .option('--jurisdiction <id>', 'e.g. US_CA')
+    .option('--limit <n>', '1 to 100 (default 25)')
+    .option('--offset <n>', 'Skip this many returns')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { view?: string; status?: string; jurisdiction?: string; limit?: string; offset?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.view) qs.set('view', opts.view);
+      if (opts.status) qs.set('status', opts.status);
+      if (opts.jurisdiction) qs.set('jurisdictionId', opts.jurisdiction);
+      if (opts.limit) qs.set('limit', opts.limit);
+      if (opts.offset) qs.set('offset', opts.offset);
+      const q = qs.toString();
+      print(await api('GET', `/filings${q ? `?${q}` : ''}`, undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filings
+    .command('get <id>')
+    .description('One return with totals, lines by tax authority, scope notes and timeline; shows snapshotVersion and allowedActions')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/filings/${encodeURIComponent(id)}`, undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  for (const [name, path, text] of [
+    ['approve', 'approve', 'Approve a return for submission to the state (reversible with `undo` until it is submitted)'],
+    ['undo', 'undo', 'Take an approval back to PENDING_APPROVAL (only before submission)'],
+    ['pause', 'pause', 'Pause a return so it is not approved automatically (limited per year; the on-time filing commitment is lost while paused)'],
+    ['resume', 'resume', 'Resume a paused return'],
+  ] as const) {
+    filings
+      .command(`${name} <id>`)
+      .description(text)
+      .requiredOption('--snapshot-version <n>', 'The return\'s current snapshotVersion (from `filings get`); a mismatch is 409 FILING_STALE')
+      .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+      .option('--pretty', 'Pretty-print JSON output')
+      .action(async (id: string, opts: { snapshotVersion: string; entity?: string; pretty?: boolean }) => {
+        print(await api('POST', `/filings/${encodeURIComponent(id)}/${path}`, { snapshotVersion: parseVersion(opts.snapshotVersion) }, entityHdr(opts.entity)), !!opts.pretty);
+      });
+  }
+
+  filings
+    .command('skip <id>')
+    .description('Skip a return: it becomes NOT_FILED and is not filed (only before submission)')
+    .requiredOption('--snapshot-version <n>', 'The return\'s current snapshotVersion')
+    .requiredOption('--reason <text>', 'Why it is being skipped (up to 500 characters)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion: string; reason: string; entity?: string; pretty?: boolean }) => {
+      print(await api('POST', `/filings/${encodeURIComponent(id)}/skip`, { snapshotVersion: parseVersion(opts.snapshotVersion), reason: opts.reason }, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filings
+    .command('prepayment <id>')
+    .description('Record an amount already paid for the period (only before approval)')
+    .requiredOption('--snapshot-version <n>', 'The return\'s current snapshotVersion')
+    .requiredOption('--amount <amount>', 'Amount already paid, zero or more, in the return\'s currency')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion: string; amount: string; entity?: string; pretty?: boolean }) => {
+      const amount = Number(opts.amount);
+      if (!Number.isFinite(amount) || amount < 0) {
+        console.error('Error: --amount must be a number, zero or more');
+        process.exit(1);
+      }
+      print(await api('POST', `/filings/${encodeURIComponent(id)}/prepayment`, { snapshotVersion: parseVersion(opts.snapshotVersion), amount }, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  const filingChanges = filings.command('change-requests').description('Requests to change something on a return that cannot be edited directly');
+
+  filingChanges
+    .command('list <id>')
+    .description('List the change requests already sent for a return')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/filings/${encodeURIComponent(id)}/change-requests`, undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filingChanges
+    .command('create <id>')
+    .description('Ask Clearvo to change something on a return (the transactions in a return are frozen)')
+    .requiredOption('--message <text>', 'What to change (up to 2000 characters)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { message: string; entity?: string; pretty?: boolean }) => {
+      print(await api('POST', `/filings/${encodeURIComponent(id)}/change-requests`, { message: opts.message }, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filings
+    .command('csv <id>')
+    .description('Download the summary by authority (CSV), or with --transactions the transaction lines frozen into the return')
+    .option('--transactions', 'The transaction lines instead of the summary')
+    .option('--out <file>', 'Write to a file instead of stdout')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .action(async (id: string, opts: { transactions?: boolean; out?: string; entity?: string }) => {
+      const res = await apiFile(`/filings/${encodeURIComponent(id)}/${opts.transactions ? 'transactions.csv' : 'csv'}`, entityHdr(opts.entity));
+      writeOut(opts.out, await res.text(), 'the CSV');
+    });
+
+  filings
+    .command('proof <id>')
+    .description('Download the proof-of-filing document (PDF, PNG or JPEG)')
+    .requiredOption('--out <file>', 'File to write')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .action(async (id: string, opts: { out: string; entity?: string }) => {
+      const res = await apiFile(`/filings/${encodeURIComponent(id)}/proof`, entityHdr(opts.entity));
+      writeOut(opts.out, new Uint8Array(await res.arrayBuffer()), 'the proof of filing');
+    });
+
+  filings
+    .command('bank-account')
+    .description('The account the state debits (last four digits only). Bank details are changed in the dashboard')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', '/filings/bank-account', undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filings
+    .command('sandbox-generate')
+    .description('Sandbox keys only: build a return on demand for a registration whose filing frequency is set (a live key gets 409 SANDBOX_ONLY)')
+    .requiredOption('--registration <id>', 'The registration id (from `registrations list`)')
+    .option('--period <periodKey>', 'e.g. 2026-09 or 2026-Q3 (default: the most recent closed period)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { registration: string; period?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, string> = { registrationId: opts.registration };
+      if (opts.period) body.periodKey = opts.period;
+      print(await api('POST', '/filings/sandbox/generate', body, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  // ── clearvo filings setup ──
+  filings
+    .command('setups')
+    .description('Where filing setup stands for each registration, and the next step')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', '/filings/setups', undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  const filingSetup = filings.command('setup').description('The filing setup of one US state sales tax registration');
+
+  filingSetup
+    .command('get <registrationId>')
+    .description('The full setup: frequencies the state offers, start periods, bank requirement and whether it can start')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (registrationId: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filingSetup
+    .command('request <registrationId>')
+    .description('Request filing for a registration. Filing starts once Clearvo has completed onboarding. Without a subscription this is 402 plan_required')
+    .requiredOption('--frequency <code>', 'A frequency code from `filings setup get` (frequencyOptions[].code), e.g. Monthly')
+    .option('--attest', 'Confirm this is the filing frequency on your state sales tax account (required)')
+    .option('--start <choice>', 'asap (first available period, default) or later', 'asap')
+    .option('--start-period <key>', 'Required with --start later: a key from startOptionsByFrequency[frequency].later, e.g. 2026-12')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (registrationId: string, opts: { frequency: string; attest?: boolean; start: string; startPeriod?: string; entity?: string; pretty?: boolean }) => {
+      if (!opts.attest) {
+        console.error('Error: pass --attest to confirm the frequency is the one on your state sales tax account');
+        process.exit(1);
+      }
+      if (opts.start !== 'asap' && opts.start !== 'later') {
+        console.error('Error: --start must be asap or later');
+        process.exit(1);
+      }
+      if (opts.start === 'later' && !opts.startPeriod) {
+        console.error('Error: --start later needs --start-period <key>');
+        process.exit(1);
+      }
+      const body: Record<string, unknown> = { frequencyCode: opts.frequency, frequencyAttested: true, startChoice: opts.start };
+      if (opts.startPeriod) body.startPeriodKey = opts.startPeriod;
+      print(await api('PUT', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, body, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filingSetup
+    .command('defer <registrationId>')
+    .description('Move the first filing period later, before it has been prepared')
+    .requiredOption('--to <date>', 'The date (YYYY-MM-DD) filing should start from')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (registrationId: string, opts: { to: string; entity?: string; pretty?: boolean }) => {
+      print(await api('PUT', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, { deferFirstPeriodTo: opts.to }, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filingSetup
+    .command('stop <registrationId>')
+    .description('Stop filing from the next period (the current period is still prepared)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (registrationId: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('PUT', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, { stop: true }, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  // ── clearvo filings upload ──
+  // Add your own transaction data to a filing month: one or several files per month, then confirm and process the month once.
+  const upload = filings.command('upload').description('Add your own transaction data to a filing month (one or several files, then process once)');
+
+  upload
+    .command('months')
+    .description('The months you can add data to, newest first, with their window state')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', '/filings/upload/months', undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  upload
+    .command('month <month>')
+    .description('One month (yyyy-MM): its files with counts, the window, canUpload/canConfirm and the declaration to accept')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (month: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/filings/upload/months/${encodeURIComponent(month)}`, undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  upload
+    .command('add <month> <file>')
+    .description('Add a data file (.csv, .xlsx or .xls, up to 25 MB) to a month. Run it again for each further file in the month')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (month: string, file: string, opts: { entity?: string; pretty?: boolean }) => {
+      const name = basename(file);
+      const lower = name.toLowerCase();
+      if (!['.csv', '.xlsx', '.xls'].some((e) => lower.endsWith(e))) {
+        console.error('Error: the file must be a .csv, .xlsx or .xls file');
+        process.exit(1);
+      }
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(file);
+      } catch {
+        console.error(`Error: cannot read ${file}`);
+        process.exit(1);
+      }
+      if (bytes.length === 0) {
+        console.error('Error: the file is empty');
+        process.exit(1);
+      }
+      if (bytes.length > 25 * 1024 * 1024) {
+        console.error('Error: the file is larger than 25 MB');
+        process.exit(1);
+      }
+      const type = lower.endsWith('.csv') ? 'text/csv' : lower.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
+      const form = new FormData();
+      form.append('file', new Blob([bytes], { type }), name);
+      print(await api('POST', `/filings/upload/months/${encodeURIComponent(month)}/files`, form, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  upload
+    .command('delete <month> <fileId>')
+    .description('Remove a file you added while the month is open (the calculated file cannot be removed)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (month: string, fileId: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('DELETE', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}`, undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  upload
+    .command('process <month>')
+    .description('Confirm that all data for the month is added and process it once. Read the declaration first: `filings upload month <month>` shows declaration.text and declaration.version')
+    .option('--accept-declaration', 'The person confirming has read and accepts the declaration (required)')
+    .requiredOption('--declaration-version <version>', 'The declaration version shown with the month (month.declaration.version)')
+    .option('--acknowledge-rejected', 'Go ahead although some rows were rejected; they are left out of the return')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (month: string, opts: { acceptDeclaration?: boolean; declarationVersion: string; acknowledgeRejected?: boolean; entity?: string; pretty?: boolean }) => {
+      if (!opts.acceptDeclaration) {
+        console.error('Error: pass --accept-declaration to confirm the declaration (read it with `clearvo filings upload month ' + month + '`)');
+        process.exit(1);
+      }
+      const body: Record<string, unknown> = { declarationAccepted: true, declarationVersion: opts.declarationVersion };
+      if (opts.acknowledgeRejected) body.acknowledgeRejectedRows = true;
+      print(await api('POST', `/filings/upload/months/${encodeURIComponent(month)}/process`, body, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  upload
+    .command('error-report <month> <fileId>')
+    .description('A fresh download link for the rows of a file that were rejected (the link is new on every call; do not store it)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (month: string, fileId: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}/error-report`, undefined, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  upload
+    .command('template')
+    .description('The upload template: the columns Clearvo expects')
+    .option('--format <format>', 'csv (default), xlsx or json', 'csv')
+    .option('--out <file>', 'Write to a file instead of stdout (required for xlsx)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .action(async (opts: { format: string; out?: string; entity?: string }) => {
+      if (!['csv', 'xlsx', 'json'].includes(opts.format)) {
+        console.error('Error: --format must be csv, xlsx or json');
+        process.exit(1);
+      }
+      const res = await apiFile(`/filings/upload/template?format=${opts.format}`, entityHdr(opts.entity));
+      if (opts.format === 'xlsx') writeOut(opts.out, new Uint8Array(await res.arrayBuffer()), 'the template');
+      else writeOut(opts.out, await res.text(), 'the template');
     });
 
   return program;
