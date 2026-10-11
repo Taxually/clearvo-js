@@ -240,6 +240,25 @@ describe('errors', () => {
     expect(printed).toContain('Code: DECLARATION_VERSION_MISMATCH');
   });
 
+  it('prints the extra fields of an upload refusal and what to do next', async () => {
+    mockFetch({ error: 'ACKNOWLEDGEMENT_REQUIRED', message: 'Some rows were rejected.', rejectedRows: 4, rejectedFiles: 1 }, { status: 409 });
+    exitThrows();
+    await expect(run(['upload', 'process', '2026-09', '--accept-declaration', '--declaration-version', 'v'])).rejects.toThrow('process.exit called');
+    const printed = errSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(printed).toContain('Code: ACKNOWLEDGEMENT_REQUIRED');
+    expect(printed).toContain('Details: {"rejectedRows":4,"rejectedFiles":1}');
+    expect(printed).toContain('--acknowledge-rejected');
+  });
+
+  it('prints existingId on a duplicate file', async () => {
+    mockFetch({ error: 'FILE_ALREADY_ADDED', message: 'Already added.', existingId: 'f9', reason: 'same_name' }, { status: 409 });
+    exitThrows();
+    const dir = mkdtempSync(join(tmpdir(), 'clearvo-cli-dup-'));
+    writeFileSync(join(dir, 'a.csv'), 'a,b\n1,2\n');
+    await expect(run(['upload', 'add', '2026-09', join(dir, 'a.csv')])).rejects.toThrow('process.exit called');
+    expect(errSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain('"existingId":"f9"');
+  });
+
   it('prints a failed download like any other error', async () => {
     mockFetch({ error: 'PROOF_NOT_AVAILABLE' }, { status: 404 });
     exitThrows();

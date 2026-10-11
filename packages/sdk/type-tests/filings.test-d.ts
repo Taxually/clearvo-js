@@ -3,6 +3,8 @@
 
 import type {
   ClearvoClient,
+  ClearvoError,
+  FilingSetup,
   FilingStatus,
   FilingUploadFile,
   ProcessFilingUploadMonthInput,
@@ -41,3 +43,11 @@ async function _use() {
   void [_label, _v, csv, xlsx];
 }
 void [_request, _defer, _stop, _notAttested, _badStart, _noDeclaration, _process, _status, _file, _use];
+
+// frequencyOptionsSource is closed (live | fallback); the error body's extra fields are typed.
+// @ts-expect-error not an allowed source
+const _badSource: FilingSetup['frequencyOptionsSource'] = 'cached';
+declare const _err: ClearvoError;
+const _existing: string | undefined = _err.body?.existingId;
+const _rows: number | undefined = _err.body?.rejectedRows;
+const _declaration: { version: string; text: string } | undefined = _err.body?.declaration;

@@ -3903,6 +3903,33 @@ export interface SendRejectionBody {
   referenceId?: string;
 }
 
+/** Any JSON error body, with the extra fields the Filings upload routes add. */
+export interface ClearvoErrorBody extends Record<string, unknown> {
+  error?: unknown;
+  message?: string;
+  /** FILE_ALREADY_ADDED: the id of the file already in the month. */
+  existingId?: string;
+  /** FILE_ALREADY_ADDED: `same_name` or `same_content`. MONTH_LOCKED: why the month is locked. */
+  reason?: string;
+  /** PERIOD_PROCESSING: `processing`. */
+  state?: string;
+  /** ACKNOWLEDGEMENT_REQUIRED: rows rejected across the month. */
+  rejectedRows?: number;
+  /** ACKNOWLEDGEMENT_REQUIRED: files with rejected rows. */
+  rejectedFiles?: number;
+  /** DECLARATION_VERSION_MISMATCH: the version to send now. */
+  currentVersion?: string;
+  /** DECLARATION_VERSION_MISMATCH: the current declaration to show. */
+  declaration?: { version: string; text: string };
+}
+
+/** The `error` codes of a Filings upload refusal (409 and 422), as in `ClearvoError.code`. */
+export type FilingUploadErrorCode =
+  | 'FILE_ALREADY_ADDED' | 'SYSTEM_FILE_NOT_DELETABLE' | 'MONTH_NOT_OPEN' | 'MONTH_CLOSED' | 'MONTH_LOCKED'
+  | 'MONTH_NOT_CLOSABLE' | 'PERIOD_PROCESSING' | 'PERIOD_CONFLICT' | 'PROCESSING_REFUSED' | 'ACKNOWLEDGEMENT_REQUIRED'
+  | 'SYSTEM_FILE_PENDING' | 'DECLARATION_REQUIRED' | 'DECLARATION_VERSION_MISMATCH'
+  | 'month_not_available' | 'filing_backend_not_linked' | 'processing_backend_unavailable';
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,
@@ -3912,7 +3939,9 @@ export class ClearvoError extends Error {
     /** The API's machine-readable error code when it sent one, e.g. `BUILT_IN_PROPERTY_AS_CUSTOM` (see {@link CustomPropertyErrorCode}) or `VALIDATION_RULES_UNAVAILABLE`. */
     public readonly code?: CustomPropertyErrorCode | (string & {}),
     /** The per-field failures of a `POST /v1/send` rejection (see {@link SendRejectionBody}). */
-    public readonly errors?: SendRejectionEntry[]
+    public readonly errors?: SendRejectionEntry[],
+    /** The whole JSON error body, so fields beyond `message` / `code` are reachable: for the Filings upload routes `existingId` and `reason` (FILE_ALREADY_ADDED), `rejectedRows` and `rejectedFiles` (ACKNOWLEDGEMENT_REQUIRED), `currentVersion` and `declaration` (DECLARATION_VERSION_MISMATCH). Narrow with {@link FilingUploadErrorBody}. */
+    public readonly body?: ClearvoErrorBody
   ) {
     super(message);
     this.name = 'ClearvoError';
@@ -4643,12 +4672,12 @@ export interface FilingSetup {
   state: FilingSetupState;
   frequencyCode: string | null;
   proposedStartDate: string | null;
-  startChoice: string | null;
+  startChoice: 'asap' | 'later' | 'backdated' | null;
   startPeriodKey: string | null;
   startPeriodLabel: string | null;
   frequencyOptions: Array<{ code: string; label: string; description: string }>;
-  /** `fallback` while the state's own list of frequencies is unreachable; any other value means the live list was used. */
-  frequencyOptionsSource: string;
+  /** `fallback` while the state source is unreachable: Monthly, Quarterly and Quarterly with prepayments, with estimated start periods. */
+  frequencyOptionsSource: 'live' | 'fallback';
   startOptionsByFrequency: Record<string, FilingStartOptions>;
   frequencyQuestion: string;
   frequencyHelp: string;
@@ -4785,7 +4814,7 @@ export interface ProcessFilingUploadMonthInput {
   declarationAccepted: boolean;
   /** month.declaration.version as shown with the month. A stale version is 422 DECLARATION_VERSION_MISMATCH. */
   declarationVersion: string;
-  /** Go ahead although some rows were rejected (otherwise 409 ACKNOWLEDGEMENT_REQUIRED). */
+  /** Go ahead although some rows were rejected (otherwise 409 ACKNOWLEDGEMENT_REQUIRED, with `rejectedRows` and `rejectedFiles` on `ClearvoError.body`). */
   acknowledgeRejectedRows?: boolean;
 }
 
@@ -4801,6 +4830,7 @@ export interface FilingUploadErrorReportResponse {
   name: string;
   /** A fresh download link, new on every call. Do not store it. */
   url: string;
+  /** Text to show on the download link, as is. */
   label: string;
 }
 

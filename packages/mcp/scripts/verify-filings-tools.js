@@ -172,6 +172,16 @@ api.listen(0, '127.0.0.1', async () => {
   const refused = await callTool('upload_filing_data_file', { month: '2026-09', fileName: 'a.csv', contentBase64: b64('x') });
   assert(refused.isError && refused.text.includes('HTTP 409') && refused.text.includes('This file is already added'), `a 409 must surface: ${refused.text}`);
   assert(refused.text.includes('FILE_ALREADY_ADDED'), `the stable code must surface too: ${refused.text}`);
+  assert(/HTTP 409: FILE_ALREADY_ADDED\nMessage: This file is already added/.test(refused.text), `upload refusals read as code, then Message: ${refused.text}`);
+  nextStatus = 409; nextBody = { error: 'FILE_ALREADY_ADDED', message: 'Already added.', existingId: 'f9', reason: 'same_name' };
+  const dup = await callTool('upload_filing_data_file', { month: '2026-09', fileName: 'a.csv', contentBase64: b64('x') });
+  assert(dup.text.includes('Details: {"existingId":"f9","reason":"same_name"}'), `Details must carry the extra body fields: ${dup.text}`);
+  nextStatus = 409; nextBody = { error: 'ACKNOWLEDGEMENT_REQUIRED', message: 'Some rows were rejected.', rejectedRows: 4, rejectedFiles: 1 };
+  const ack = await callTool('process_filing_upload_month', { month: '2026-09', declarationAccepted: true, declarationVersion: 'v' });
+  assert(ack.text.includes('Details: {"rejectedRows":4,"rejectedFiles":1}'), `ACKNOWLEDGEMENT_REQUIRED details: ${ack.text}`);
+  nextStatus = 422; nextBody = { error: 'DECLARATION_VERSION_MISMATCH', message: 'Changed.', currentVersion: 'v2', declaration: { version: 'v2', text: 'T' } };
+  const mm = await callTool('process_filing_upload_month', { month: '2026-09', declarationAccepted: true, declarationVersion: 'v' });
+  assert(mm.text.includes('"currentVersion":"v2"') && mm.text.includes('"declaration":{"version":"v2","text":"T"}'), `declaration details: ${mm.text}`);
 
   clearTimeout(timeout);
   console.log(`OK — ${REQUIRED.length} filings tools present; every tool dispatches to the documented verb, path and body; upload is multipart and checked client-side.`);

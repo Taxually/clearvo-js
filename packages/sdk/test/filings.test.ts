@@ -196,6 +196,24 @@ describe('errors', () => {
     expect(err.message).toBe('The declaration has changed.');
   });
 
+  it('exposes the extra body fields of an upload refusal on ClearvoError.body', async () => {
+    mock({ error: 'FILE_ALREADY_ADDED', message: 'Already added.', existingId: 'f9', reason: 'same_name' }, { status: 409 });
+    const dup = await client().uploadFilingDataFile('2026-09', { fileName: 'a.csv', content: 'a,b\n1,2\n' }).catch((e) => e);
+    expect(dup.code).toBe('FILE_ALREADY_ADDED');
+    expect(dup.body.existingId).toBe('f9');
+    expect(dup.body.reason).toBe('same_name');
+
+    mock({ error: 'ACKNOWLEDGEMENT_REQUIRED', message: 'Some rows were rejected.', rejectedRows: 4, rejectedFiles: 1 }, { status: 409 });
+    const ack = await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: 'v' }).catch((e) => e);
+    expect(ack.body.rejectedRows).toBe(4);
+    expect(ack.body.rejectedFiles).toBe(1);
+
+    mock({ error: 'DECLARATION_VERSION_MISMATCH', message: 'Changed.', currentVersion: 'v2', declaration: { version: 'v2', text: 'T' } }, { status: 422 });
+    const mm = await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: 'v1' }).catch((e) => e);
+    expect(mm.body.currentVersion).toBe('v2');
+    expect(mm.body.declaration).toEqual({ version: 'v2', text: 'T' });
+  });
+
   it('keeps a plain string error as before', async () => {
     mock({ error: 'Not found' }, { status: 404 });
     const err = await client().getFiling('x').catch((e) => e);

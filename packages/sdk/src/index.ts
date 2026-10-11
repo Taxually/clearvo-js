@@ -330,6 +330,8 @@ export type {
   ProcessFilingUploadMonthInput,
   ProcessFilingUploadMonthResponse,
   FilingUploadErrorReportResponse,
+  ClearvoErrorBody,
+  FilingUploadErrorCode,
   FilingUploadTemplate,
   FilingUploadTemplateFormat,
 } from './types.js';

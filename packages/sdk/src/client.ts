@@ -176,6 +176,7 @@ import type {
   FilingUploadTemplateFormat,
 } from './types.js';
 import { ClearvoError } from './types.js';
+import type { ClearvoErrorBody } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
 
@@ -252,7 +253,8 @@ export class ClearvoClient {
       typeof data.hint === 'string' ? data.hint : undefined,
       typeof data.field === 'string' ? data.field : undefined,
       typeof data.code === 'string' ? data.code : typeof errObj?.code === 'string' ? errObj.code : filingsCode,
-      Array.isArray(data.errors) ? data.errors as SendRejectionEntry[] : undefined
+      Array.isArray(data.errors) ? data.errors as SendRejectionEntry[] : undefined,
+      Object.keys(data).length > 0 ? data as ClearvoErrorBody : undefined
     );
   }
 
@@ -1322,7 +1324,7 @@ export class ClearvoClient {
   /**
    * POST /filings/upload/months/{month}/files: add a data file (.csv, .xlsx or .xls, up to 25 MB) to the month. Call it again for each
    * further file; every file in the month is processed together. A file with the same name or content as one already added is 409
-   * FILE_ALREADY_ADDED (carries `existingId`): to replace a file, delete it and upload the new one.
+   * FILE_ALREADY_ADDED (`ClearvoError.body.existingId` is the id of the file already there): to replace a file, delete it and upload the new one.
    */
   uploadFilingDataFile(month: string, input: UploadFilingDataFileInput, entityId?: string): Promise<UploadFilingDataFileResponse> {
     const lower = input.fileName.toLowerCase();
@@ -1341,7 +1343,7 @@ export class ClearvoClient {
   /**
    * POST /filings/upload/months/{month}/process: confirm that all data for the month is added and process it once. The person confirming
    * accepts the declaration shown with the month: send `declarationAccepted: true` and its `declarationVersion` (otherwise 422
-   * DECLARATION_REQUIRED / DECLARATION_VERSION_MISMATCH). If some rows were rejected the first call is 409 ACKNOWLEDGEMENT_REQUIRED;
+   * DECLARATION_REQUIRED / DECLARATION_VERSION_MISMATCH, with `body.currentVersion` and `body.declaration`). If some rows were rejected the first call is 409 ACKNOWLEDGEMENT_REQUIRED (`body.rejectedRows`, `body.rejectedFiles`);
    * repeat with `acknowledgeRejectedRows: true` to go ahead. Resolves with 202 while processing runs: poll getFilingUploadMonth until
    * `state` is `done` or `errors`.
    */

@@ -87,6 +87,13 @@ export function createProgram(): Command {
       if (data.field) parts.push(`Field: ${data.field}`);
       if (data.code) parts.push(`Code: ${data.code}`);
       else if (filingsCode) parts.push(`Code: ${filingsCode}`);
+      if (filingsCode) {
+        // Extra body fields of a Filings refusal: existingId, reason, rejectedRows, rejectedFiles, currentVersion, declaration, ...
+        const extras = Object.fromEntries(Object.entries(data).filter(([k]) => !['error', 'message', 'detail', 'hint', 'field', 'code', 'errors'].includes(k)));
+        if (Object.keys(extras).length > 0) parts.push(`Details: ${JSON.stringify(extras)}`);
+        if (filingsCode === 'ACKNOWLEDGEMENT_REQUIRED') parts.push('Next: look at the error reports (`clearvo filings upload error-report <month> <fileId>`), then repeat with --acknowledge-rejected to go ahead without the rejected rows.');
+        if (filingsCode === 'DECLARATION_VERSION_MISMATCH') parts.push('Next: read the current declaration (`clearvo filings upload month <month>`) and repeat with --declaration-version set to its version.');
+      }
       if (Array.isArray(data.errors) && data.errors.length > 0) {
         parts.push('Errors:');
         for (const e of (data.errors as Array<Record<string, unknown>>).slice(0, 25)) {

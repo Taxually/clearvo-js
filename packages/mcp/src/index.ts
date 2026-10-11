@@ -111,11 +111,17 @@ async function callApi(
         'Run the list_entities tool to find your entity ID, then add it to the env config and restart.'
       );
     }
+    // Filing upload refusals (same format as the hosted connector): the stable code on the first line, then the plain-language
+    // message and the extra body fields (existingId, rejectedRows, rejectedFiles, currentVersion, declaration) as JSON.
+    const uploadRefusal = path.startsWith('/filings/upload/') && typeof err.error === 'string';
+    const uploadExtras = uploadRefusal ? Object.fromEntries(Object.entries(err).filter(([k]) => k !== 'error' && k !== 'message')) : {};
     const msg = [
-      `HTTP ${res.status}: ${errorText}`,
+      `HTTP ${res.status}: ${uploadRefusal ? err.error : errorText}`,
+      uploadRefusal && typeof err.message === 'string' ? `Message: ${err.message}` : null,
+      uploadRefusal && Object.keys(uploadExtras).length > 0 ? `Details: ${JSON.stringify(uploadExtras)}` : null,
       err.hint ? `Hint: ${err.hint}` : null,
       err.field ? `Field: ${err.field}` : null,
-      err.code ? `Code: ${err.code}` : filingsCode ? `Code: ${filingsCode}` : null,
+      err.code ? `Code: ${err.code}` : filingsCode && !uploadRefusal ? `Code: ${filingsCode}` : null,
       errorList.length > 0 ? `Errors:\n${errorList.join('\n')}` : null,
     ].filter(Boolean).join('\n');
     throw new Error(msg);
@@ -1883,7 +1889,7 @@ const TOOLS = [
     name: 'get_registration_filing_setup',
     description:
       'Read the filing setup for a US state sales tax registration: state (NOT_SET_UP, REQUESTED, ENABLED, STOPPED_AFTER), ' +
-      'the frequency options the state offers ({ code, label, description }; frequencyOptionsSource is "fallback" when the state source is unreachable and the three standard options are offered), ' +
+      'the frequency options the state offers ({ code, label, description }; frequencyOptionsSource is "live", or "fallback" when the state source is unreachable and the three standard options are offered), ' +
       'startOptionsByFrequency (the periods to start from: firstAvailable, later, earlier), the stored startChoice / startPeriodKey / startPeriodLabel, whether a bank account is required and ' +
       'on file (last four digits only), canStart / startBlockedReason (whether a request would be accepted now and, if not, why: ' +
       'for example a bank account is required to start when the state is paid by debit), a pendingChange when a frequency change or restart ' +
@@ -2127,7 +2133,7 @@ const TOOLS = [
     description:
       'Add a transaction data file (.csv, .xlsx or .xls, up to 25 MB) to an upload month, sent as multipart form data. The content must be base64-encoded. ' +
       'Use get_filing_upload_template for the expected columns. A file with the same name or the same content as one already added is refused with ' +
-      '409 FILE_ALREADY_ADDED (existingId in the message); use replace_filing_data_file to swap it. Refused when the month is not open (MONTH_LOCKED, ' +
+      '409 FILE_ALREADY_ADDED (the error text carries Details with existingId); use replace_filing_data_file to swap it. Refused when the month is not open (MONTH_NOT_OPEN, MONTH_CLOSED, MONTH_LOCKED, ' +
       'PERIOD_PROCESSING). Requires a write key.',
     inputSchema: {
       type: 'object' as const,
@@ -2170,7 +2176,9 @@ const TOOLS = [
     description:
       'Confirm that all data for the month is added and process it once. Returns while processing runs (poll get_filing_upload_month for the result). ' +
       'The person confirming must accept the declaration shown in get_filing_upload_month (month.declaration): pass declarationAccepted=true and its declarationVersion, otherwise 422. ' +
-      'When some rows were rejected, pass acknowledgeRejectedRows=true to go ahead anyway. Requires a write key.',
+      'When some rows were rejected the call is refused with 409 ACKNOWLEDGEMENT_REQUIRED (Details: rejectedRows, rejectedFiles); pass acknowledgeRejectedRows=true to go ahead anyway. ' +
+      'Other refusals: 409 MONTH_NOT_OPEN, MONTH_CLOSED, PROCESSING_REFUSED, SYSTEM_FILE_PENDING (calculated transactions still being added: retry shortly); ' +
+      '422 DECLARATION_REQUIRED or DECLARATION_VERSION_MISMATCH (Details carry the current declaration). Requires a write key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
