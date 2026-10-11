@@ -764,6 +764,13 @@ export interface ReceivedInvoiceFields {
   supersededBy?: { id: string; invoiceNumber?: string; status?: string; statusLabel?: string } | null;
 }
 
+/** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
+export interface InvoiceRecordTimestamps {
+  submittedAt: string | null;
+  /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
+  ingestedAt: string | null;
+}
+
 export interface ListInvoicesResponse {
   invoices: unknown[];
   total: number;
@@ -845,6 +852,19 @@ export interface TaxCalcPartyInput {
  * `'customer'` for a purchase) tells you which response party block is
  * your own entity.
  */
+/** The closed set of stored and echoed `accountAssignment` values on a tax calculation line. */
+export type AccountAssignment = 'stock' | 'expense' | 'asset' | 'project';
+
+/**
+ * Error `code` values on the calculate and rules-engine routes that concern `customProperties`.
+ * `BUILT_IN_PROPERTY_AS_CUSTOM` (HTTP 400): a built-in field name (glAccount, costCenter, intendedUse, accountAssignment,
+ * commodityCode, commodityCodeScheme, ...) was sent under `customProperties`, or named as `customProperties.<built-in>` in a rule.
+ * Its message names the flat field to send instead, e.g. `lineItems[1].glAccount`.
+ * `UNKNOWN_CUSTOM_PROPERTY` (HTTP 400): a `customProperties` key has no property definition.
+ * `ClearvoError.code` is typed as this union plus an open string, because the API has other codes.
+ */
+export type CustomPropertyErrorCode = 'BUILT_IN_PROPERTY_AS_CUSTOM' | 'UNKNOWN_CUSTOM_PROPERTY';
+
 export interface TaxCalculateRequest {
   currency: string;
   commit?: boolean;
@@ -1048,11 +1068,25 @@ export interface TaxCalculateRequest {
     purchaseOrderId?: string;
     /** Which PO line `poLink` resolves against, when the PO header may omit it. */
     purchaseOrderLineNumber?: string;
+    /** Purchase side: the general-ledger account this line is booked to (free text, max 50 characters). Rules read and write it as `glAccount`. Echoed post-rule on the response line. Never goes inside `customProperties`. */
+    glAccount?: string;
+    /** Purchase side: the cost centre this line is booked to (free text, max 50 characters). Rules read and write it as `costCenter`. Echoed post-rule. Never goes inside `customProperties`. */
+    costCenter?: string;
+    /** Purchase side: what the buyer intends to use the goods or services for (free text, max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate. Rules read and write it as `intendedUse`. Echoed post-rule. */
+    intendedUse?: string;
     /**
-     * Per-line custom facts a rules-engine condition/action can read/write
-     * as `customProperties.<key>` — e.g. glAccount, costCenter,
-     * commodityCode, accountAssignment, intendedUse (the AP buyer-side
-     * inputs). Call getRulePropertyDefinitions() for the closed set.
+     * Purchase side: how the line is assigned in the buyer's books. On input, one of `stock`, `expense`, `asset`, `project`, or a raw ERP code (an SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string),
+     * which the `account_assignment_map` dataset maps onto those four; a code with no mapping is dropped with the `AP_ACCOUNT_ASSIGNMENT_UNKNOWN` warning.
+     * The response always echoes one of the four (see {@link AccountAssignment}). Max 50 characters. Rules read and write it as `accountAssignment`.
+     */
+    accountAssignment?: AccountAssignment | (string & {});
+    /**
+     * Per-line custom facts for data that is NOT part of the platform schema.
+     * A rules-engine condition/action reads/writes one as `customProperties.<key>`.
+     * Every key must be defined first with createRulePropertyDefinition(); an undefined key
+     * is a 400 `UNKNOWN_CUSTOM_PROPERTY`. A built-in field name here (glAccount, costCenter,
+     * intendedUse, accountAssignment, commodityCode, commodityCodeScheme, ...) is a
+     * 400 `BUILT_IN_PROPERTY_AS_CUSTOM`: send it as the regular line field instead.
      */
     customProperties?: Record<string, string | number | boolean>;
   }>;
@@ -1068,10 +1102,11 @@ export interface TaxCalculateRequest {
    */
   documentStage?: 'purchase_order' | 'invoice';
   /**
-   * Header-level custom facts a rules-engine condition/action can read/write
-   * as `customProperties.<key>` (call getRulePropertyDefinitions() for the
-   * closed set of keys visible to this key's own scope). Same contract as
-   * the per-line `customProperties` below.
+   * Header-level custom facts for data that is NOT part of the platform schema,
+   * read/written by a rules-engine condition/action as `customProperties.<key>`
+   * (listRulePropertyDefinitions() returns the keys defined in this key's own
+   * scope). Same contract as the per-line `customProperties` below, including the
+   * 400 `BUILT_IN_PROPERTY_AS_CUSTOM` for a built-in field name.
    */
   customProperties?: Record<string, string | number | boolean>;
 }
@@ -1318,6 +1353,14 @@ export interface TaxCalculateResponse {
     poLink?: 'NONE' | 'NOT_FOUND' | 'LINKED';
     /** This line's customProperties bag, post-rule (the effective values the engine actually used, echoing back any rule-authored writes). */
     customProperties?: Record<string, string | number | boolean>;
+    /** Post-rule value, including one carried through from the linked purchase order line. Omitted when the line has none. */
+    glAccount?: string;
+    /** Post-rule value (see `glAccount`). Omitted when the line has none. */
+    costCenter?: string;
+    /** Post-rule value, including one carried through from the linked purchase order line when the request did not state it. Omitted when the line has none. */
+    intendedUse?: string;
+    /** Post-rule value; always one of the four, never a raw ERP code (an unmappable code is dropped, not echoed). Omitted when the line has none. */
+    accountAssignment?: AccountAssignment;
   }>;
   /**
    * Rules-engine (docs/features/rules-engine/discovery.md's Resolved
@@ -3208,8 +3251,16 @@ export type RuleLegalBasisTag = 'LEGAL_MANDATE' | 'BUSINESS_POLICY';
 
 export interface RuleConditionLeaf {
   property: string;
+  /**
+   * One of the operators getRulesEngineSchema() lists for the property, including the date operators
+   * `on_or_after` / `before` (strict ISO date; an absent or unparseable date never matches) and the
+   * closed-vocabulary format checks `matches_format` / `not_matches_format` (value is a name from
+   * the schema's `formatVocabulary`, e.g. `ISO_DATE`, `ISO_CURRENCY`, `MAX_LENGTH:n`).
+   */
   operator: string;
   value?: unknown;
+  /** String comparisons only. true = exact-case match, false = case-insensitive. Omit to use the property's default case handling. */
+  caseSensitive?: boolean;
 }
 
 /** An OR (`any`) or AND (`all`) group — exactly one key, at least one child. Groups nest at most 2 levels deep; a rule carries at most 50 leaf conditions in total. */
@@ -3227,7 +3278,7 @@ export interface RuleAction {
   property: string;
   /** A literal value to write. Mutually exclusive with `fn`. */
   value?: unknown;
-  /** A closed function dispatch (see getRulesEngineSchema()'s `fns`). Mutually exclusive with `value`. */
+  /** A closed function dispatch (see getRulesEngineSchema()'s `fns`, which carries each function's argument schema: REGEX_REPLACE, NEGATE, MULTIPLY, DIVIDE, PARSE_DATE with a named `format`, and the text/lookup functions). Mutually exclusive with `value`. */
   fn?: string;
   args?: Record<string, unknown>;
 }
@@ -3246,16 +3297,20 @@ export interface Rule {
   description: string | null;
   status: RuleStatus;
   enabled: boolean;
-  legalBasisTag: RuleLegalBasisTag;
+  /** A platform default (isSystem) can also be 'PLATFORM_INVARIANT' (a shape/vocabulary check) — system-authored only, never settable through createRule()/updateRule(). */
+  legalBasisTag: RuleLegalBasisTag | 'PLATFORM_INVARIANT';
   sortOrder: number;
   conditions: RuleConditionItem[];
   /** The company code this rule is scoped to (Enterprise), or null for an entity-wide rule. A company-code rule fires only for requests carrying that code and outranks the entity-wide rule with the same `code`. */
   companyCode?: string | null;
   actions: RuleAction[];
   templateId: string | null;
+  /** A platform default. A system LEGAL_MANDATE or PLATFORM_INVARIANT rule keeps its shape: changing its window, conditions, actions, checkpoint, sortOrder or legalBasisTag is rejected with 422 SYSTEM_RULE_SHAPE_FROZEN; name and description stay editable. */
   isSystem: boolean;
   version: number;
+  /** The rule goes live on the platform at this instant, judged against when the platform ingests each document (`ingestedAt`), not the document's own date. A rule that applies only to documents dated from some day carries a date condition instead. */
   effectiveFrom: string | null;
+  /** The rule stops being live on the platform at this instant (exclusive), judged against ingestion time. */
   effectiveTo: string | null;
   /** A citation link (legal basis, internal policy doc, ticket) — never required. */
   documentUrl: string | null;
@@ -3336,7 +3391,9 @@ export interface CreateRuleInput {
   conditions?: RuleConditionItem[];
   actions?: RuleAction[];
   templateId?: string;
+  /** ISO datetime. Live from this instant, judged against ingestion time (not the document date). */
   effectiveFrom?: string;
+  /** ISO datetime. Live until this instant (exclusive), judged against ingestion time. */
   effectiveTo?: string;
   /** Scope the rule to one of the entity's ACTIVE company codes (Enterprise; entity-scoped keys only; not for CONFIGURATION rules). Omit for an entity-wide rule. 422 `company_code_unknown`, 403 `company_codes_not_included`. */
   companyCode?: string;
@@ -3359,7 +3416,9 @@ export interface UpdateRuleInput {
   sortOrder?: number;
   conditions?: RuleConditionItem[];
   actions?: RuleAction[];
+  /** ISO datetime. Live from this instant, judged against ingestion time (not the document date). */
   effectiveFrom?: string;
+  /** ISO datetime. Live until this instant (exclusive), judged against ingestion time. */
   effectiveTo?: string;
   /** Re-scope to another active company code; `null` makes the rule entity-wide again; omit to leave unchanged. */
   companyCode?: string | null;
@@ -3424,6 +3483,8 @@ export interface SimulateRuleInput {
   sampleSize?: number;
   /** Required when simulating a not-yet-saved rule (no ruleId in simulateRule's own argument); optional override when simulating an existing rule's in-flight edit. */
   draft?: SimulateRuleDraft;
+  /** ISO 8601 instant to evaluate rule windows (effective from/to) at. Default: now, i.e. which rules are live on the platform right now. */
+  evaluatedAt?: string;
   entityId?: string;
 }
 
@@ -3440,14 +3501,13 @@ export interface RulePropertyDefinition {
   tenantId: string | null;
   organisationId: string | null;
   entityId: string | null;
-  /** The catalog path a condition/action actually names, e.g. "customProperties.glAccount". */
+  /** The catalog path a condition/action actually names, e.g. "customProperties.poApprover". */
   property: string;
   propertyKey: string;
   label: string;
   dataType: 'string' | 'number' | 'boolean';
   appliesTo: 'line' | 'header';
   isWritable: boolean;
-  isSystem: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -3458,7 +3518,7 @@ export interface ListRulePropertyDefinitionsResponse {
 }
 
 export interface CreateRulePropertyDefinitionInput {
-  /** Must start with a letter; letters/numbers/underscore only. */
+  /** Must start with a letter; letters/numbers/underscore only. For data that is not in the platform schema: a built-in field name (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) is refused with HTTP 422. */
   propertyKey: string;
   label: string;
   dataType: 'string' | 'number' | 'boolean';
@@ -3817,6 +3877,8 @@ export interface RulesEngineSchema {
     ruleKinds: readonly string[];
     statuses: readonly string[];
     operators: readonly string[];
+    /** The closed names `matches_format` / `not_matches_format` accept as a bare code; parameterised forms (MAX_LENGTH:n, NONBLANK_MAX_LENGTH:n, MAX_ENTRIES:n, TAX_ID:CC) are listed with their pattern. */
+    formatVocabulary?: readonly string[];
     /** @deprecated use `fns` instead, which carries `simulatesOutcome` per entry. */
     functions: readonly string[];
     fns: Array<{ fn: string; simulatesOutcome: boolean; [key: string]: unknown }>;
@@ -3911,12 +3973,57 @@ export interface ManualAdjustmentOptions {
   overrideColumns: string[];
 }
 
+/**
+ * One entry of a `POST /v1/send` rejection's `errors[]` — one per failed check, in primary-first order.
+ * `path` is a JSON pointer into the request body (`/lines/2/quantity`, `/customer/address/country`).
+ */
+export interface SendRejectionEntry {
+  errorCode: string;
+  severity: 'ERROR' | 'WARNING';
+  path: string;
+  message: string;
+  suggestedAction?: string;
+  fixUrl?: string | null;
+  isMerchantResolvable?: boolean;
+  /** Present when a rule produced the entry: the rule's own name (the message a caller reads). */
+  ruleName?: string;
+  source?: 'rule';
+  /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or NEEDS_INFO (a required fact is missing; Fix & Resubmit applies). */
+  clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  [key: string]: unknown;
+}
+
+/**
+ * The `POST /v1/send` 422 body. A malformed or incomplete invoice is accepted, normalised, enriched and then
+ * checked by the platform's rules: `error` is an object (never a string), `errors[]` carries every failure, and
+ * the document is stored (NEEDS_INFO or REJECTED) unless it cannot be identified. The old `details[]` is gone.
+ * A 503 with code `VALIDATION_RULES_UNAVAILABLE` means the rules could not be loaded — nothing was checked or stored;
+ * retry with the same idempotency key.
+ */
+export interface SendRejectionBody {
+  ok: false;
+  error: { code: string; message: string; isMerchantResolvable?: boolean; fixUrl?: string | null; retryable?: boolean };
+  errors: SendRejectionEntry[];
+  /** What NORMALIZATION / ENRICHMENT rules changed before the failing check ran. */
+  adjustments?: unknown[];
+  warnings?: SendRejectionEntry[];
+  code?: string;
+  clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  terminal?: boolean;
+  /** Present only when a record was stored. */
+  referenceId?: string;
+}
+
 export class ClearvoError extends Error {
   constructor(
     public readonly status: number,
     message: string,
     public readonly hint?: string,
-    public readonly field?: string
+    public readonly field?: string,
+    /** The API's machine-readable error code when it sent one, e.g. `BUILT_IN_PROPERTY_AS_CUSTOM` (see {@link CustomPropertyErrorCode}) or `VALIDATION_RULES_UNAVAILABLE`. */
+    public readonly code?: CustomPropertyErrorCode | (string & {}),
+    /** The per-field failures of a `POST /v1/send` rejection (see {@link SendRejectionBody}). */
+    public readonly errors?: SendRejectionEntry[]
   ) {
     super(message);
     this.name = 'ClearvoError';

@@ -103,6 +103,26 @@ const timeout = setTimeout(() => fail('Timed out waiting for a tools/list respon
     return fail(`Duplicate tool name(s): ${duplicates.join(', ')}`);
   }
 
+  // AP first-class line fields: calculate_tax lines carry the four flat fields, and no tool
+  // description calls them system-seeded custom properties any more.
+  const calc = tools.find(t => t.name === 'calculate_tax');
+  const lineProps = calc?.inputSchema?.properties?.lineItems?.items?.properties ?? {};
+  const missingLineFields = ['glAccount', 'costCenter', 'intendedUse', 'accountAssignment', 'commodityCode', 'commodityCodeScheme'].filter(f => !lineProps[f]);
+  if (missingLineFields.length) {
+    return fail(`calculate_tax lineItems is missing field(s): ${missingLineFields.join(', ')}`);
+  }
+  if (!/BUILT_IN_PROPERTY_AS_CUSTOM/.test(calc.inputSchema.properties.customProperties?.description ?? '')) {
+    return fail('calculate_tax customProperties description must name BUILT_IN_PROPERTY_AS_CUSTOM');
+  }
+  const stale = tools.filter(t => /system-seeded|Global\/system|AP facts/.test(JSON.stringify(t))).map(t => t.name);
+  if (stale.length) {
+    return fail(`Tool(s) still describe the AP fields as system-seeded custom properties: ${stale.join(', ')}`);
+  }
+  const createDef = tools.find(t => t.name === 'create_rule_property_definition');
+  if (!/422/.test(createDef?.description ?? '')) {
+    return fail('create_rule_property_definition description must state the 422 for a built-in propertyKey');
+  }
+
   console.log(`OK — all ${HOSTED_RULES_ENGINE_TOOL_NAMES.length} rules-engine/manual-adjustment tools present, no confirm/revert/reject tool, no duplicates.`);
   child.kill();
   process.exit(0);

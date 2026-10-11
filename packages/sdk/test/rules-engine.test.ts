@@ -212,11 +212,11 @@ describe('ClearvoClient rules engine', () => {
   it('createRulePropertyDefinition POSTs /rules-engine/properties with the body', async () => {
     const fetchMock = mockFetch({ ok: true, definition: { id: 'p1' } }, 201);
     const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
-    await client.createRulePropertyDefinition({ propertyKey: 'glAccount', label: 'GL account', dataType: 'string' });
+    await client.createRulePropertyDefinition({ propertyKey: 'poApprover', label: 'PO approver', dataType: 'string' });
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toBe('http://x/v1/rules-engine/properties');
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toEqual({ propertyKey: 'glAccount', label: 'GL account', dataType: 'string' });
+    expect(JSON.parse(opts.body as string)).toEqual({ propertyKey: 'poApprover', label: 'PO approver', dataType: 'string' });
   });
 
   it('listRuleTemplates GETs /rules-engine/templates with query params', async () => {

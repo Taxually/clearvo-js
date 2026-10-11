@@ -94,7 +94,14 @@ async function callApi(
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = data as Record<string, unknown>;
-    const errorText = String(err.error ?? 'Unknown error');
+    // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection, which
+    // also carries errors[] (one entry per failed check, JSON-pointer path and stable code).
+    const errObj = err.error !== null && typeof err.error === 'object' ? err.error as Record<string, unknown> : null;
+    const errorText = errObj ? String(errObj.message ?? errObj.code ?? 'Unknown error') : String(err.error ?? 'Unknown error');
+    const errorList = Array.isArray(err.errors)
+      ? (err.errors as Array<Record<string, unknown>>).slice(0, 25).map(e =>
+          `  - ${String(e.path ?? '/')} ${String(e.errorCode ?? e.code ?? '')}: ${String(e.message ?? '')}`)
+      : [];
     if (res.status === 400 && errorText.toLowerCase().includes('entity context')) {
       throw new Error(
         'This operation requires an entity context. ' +
@@ -106,6 +113,8 @@ async function callApi(
       `HTTP ${res.status}: ${errorText}`,
       err.hint ? `Hint: ${err.hint}` : null,
       err.field ? `Field: ${err.field}` : null,
+      err.code ? `Code: ${err.code}` : null,
+      errorList.length > 0 ? `Errors:\n${errorList.join('\n')}` : null,
     ].filter(Boolean).join('\n');
     throw new Error(msg);
   }
@@ -179,7 +188,7 @@ const CUSTOMER_REFERENCES_SCHEMA = {
   },
 } as const;
 
-const RULE_CONDITION_LEAF_SCHEMA = { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {} }, required: ['property', 'operator'] } as const
+const RULE_CONDITION_LEAF_SCHEMA = { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {}, caseSensitive: { type: 'boolean', description: 'String comparisons only. Overrides the default case handling of the property: true = exact-case match, false = case-insensitive. Omit to use the property default.' } }, required: ['property', 'operator'] } as const
 // Groups nest at most 2 deep (the server enforces the cap); a JSON schema can't express a depth limit, so the second level is spelled out.
 const RULE_CONDITION_GROUP_LEAF_ITEMS = { anyOf: [RULE_CONDITION_LEAF_SCHEMA] } as const
 const RULE_CONDITION_INNER_GROUP_SCHEMA = {
@@ -284,6 +293,10 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
         },
       },
     },
+    customProperties: {
+      type: 'object',
+      description: 'Header-level open, customer-defined fact bag. For data that is NOT part of our schema: every key must already be defined via the rules-engine property-definition API (create_rule_property_definition) — an undefined key returns a 400 UNKNOWN_CUSTOM_PROPERTY naming the key and a fixUrl to define it, and a key that names a built-in field (e.g. glAccount, costCenter, intendedUse, accountAssignment, commodityCode) returns a 400 BUILT_IN_PROPERTY_AS_CUSTOM. Values are string/number/boolean.',
+    },
     shipFrom: {
       type: 'object',
       description: 'Where the goods are dispatched from. With duties on, a dispatch place in a different customs territory from the destination makes the consignment a customs crossing; a line-level shipFrom overrides it for that line (a second warehouse is a second consignment). customsStatus "bonded" marks stock held under customs control, so leaving it is a crossing even within one territory.',
@@ -344,8 +357,13 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
           classificationCodes: CLASSIFICATION_CODES_SCHEMA,
           taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
           commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff; for rate-band lookup, matching is jurisdiction-scoped by the line\'s own resolved country; with duties on, this is the code the duty is priced at, see commodityCodeScheme). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
-          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block). Not the AP fact customProperties.commodityCodeScheme.' },
+          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block).' },
           countryOfOrigin: { type: 'string', description: 'Two-letter country the goods were made in, read only when duties are on. Never inferred from shipFrom. Falls back to the product catalogue, then defaultCountryOfOrigin.' },
+          glAccount: { type: 'string', description: 'Purchase side: the general-ledger account this line is booked to (max 50 characters). Rules can read and write it as the property "glAccount" (e.g. map a GL account to a tax category). Echoed post-rule on the response line. Not accepted inside customProperties.' },
+          costCenter: { type: 'string', description: 'Purchase side: the cost centre this line is booked to (max 50 characters). Rules can read and write it as "costCenter". Echoed post-rule. Not accepted inside customProperties.' },
+          intendedUse: { type: 'string', description: 'Purchase side: what the buyer intends to use the goods/services for, free text (max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate to the line. Rules can read and write it as "intendedUse". Echoed post-rule. Not accepted inside customProperties.' },
+          accountAssignment: { type: 'string', description: 'Purchase side: how the line is assigned in your books — "stock", "expense", "asset" or "project". A raw ERP code (SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string) is also accepted and mapped onto those four by the account_assignment_map dataset; a code with no mapping is dropped with a warning. The response always echoes one of the four. "stock" means a resale line for buyer-held certificate matching. Rules can read and write it as "accountAssignment". Not accepted inside customProperties.' },
+          customProperties: { type: 'object', description: 'Per-line open, customer-defined fact bag for data that is NOT part of our schema — same validation contract as the header-level field of the same name. Response echoes the post-rule (effective) value.' },
           supplyType: {
             type: 'string',
             enum: ['GOODS', 'SERVICES'],
@@ -459,7 +477,7 @@ const TOOLS = [
       'customer-address requirement above. ' +
       'A request that still carries any of the retired `buyer`, `buyerType`, `lines[].buyerType`, ' +
       '`notifyBuyer`, or `countrySpecific.*.buyer*` keys (e.g. `countrySpecific.pl.buyerNip`) is rejected ' +
-      'with 422 `{ error, details: [{ field, code, message }] }` — each detail carries ' +
+      'with 422 `{ ok: false, error: { code, message }, errors: [{ path, errorCode, message }] }` — each entry carries ' +
       '`code: "UNKNOWN_FIELD_BUYER_RENAMED"` and a `message` naming the exact `customer`-named ' +
       'replacement — there is no silent alias. ' +
       'Line items carry `taxRate` and `taxAmount` (the platform is global — no tax-type-specific field names). A request ' +
@@ -468,6 +486,11 @@ const TOOLS = [
       'there is no silent alias. The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), ' +
       '`unitOfMeasure` and `sellerItemId` — the retired `discount`/`unit`/`itemCode`/`exemption` line keys are rejected with 422 ' +
       '`code: "UNKNOWN_FIELD_LINE_RENAMED"` the same way. ' +
+      'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
+      'a failure returns 422 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
+      'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
+      'Correct it and resend the same invoiceNumber. If the validation rules cannot be loaded the call returns 503 VALIDATION_RULES_UNAVAILABLE ' +
+      'with nothing stored: retry with the same idempotency key. GET /v1/validations lists every code. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -1542,7 +1565,7 @@ const TOOLS = [
     description:
       'List invoices previously submitted through Clearvo. ' +
       'Filter by country, clearance status, or date. ' +
-      'Returns submission timestamps, clearance status labels, and authority reference numbers. ' +
+      'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), clearance status labels, and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
       'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
@@ -1572,7 +1595,7 @@ const TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt) plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
@@ -3251,8 +3274,8 @@ const TOOLS = [
         conditions: RULE_CONDITIONS_SCHEMA,
         actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
         templateId: { type: 'string' },
-        effectiveFrom: { type: 'string', description: 'ISO datetime.' },
-        effectiveTo: { type: 'string', description: 'ISO datetime.' },
+        effectiveFrom: { type: 'string', description: 'ISO datetime. The rule goes live on the platform at this instant, judged against when the platform ingests each document (not the document\'s own date).' },
+        effectiveTo: { type: 'string', description: 'ISO datetime. The rule stops being live on the platform at this instant (exclusive), judged against when the platform ingests each document.' },
         companyCode: { type: 'string', description: 'Scope the rule to one of the entity\'s active company codes — see tool description. Omit for an entity-wide rule.' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
@@ -3266,6 +3289,8 @@ const TOOLS = [
       'version returns 409 with the current version so you can reload and retry. status may only ever be set to ' +
       '"ARCHIVED" here (a one-way, terminal retirement — there is no DELETE); reaching ACTIVE is only ever done via ' +
       'activate_rule. `enabled` is the separate day-to-day on/off switch — an ACTIVE rule with enabled=false never fires. ' +
+      'A platform default (is_system) LEGAL_MANDATE or PLATFORM_INVARIANT rule keeps its shape: changing its window, ' +
+      'conditions, actions, checkpoint, sortOrder or legalBasisTag is rejected with SYSTEM_RULE_SHAPE_FROZEN; name and description stay editable. ' +
       '`companyCode` re-scopes the rule to another of the entity\'s active company codes (null makes it entity-wide again; omit to leave it unchanged) — same rules as create_rule.',
     inputSchema: {
       type: 'object' as const,
@@ -3278,8 +3303,8 @@ const TOOLS = [
         sortOrder: { type: 'number' },
         conditions: RULE_CONDITIONS_SCHEMA,
         actions: { type: 'array', items: { type: 'object', properties: { property: { type: 'string' }, value: {}, fn: { type: 'string' }, args: { type: 'object' } }, required: ['property'] } },
-        effectiveFrom: { type: 'string' },
-        effectiveTo: { type: 'string' },
+        effectiveFrom: { type: 'string', description: 'ISO datetime. The rule goes live on the platform at this instant (ingestion time, not document date).' },
+        effectiveTo: { type: 'string', description: 'ISO datetime. The rule stops being live on the platform at this instant (exclusive).' },
         companyCode: { type: ['string', 'null'], description: 'Re-scope to another active company code; null = entity-wide; omit to leave unchanged.' },
         enabled: { type: 'boolean' },
         status: { type: 'string', enum: ['ARCHIVED'] },
@@ -3341,6 +3366,7 @@ const TOOLS = [
       properties: {
         id: { type: 'string', description: 'An existing rule id. Omit to simulate a draft that has never been saved (draft is then required).' },
         sampleSize: { type: 'number', description: 'How many of the most recent records to sample against (1-500, default 50).' },
+        evaluatedAt: { type: 'string', description: 'ISO 8601 instant to evaluate rule windows (effective from/to) at. Default: now, i.e. which rules are live on the platform right now.' },
         draft: {
           type: 'object',
           description: 'Required when id is omitted; optional override (of domain/recordType/ruleKind/conditions/actions) when id is present.',
@@ -3389,12 +3415,12 @@ const TOOLS = [
   },
   {
     name: 'list_rule_property_definitions',
-    description: 'List custom property definitions visible to this key — its own scope\'s definitions plus every platform (Global/system) one, e.g. the AP facts glAccount/costCenter/accountAssignment/intendedUse. A condition/action names one as "customProperties.<propertyKey>".',
+    description: 'List the custom property definitions visible to this key — its own scope\'s definitions only. Built-in fields (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) are NOT custom properties; get_rules_engine_schema lists them. A condition/action names a custom one as "customProperties.<propertyKey>".',
     inputSchema: { type: 'object' as const, properties: { entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } } },
   },
   {
     name: 'create_rule_property_definition',
-    description: 'Define a new custom property (referenced by rules as "customProperties.<propertyKey>"). 409 if propertyKey already exists at this scope.',
+    description: 'Define a new custom property for data that is NOT part of our schema (referenced by rules as "customProperties.<propertyKey>"). 409 if propertyKey already exists at this scope; 422 if propertyKey is a built-in field name (glAccount, costCenter, intendedUse, accountAssignment, commodityCode, ...) — those are regular fields, not custom ones.',
     inputSchema: {
       type: 'object' as const,
       properties: {
