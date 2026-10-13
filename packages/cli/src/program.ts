@@ -930,7 +930,7 @@ export function createProgram(): Command {
   webhooks
     .command('create')
     .description('Register a new webhook endpoint')
-    .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to')
+    .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
     .option('--events <events>', 'Comma-separated event types (default: *). Options: invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending', '*')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; pretty?: boolean }) => {
