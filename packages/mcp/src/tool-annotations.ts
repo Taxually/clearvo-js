@@ -34,7 +34,7 @@ const READ_ONLY = new Set<string>([
   'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
   'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_entities',
   'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements',
-  'list_invoices', 'get_invoice', 'list_products', 'list_webhooks', 'list_registrations',
+  'list_invoices', 'get_invoice', 'list_products', 'list_webhooks', 'list_registrations', 'list_obligations',
   'get_registration_field_definitions', 'get_entity_fact_definitions', 'list_tax_calculations', 'list_calculation_requests', 'get_query_fields',
   'get_setup_status', 'get_tax_settings', 'get_reporting_obligations', 'list_reporting_batches', 'list_customers', 'list_customer_reference_types', 'list_exemption_certificates',
   'list_suppliers', 'list_bank_accounts', 'list_check_families', 'get_sii_reconciliation', 'get_inbound_batch',
