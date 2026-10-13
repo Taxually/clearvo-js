@@ -37,6 +37,13 @@ import type {
   BankAccount,
   CreateBankAccountInput,
   UpdateBankAccountInput,
+  ListCompanyCodesParams,
+  ListCompanyCodesResponse,
+  CreateCompanyCodeInput,
+  UpdateCompanyCodeInput,
+  CompanyCodeResponse,
+  CreateFieldMappingInput,
+  CreateFieldMappingResponse,
   ListBankAccountsResponse,
   Webhook,
   CreateWebhookInput,
@@ -413,6 +420,26 @@ export class ClearvoClient {
   /** GET /suppliers/by-ref/{ref} — look up a saved supplier by your own supplierRef instead of Clearvo's internal id. */
   getSupplierByRef(ref: string, entityId?: string): Promise<Supplier> {
     return this.request('GET', `/suppliers/by-ref/${encodeURIComponent(ref)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Company codes (Enterprise) ───────────────────────────────────────────────
+
+  /** GET /company-codes — the entity's company codes (archived included unless `status: 'active'`). 403 `company_codes_not_included` below Enterprise. */
+  listCompanyCodes(params: ListCompanyCodesParams = {}): Promise<ListCompanyCodesResponse> {
+    const { entityId, status } = params;
+    return this.request('GET', `/company-codes${status === 'active' ? '?status=active' : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** POST /company-codes responds 201 with `{ ok, companyCode }`. */
+  createCompanyCode(input: CreateCompanyCodeInput): Promise<CompanyCodeResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/company-codes', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** PATCH /company-codes/{id} — rename, archive or reactivate, or set/clear (`null`) the `validFrom`/`validTo` dates. There is no delete and `code` never changes. */
+  updateCompanyCode(companyCodeId: string, input: UpdateCompanyCodeInput): Promise<CompanyCodeResponse> {
+    const { entityId, ...body } = input;
+    return this.request('PATCH', `/company-codes/${encodeURIComponent(companyCodeId)}`, body, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Bank Account Master Data ─────────────────────────────────────────────────
@@ -1107,6 +1134,12 @@ export class ClearvoClient {
     const { entityId, sourceSystem } = params;
     const qs = new URLSearchParams({ sourceSystem });
     return this.request('GET', `/rules-engine/mappings?${qs.toString()}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Add one row to a source that maps a whole calculation request (today "coupa"): `companyCode` or a defined custom property. 409 `mapping_exists` if the field is already mapped. */
+  createFieldMapping(input: CreateFieldMappingInput): Promise<CreateFieldMappingResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/rules-engine/mappings', body, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   getFieldMapping(mappingId: string, entityId?: string): Promise<GetFieldMappingResponse> {
