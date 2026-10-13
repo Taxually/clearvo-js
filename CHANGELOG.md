@@ -2,6 +2,13 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend webhook destination guard PR (Taxually-einvoicing 17605) is deployed
+
+Behaviour change in the API, mirrored here: a webhook `url` must be a public HTTPS address (no credentials, no internal or private addresses, including a name that resolves to one) and redirects are not followed.
+
+- MCP: `create_webhook`'s `url` description states the rule.
+- CLI: `webhooks create --url` help states the rule.
+
 ## Unreleased — publish only AFTER the backend send-pipeline PR (Taxually-einvoicing 17436) is deployed
 
 Behaviour change in the API, mirrored here: `POST /v1/send` accepts a malformed or incomplete invoice, runs the rules (normalise, enrich), then validates. A failure returns `422 { ok: false, error: { code, message, ... }, errors: [{ path, errorCode, message, ... }] }` and stores the document as NEEDS_INFO or REJECTED. `error` is now an object, not a string, and the old `details[]` is gone. If the validation rules cannot load the call returns `503 VALIDATION_RULES_UNAVAILABLE` with nothing stored. Rule windows (`effectiveFrom` / `effectiveTo`) are judged against the time the platform ingested the document, not the document's date.

@@ -1720,7 +1720,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        url: { type: 'string', description: 'HTTPS endpoint URL to deliver events to' },
+        url: { type: 'string', description: 'HTTPS endpoint URL to deliver events to. Must be a public address: no credentials in the URL, no internal or private addresses, and redirects are not followed.' },
         events: {
           type: 'array',
           items: { type: 'string' },
