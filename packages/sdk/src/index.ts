@@ -1,5 +1,5 @@
 export { ClearvoClient } from './client.js';
-export { ClearvoError } from './types.js';
+export { ClearvoError, ClearvoJurisdictionLimitError } from './types.js';
 export type {
   ClearvoClientOptions,
   SendRejectionEntry,
@@ -66,6 +66,11 @@ export type {
   TaxRegistration,
   RegistrationSecondaryIdentifier,
   ListRegistrationsResponse,
+  RegistrationBilling,
+  CollectionBilling,
+  JurisdictionLimitReachedBody,
+  UsageSummary,
+  GetUsageResponse,
   AddRegistrationInput,
   SetCollectionInput,
   SetCollectionResponse,

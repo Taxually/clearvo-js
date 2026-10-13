@@ -115,6 +115,8 @@ async function callApi(
       err.field ? `Field: ${err.field}` : null,
       err.code ? `Code: ${err.code}` : null,
       errorList.length > 0 ? `Errors:\n${errorList.join('\n')}` : null,
+      // jurisdiction_limit_reached (409): nothing was changed; where to contact us to collect tax in more jurisdictions.
+      err.contactSalesUrl ? `Contact us: ${err.contactSalesUrl}` : null,
     ].filter(Boolean).join('\n');
     throw new Error(msg);
   }
@@ -372,6 +374,14 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
 };
 
 const { commit: _quoteOmitCommit, transactionDirection: _quoteOmitDirection, documentStage: _quoteOmitStage, ...QUOTE_DUTIES_PROPERTIES } = CALCULATE_TAX_INPUT_SCHEMA.properties as Record<string, unknown>;
+
+// Mirrors lib/mcp/tools.ts (Taxually-Einvoicing) JURISDICTION_LIMIT_TOOL_NOTE.
+const JURISDICTION_LIMIT_TOOL_NOTE =
+  'Registrations are unlimited; the per-jurisdiction fee and the self-serve limit of 10 apply only to jurisdictions with ' +
+  'collections turned on. Turning collections on for an eleventh on self-serve Growth is refused with HTTP 409 ' +
+  '{ error, code: "jurisdiction_limit_reached", limit, collecting, contactSalesUrl, hint } and nothing is changed (a refused add ' +
+  'stores nothing): show the error and point the user at contactSalesUrl. Changing the date of a jurisdiction that already ' +
+  'has collections on is never refused. The sandbox is never limited, so the refusal cannot occur there. ';
 
 const TOOLS = [
   {
@@ -1739,11 +1749,33 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_usage',
+    description:
+      'Read billable tax-calculation usage against the plan allowance for the current billing period: plan ' +
+      '(free, filings, starter, growth or enterprise; included is null where the plan has no allowance to meter), ' +
+      'billing status, period start/end, transactions used, transactions included, remaining, percentUsed, ' +
+      'overage (transactions beyond the allowance) and overageUsd (price per extra transaction). Only committed ' +
+      'live calculations count; previews (commit:false) and sandbox calls do not. Counts come from an hourly ' +
+      'ledger and can trail live traffic by up to an hour (see updatedAt). Calculations are never blocked at the ' +
+      'allowance. While inTrial is true nothing is charged. jurisdictions { active, countedTowardLimit, max }: ' +
+      'active is how many jurisdictions are charged now across the organisation, countedTowardLimit is how many have collections on ' +
+      '(a future start date included) against the self-serve limit, and max is that limit (null where the plan has no limit). ' +
+      'Turning collections on past the limit needs a conversation with sales.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
     name: 'list_registrations',
     description:
       'List the tax registrations and obligations for an entity: VAT registrations by country, ' +
       'OSS/IOSS scheme registrations, and compliance threshold status. ' +
-      'Use this to see where an entity is registered and whether it is compliant, approaching threshold, or exposed.',
+      'Use this to see where an entity is registered and whether it is compliant, approaching threshold, or exposed. ' +
+      'Each registration also carries billing { billable, billableFrom, countedTowardLimit, copy, canTurnOn, message, contactSalesUrl }: ' +
+      'whether the jurisdiction is charged the per-jurisdiction fee on the Growth plan, which starts when collections are turned on ' +
+      '(billableFrom is the collection start date). A message means the jurisdiction needs a quote, or collections cannot be turned on ' +
+      'without contacting us (canTurnOn false): show message and point the user at contactSalesUrl. ' +
+      'The response also carries collectionBilling { turnOnCopy, turnOffCopy, collecting, max, limitReached, limitCopy, contactSalesUrl } ' +
+      '(null where no per-jurisdiction billing applies) with the sentences to show beside a collection date. ' +
+      JURISDICTION_LIMIT_TOOL_NOTE,
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1761,7 +1793,9 @@ const TOOLS = [
       'IMPORTANT: a registration does not collect tax until its collection date is set — pass collectFromDate ' +
       'in this same call (ask the user whether to start immediately or on a future date) rather than leaving it ' +
       'unset; Clearvo will not apply tax for that country/state until it is. Omitting collectFromDate leaves ' +
-      'collection unset — call set_registration_collection afterwards if you do that.',
+      'collection unset — call set_registration_collection afterwards if you do that. ' +
+      'The response carries billing { billable, billableFrom, countedTowardLimit, copy, canTurnOn, message, contactSalesUrl }, as in list_registrations. ' +
+      JURISDICTION_LIMIT_TOOL_NOTE.trim(),
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1786,7 +1820,8 @@ const TOOLS = [
       'Clearvo will not apply tax for that country (even if Tax Calculations is enabled). ' +
       'Pass collectFromDate as null to start collecting immediately, or as an ISO date string (YYYY-MM-DD) ' +
       'to defer collection until a future date. ' +
-      'Returns the new collectionStatus: COLLECTING (if the date is today or past) or DEFERRED (if future).',
+      'Returns the new collectionStatus: COLLECTING (if the date is today or past) or DEFERRED (if future). ' +
+      JURISDICTION_LIMIT_TOOL_NOTE.trim(),
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3793,6 +3828,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const q = qs.toString();
       return callApi('GET', `/tax/registrations${q ? `?${q}` : ''}`);
     }
+
+    case 'get_usage':
+      return callApi('GET', '/usage');
 
     case 'add_registration':
       return callApi('POST', '/tax/registrations', args);
