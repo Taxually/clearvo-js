@@ -1794,7 +1794,8 @@ const TOOLS = [
       'IMPORTANT: a registration does not collect tax until its collection date is set — pass collectFromDate ' +
       'in this same call (ask the user whether to start immediately or on a future date) rather than leaving it ' +
       'unset; Clearvo will not apply tax for that country/state until it is. Omitting collectFromDate leaves ' +
-      'collection unset — call set_registration_collection afterwards if you do that.',
+      'collection unset — call set_registration_collection afterwards if you do that. ' +
+      'When Compliance Radar is switched off for the account (an Enterprise administrator choice) the returned registration has obligationStatus null and obligationStatusLabel "Not monitored": thresholds are not being monitored, so never describe it as compliant.',
     inputSchema: {
       type: 'object' as const,
       properties: {
