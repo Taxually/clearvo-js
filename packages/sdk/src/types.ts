@@ -3255,12 +3255,19 @@ export interface RuleConditionLeaf {
    * One of the operators getRulesEngineSchema() lists for the property, including the date operators
    * `on_or_after` / `before` (strict ISO date; an absent or unparseable date never matches) and the
    * closed-vocabulary format checks `matches_format` / `not_matches_format` (value is a name from
-   * the schema's `formatVocabulary`, e.g. `ISO_DATE`, `ISO_CURRENCY`, `MAX_LENGTH:n`).
+   * the schema's `formatVocabulary` or `parameterisedFormats`, e.g. `ISO_DATE`, `ISO_CURRENCY`, `MAX_LENGTH:n`),
+   * `has_path` / `not_has_path` (value: a path into the submitted document, or a list), `compare_field`
+   * (value: `{comparator, field, tolerance?, toleranceKind?}`) and `relative_date`
+   * (value: `{comparator, amount, unit}`); `valueSchema` per operator is in the schema.
    */
   operator: string;
   value?: unknown;
   /** String comparisons only. true = exact-case match, false = case-insensitive. Omit to use the property's default case handling. */
   caseSensitive?: boolean;
+  /** Only on a list property whose schema entry has `elements`: apply the operator to the `elementPath` field of any / all / no entry of the list. */
+  quantifier?: 'any' | 'all' | 'none';
+  /** With `quantifier`: one of the property's `elements[].path`. */
+  elementPath?: string;
 }
 
 /** An OR (`any`) or AND (`all`) group — exactly one key, at least one child. Groups nest at most 2 levels deep; a rule carries at most 50 leaf conditions in total. */
