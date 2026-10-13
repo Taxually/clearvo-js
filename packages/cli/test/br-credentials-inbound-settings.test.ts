@@ -184,7 +184,7 @@ describe('clearvo br inbound poll / sync-status / settings update', () => {
     expect(JSON.parse(opts.body as string)).toEqual({ autoCiencia: false });
   });
 
-  it('"br settings update" without --auto-ciencia exits without calling the API', async () => {
+  it('"br settings update" with neither --auto-ciencia nor --acknowledge-consent exits without calling the API', async () => {
     const fetchMock = vi.fn();
     global.fetch = fetchMock as unknown as typeof fetch;
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((): never => {
@@ -197,5 +197,53 @@ describe('clearvo br inbound poll / sync-status / settings update', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     exitSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+
+  // br-nfse-nacional B11 — NFS-e's own poll surface, documentFamily, and acknowledgeConsent.
+  it('"br inbound poll --entity <id> --document-family nfse" POSTs to /br/nfse/inbound/poll', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, entitiesPolled: 1, results: [] }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findBrCommand(createProgram(), ['inbound', 'poll']).parseAsync(
+      ['--entity', 'ent-1', '--document-family', 'nfse'],
+      { from: 'user' },
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/br/nfse/inbound/poll');
+  });
+
+  it('"br inbound poll" with no --document-family still POSTs to the NF-e (SEFAZ) route, unchanged', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, entitiesPolled: 1, results: [] }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findBrCommand(createProgram(), ['inbound', 'poll']).parseAsync([], { from: 'user' });
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/br/inbound/poll');
+  });
+
+  it('"br sync-status --document-family nfse" forwards it as a query param', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ entityId: 'ent-1', status: 'ok', documentFamily: 'nfse' }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findBrCommand(createProgram(), ['sync-status']).parseAsync(['--document-family', 'nfse'], { from: 'user' });
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/br/sync-status?documentFamily=nfse');
+  });
+
+  it('"br settings update --acknowledge-consent" alone (no --auto-ciencia) PATCHes /br/settings with { acknowledgeConsent: true }', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, entityId: 'ent-1' }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findBrCommand(createProgram(), ['settings', 'update']).parseAsync(
+      ['--acknowledge-consent', '--entity', 'ent-1'],
+      { from: 'user' },
+    );
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/br/settings');
+    expect(JSON.parse(opts.body as string)).toEqual({ acknowledgeConsent: true });
   });
 });
