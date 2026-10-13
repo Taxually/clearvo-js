@@ -26,7 +26,7 @@ const REQUIRED = [
   'list_filings', 'get_filing', 'approve_filing', 'undo_filing_approval', 'pause_filing', 'resume_filing', 'skip_filing',
   'set_filing_prepayment', 'list_filing_change_requests', 'request_filing_change', 'generate_sandbox_filing',
   'list_filing_upload_months', 'get_filing_upload_month', 'upload_filing_data_file', 'replace_filing_data_file',
-  'delete_filing_data_file', 'process_filing_upload_month', 'close_filing_upload_month', 'get_filing_upload_error_report',
+  'delete_filing_data_file', 'process_filing_upload_month', 'get_filing_upload_error_report',
   'get_filing_upload_template',
 ];
 
@@ -94,7 +94,9 @@ api.listen(0, '127.0.0.1', async () => {
   assert(missing.length === 0, `missing tools: ${missing.join(', ')}`);
 
   const proc = byName.get('process_filing_upload_month').inputSchema;
-  for (const k of ['month', 'declarationAccepted', 'declarationVersion', 'acknowledgeRejectedRows']) assert(proc.properties?.[k], `process_filing_upload_month is missing ${k}`);
+  for (const k of ['month', 'declarationAccepted', 'declarationVersion']) assert(proc.properties?.[k], `process_filing_upload_month is missing ${k}`);
+  assert(!proc.properties?.acknowledgeRejectedRows, 'process_filing_upload_month must not take acknowledgeRejectedRows');
+  assert(!byName.has('close_filing_upload_month'), 'close_filing_upload_month was removed: a month is finished by approving the return');
   const up = byName.get('upload_filing_data_file').inputSchema;
   assert(JSON.stringify([...up.required].sort()) === JSON.stringify(['contentBase64', 'fileName', 'month']), 'upload_filing_data_file requires month, fileName and contentBase64');
   assert(!byName.get('upload_filing_data_file').annotations.readOnlyHint, 'upload_filing_data_file must not be read-only');
@@ -146,9 +148,7 @@ api.listen(0, '127.0.0.1', async () => {
   assert(r.method === 'POST' && r.url === '/v1/filings/upload/months/2026-09/process', 'process_filing_upload_month');
   assert(JSON.stringify(JSON.parse(r.body)) === '{"declarationAccepted":true,"declarationVersion":"2026-10-11.1"}', 'process sends the declaration and nothing else by default');
   await callTool('process_filing_upload_month', { month: '2026-09', declarationAccepted: true, declarationVersion: 'v', acknowledgeRejectedRows: true }); r = only();
-  assert(JSON.parse(r.body).acknowledgeRejectedRows === true, 'process sends acknowledgeRejectedRows');
-  await callTool('close_filing_upload_month', { month: '2025-03' }); r = only();
-  assert(r.method === 'POST' && r.url === '/v1/filings/upload/months/2025-03/close', 'close_filing_upload_month');
+  assert(JSON.stringify(JSON.parse(r.body)) === '{"declarationAccepted":true,"declarationVersion":"v"}', 'process never sends acknowledgeRejectedRows');
 
   // Upload: multipart, field "file", decoded content, no JSON content type.
   await callTool('upload_filing_data_file', { month: '2026-09', fileName: 'sales.csv', contentBase64: b64('a,b\n1,2\n') }); r = only();
@@ -176,9 +176,12 @@ api.listen(0, '127.0.0.1', async () => {
   nextStatus = 409; nextBody = { error: 'FILE_ALREADY_ADDED', message: 'Already added.', existingId: 'f9', reason: 'same_name' };
   const dup = await callTool('upload_filing_data_file', { month: '2026-09', fileName: 'a.csv', contentBase64: b64('x') });
   assert(dup.text.includes('Details: {"existingId":"f9","reason":"same_name"}'), `Details must carry the extra body fields: ${dup.text}`);
-  nextStatus = 409; nextBody = { error: 'ACKNOWLEDGEMENT_REQUIRED', message: 'Some rows were rejected.', rejectedRows: 4, rejectedFiles: 1 };
-  const ack = await callTool('process_filing_upload_month', { month: '2026-09', declarationAccepted: true, declarationVersion: 'v' });
-  assert(ack.text.includes('Details: {"rejectedRows":4,"rejectedFiles":1}'), `ACKNOWLEDGEMENT_REQUIRED details: ${ack.text}`);
+  nextStatus = 409; nextBody = { error: 'FILE_ERRORS', message: 'One or more files have errors.', filesWithErrors: 2 };
+  const fe = await callTool('process_filing_upload_month', { month: '2026-09', declarationAccepted: true, declarationVersion: 'v' });
+  assert(fe.text.includes('HTTP 409: FILE_ERRORS') && fe.text.includes('Details: {"filesWithErrors":2}'), `FILE_ERRORS details: ${fe.text}`);
+  nextStatus = 409; nextBody = { error: 'SYSTEM_FILE_ERRORS', message: 'A file we prepared for you has errors.', filesWithErrors: 1, contactUrl: 'https://example.test/contact' };
+  const sfe = await callTool('process_filing_upload_month', { month: '2026-09', declarationAccepted: true, declarationVersion: 'v' });
+  assert(sfe.text.includes('SYSTEM_FILE_ERRORS') && sfe.text.includes('"contactUrl":"https://example.test/contact"'), `SYSTEM_FILE_ERRORS details: ${sfe.text}`);
   nextStatus = 422; nextBody = { error: 'DECLARATION_VERSION_MISMATCH', message: 'Changed.', currentVersion: 'v2', declaration: { version: 'v2', text: 'T' } };
   const mm = await callTool('process_filing_upload_month', { month: '2026-09', declarationAccepted: true, declarationVersion: 'v' });
   assert(mm.text.includes('"currentVersion":"v2"') && mm.text.includes('"declaration":{"version":"v2","text":"T"}'), `declaration details: ${mm.text}`);

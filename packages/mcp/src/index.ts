@@ -112,7 +112,7 @@ async function callApi(
       );
     }
     // Filing upload refusals (same format as the hosted connector): the stable code on the first line, then the plain-language
-    // message and the extra body fields (existingId, rejectedRows, rejectedFiles, currentVersion, declaration) as JSON.
+    // message and the extra body fields (existingId, filesWithErrors, contactUrl, currentVersion, declaration) as JSON.
     const uploadRefusal = path.startsWith('/filings/upload/') && typeof err.error === 'string';
     const uploadExtras = uploadRefusal ? Object.fromEntries(Object.entries(err).filter(([k]) => k !== 'error' && k !== 'message')) : {};
     const msg = [
@@ -1888,15 +1888,15 @@ const TOOLS = [
   {
     name: 'get_registration_filing_setup',
     description:
-      'Read the filing setup for a US state sales tax registration: state (NOT_SET_UP, REQUESTED, ENABLED, STOPPED_AFTER), ' +
-      'the frequency options the state offers ({ code, label, description }; frequencyOptionsSource is "live", or "fallback" when the state source is unreachable and the three standard options are offered), ' +
+      'Read the filing setup for a registration: state (NOT_SET_UP, REQUESTED, ENABLED, STOPPED_AFTER), ' +
+      'the frequency options the tax authority offers ({ code, label, description }; frequencyOptionsSource is "live", or "fallback" when the live source is unreachable and the three standard options are offered), ' +
       'startOptionsByFrequency (the periods to start from: firstAvailable, later, earlier), the stored startChoice / startPeriodKey / startPeriodLabel, whether a bank account is required and ' +
       'on file (last four digits only), canStart / startBlockedReason (whether a request would be accepted now and, if not, why: ' +
-      'for example a bank account is required to start when the state is paid by debit), a pendingChange when a frequency change or restart ' +
+      'for example a bank account is required to start when the tax is paid by debit, or filing data is temporarily unavailable), a pendingChange when a frequency change or restart ' +
       'is waiting for the operations team (filing carries on meanwhile), the first filing period once enabled, and the earlier periods that are NOT filed ' +
       'for you. filingAccess says whether the account may set up filing now (canSetUp, message, subscribeUrl, subscribeLabel): ' +
       'when canSetUp is false, update_registration_filing_setup refuses a request with 402 plan_required. ' +
-      'Registrations below state level (locality rows) are not eligible. Use list_registrations\' filingSetup ' +
+      'Local registrations (locality rows) are not eligible: local returns are prepared from the main registration. Programme registrations share the state\'s setup. ineligibleReason is "locality", "country" or null (the former "scheme" value no longer exists). Use list_registrations\' filingSetup ' +
       'field for a summary across registrations.',
     inputSchema: {
       type: 'object' as const,
@@ -1909,18 +1909,18 @@ const TOOLS = [
   {
     name: 'update_registration_filing_setup',
     description:
-      'Request, defer or stop filing for a US state sales tax registration. Send exactly one of: ' +
+      'Request, defer or stop filing for a registration. Send exactly one of: ' +
       '(1) frequencyCode + frequencyAttested=true + startChoice (+ startPeriodKey) to request filing — the frequency must be ' +
-      'one the state offers (see get_registration_filing_setup frequencyOptions) and attested as the frequency on the customer\'s state account; ' +
+      'one the tax authority offers (see get_registration_filing_setup frequencyOptions) and attested as the frequency on the customer\'s tax account; ' +
       'startChoice is required (no default): asap starts from the first available period, later and backdated also need a startPeriodKey ' +
       'taken from startOptionsByFrequency[frequencyCode].later / .earlier (422 START_CHOICE_REQUIRED, START_PERIOD_REQUIRED, INVALID_START_PERIOD). ' +
       'Backdated is recorded for the operations team: earlier periods are not prepared for you. ' +
-      'it does not change the frequency with the state, and filing starts only after the operations team enables it. When the state is ' +
+      'it does not change the frequency with the tax authority, and filing starts only after the operations team enables it. When the tax is ' +
       'paid by debit a bank account must be on file first (422 BANK_ACCOUNT_REQUIRED). On a filing that is already enabled or stopped, a ' +
       'new frequency or a restart is recorded as pending and applied by the operations team; filing carries on meanwhile; ' +
       '(2) deferFirstPeriodTo (YYYY-MM-DD) to move the first filing period later, before it has been prepared; ' +
       '(3) stop=true to stop filing from the next period (the current period is still prepared; the registration stays ' +
-      'active with the state and returns remain due). Requires a write key. ' +
+      'active with the tax authority and returns remain due). Requires a write key. 503 FILING_DATA_UNAVAILABLE means filing data is temporarily unavailable: try again shortly. ' +
       'Requesting (or replacing) a setup needs a subscription once billing is live: without one it returns 402 plan_required ' +
       '(reason filing_requires_subscription, message, and upgradeUrl only when the caller can start a subscription); check filingAccess.canSetUp from get_registration_filing_setup first. ' +
       'Deferring and stopping are never refused for this reason.',
@@ -1928,8 +1928,8 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         registrationId: { type: 'string', description: 'The registration ID (from list_registrations — use taxNumberId or obligationId field)' },
-        frequencyCode: { type: 'string', description: 'Filing frequency code offered by the state: "Monthly", "Quarterly" or, when the state source is unreachable, "QuarterlyPrepay". See get_registration_filing_setup frequencyOptions.' },
-        frequencyAttested: { type: 'boolean', description: 'Must be true: confirms this is the filing frequency on the customer\'s state sales tax account.' },
+        frequencyCode: { type: 'string', description: 'Filing frequency code offered for this registration, e.g. "Monthly" or "Quarterly" (from get_registration_filing_setup frequencyOptions).' },
+        frequencyAttested: { type: 'boolean', description: 'Must be true: confirms this is the filing frequency on the customer\'s tax account.' },
         startChoice: { type: 'string', enum: ['asap', 'later', 'backdated'], description: 'Required when requesting filing. asap = first available period; later = a period after it; backdated = an earlier period (recorded for the operations team, not prepared for you).' },
         startPeriodKey: { type: 'string', description: 'Required for later and backdated: a period key from startOptionsByFrequency[frequencyCode].later or .earlier in get_registration_filing_setup, e.g. "2026-12" or "2027-Q1".' },
         deferFirstPeriodTo: { type: 'string', description: 'Move the first filing period later: the date (YYYY-MM-DD) filing should start from. Cannot move it earlier.' },
@@ -1941,7 +1941,7 @@ const TOOLS = [
   {
     name: 'list_filings',
     description:
-      'List the US sales tax returns Clearvo prepares for this entity, one per state and period. Each row shows the status ' +
+      'List the tax returns Clearvo prepares for this entity, one per jurisdiction and period. Each row shows the status ' +
       '(DRAFT, PENDING_APPROVAL, PAUSED, APPROVED, SUBMITTED, FILED, NOT_FILED), due date, amount due, snapshotVersion, ' +
       'anything that needs action and which actions are currently allowed. view=upcoming shows open returns, view=filed ' +
       'shows closed ones, view=backdated shows catch-up returns.',
@@ -1950,7 +1950,7 @@ const TOOLS = [
       properties: {
         view: { type: 'string', enum: ['upcoming', 'filed', 'backdated'], description: 'Which group of filings to list. Omit for all.' },
         status: { type: 'string', description: 'Only filings with this exact status.' },
-        jurisdictionId: { type: 'string', description: 'Only this jurisdiction, e.g. "US_CA".' },
+        jurisdictionId: { type: 'string', description: 'Only this jurisdiction, e.g. "US_CA" or "DE".' },
         limit: { type: 'number', description: 'Page size, 1 to 100 (default 25).' },
         offset: { type: 'number', description: 'Rows to skip (default 0).' },
       },
@@ -1972,7 +1972,7 @@ const TOOLS = [
   {
     name: 'approve_filing',
     description:
-      'Approve a filing that is PENDING_APPROVAL so it is submitted to the state. Approving is a commitment: ' +
+      'Approve a filing that is PENDING_APPROVAL so it is submitted to the tax authority. Approving is a commitment: ' +
       'it is reversible with undo_filing_approval only until the filing is submitted. Fails with BANK_DETAILS_REQUIRED, ' +
       'CONTENT_MISSING or FILING_STALE when it cannot proceed. Repeating the call on an approved filing changes nothing. Requires a write key.',
     inputSchema: {
@@ -1986,7 +1986,7 @@ const TOOLS = [
   },
   {
     name: 'undo_filing_approval',
-    description: 'Take an APPROVED filing back to PENDING_APPROVAL. Only possible before it is submitted to the state (ALREADY_SUBMITTED otherwise). Requires a write key.',
+    description: 'Take an APPROVED filing back to PENDING_APPROVAL. Only possible before it is submitted to the tax authority (ALREADY_SUBMITTED otherwise). Requires a write key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -2027,7 +2027,7 @@ const TOOLS = [
   {
     name: 'skip_filing',
     description:
-      'Skip a filing: it becomes NOT_FILED and Clearvo will not file it. Only possible before it is submitted to the state ' +
+      'Skip a filing: it becomes NOT_FILED and Clearvo will not file it. Only possible before it is submitted to the tax authority ' +
       '(ALREADY_SUBMITTED otherwise) and cannot be reversed. Requires a reason. Requires a write key.',
     inputSchema: {
       type: 'object' as const,
@@ -2042,7 +2042,7 @@ const TOOLS = [
   {
     name: 'set_filing_prepayment',
     description:
-      'Record an amount already paid to the state for this period; it is subtracted from the amount due. Only before the ' +
+      'Record an amount already paid to the tax authority for this period; it is subtracted from the amount due. Only before the ' +
       'filing is approved (ALREADY_APPROVED / ALREADY_SUBMITTED otherwise). Requires a write key.',
     inputSchema: {
       type: 'object' as const,
@@ -2099,7 +2099,7 @@ const TOOLS = [
       'List, for every registration that could file, where filing setup stands and what to do next: the state (not set up, ' +
       'waiting for onboarding, active, stopped), the next step (set up, add the payment account, wait for onboarding, restart, ' +
       'or none) with a plain sentence for it, the chosen frequency and start period, and whether the registration is eligible ' +
-      '(US state sales tax only) with the reason when it is not. Registrations needing action come first. Use it to find ' +
+      'with the reason when it is not (a local registration, or one that cannot be filed yet; while filing data is temporarily unavailable the reason says so). Registrations needing action come first. Use it to find ' +
       'registrations with unfinished setup, then get_registration_filing_setup / update_registration_filing_setup to continue. ' +
       'The result carries one top-level filingAccess (canSetUp, message, subscribeUrl, subscribeLabel): when canSetUp is false, ' +
       'requesting filing returns 402 plan_required until the account subscribes.',
@@ -2108,7 +2108,7 @@ const TOOLS = [
   {
     name: 'get_filing_bank_account',
     description:
-      'Read the bank account the state debits for filing payments: holder name, account type and the last four digits of the ' +
+      'Read the bank account the tax authority debits for filing payments: holder name, account type and the last four digits of the ' +
       'routing and account numbers. Full numbers are never returned. Bank details are changed in the dashboard.',
     inputSchema: { type: 'object' as const, properties: {} },
   },
@@ -2176,7 +2176,7 @@ const TOOLS = [
     description:
       'Confirm that all data for the month is added and process it once. Returns while processing runs (poll get_filing_upload_month for the result). ' +
       'The person confirming must accept the declaration shown in get_filing_upload_month (month.declaration): pass declarationAccepted=true and its declarationVersion, otherwise 422. ' +
-      'When some rows were rejected the call is refused with 409 ACKNOWLEDGEMENT_REQUIRED (Details: rejectedRows, rejectedFiles); pass acknowledgeRejectedRows=true to go ahead anyway. ' +
+      'If any row in a file has an error, the whole file is not used: while any file has errors the call is refused with 409 FILE_ERRORS (Details: filesWithErrors), or SYSTEM_FILE_ERRORS when a file prepared for you has errors (contact support; Details include contactUrl). Fix the file and upload it again (replace_filing_data_file) or delete it, then confirm. Warnings do not block. ' +
       'Other refusals: 409 MONTH_NOT_OPEN, MONTH_CLOSED, PROCESSING_REFUSED, SYSTEM_FILE_PENDING (calculated transactions still being added: retry shortly); ' +
       '422 DECLARATION_REQUIRED or DECLARATION_VERSION_MISMATCH (Details carry the current declaration). Requires a write key.',
     inputSchema: {
@@ -2185,23 +2185,15 @@ const TOOLS = [
         month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' },
         declarationAccepted: { type: 'boolean', description: 'Must be true: the person confirming accepted the declaration text (month.declaration.text).' },
         declarationVersion: { type: 'string', description: 'The declaration version shown with the month (month.declaration.version).' },
-        acknowledgeRejectedRows: { type: 'boolean', description: 'Go ahead although some rows were rejected (see get_filing_upload_error_report).' },
       },
       required: ['month'],
     },
   },
   {
-    name: 'close_filing_upload_month',
-    description:
-      'Close an earlier-period (retro) month, meaning "all uploaded". Only retro months can be closed (MONTH_NOT_CLOSABLE otherwise). Repeating the call ' +
-      'on a closed month changes nothing. Requires a write key.',
-    inputSchema: { type: 'object' as const, properties: { month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' } }, required: ['month'] },
-  },
-  {
     name: 'get_filing_upload_error_report',
     description:
-      'Get a fresh download link (url) for the rows of an uploaded file that were rejected. The link is new on every call; do not store it. ' +
-      '404 no_error_report when the file has no errors.',
+      'Get a fresh download link (url) for the error and warning report of an uploaded file. The link is new on every call; do not store it. ' +
+      '404 no_error_report when the file has no errors or warnings.',
     inputSchema: {
       type: 'object' as const,
       properties: { month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' }, fileId: { type: 'string', description: 'The file id from get_filing_upload_month.' } },
@@ -4259,16 +4251,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('DELETE', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}`);
     }
     case 'process_filing_upload_month': {
-      const { month, acknowledgeRejectedRows, declarationAccepted, declarationVersion } = args as { month: string; acknowledgeRejectedRows?: boolean; declarationAccepted?: boolean; declarationVersion?: string };
+      const { month, declarationAccepted, declarationVersion } = args as { month: string; declarationAccepted?: boolean; declarationVersion?: string };
       return callApi('POST', `/filings/upload/months/${encodeURIComponent(month)}/process`, {
         ...(declarationAccepted === undefined ? {} : { declarationAccepted }),
         ...(declarationVersion === undefined ? {} : { declarationVersion }),
-        ...(acknowledgeRejectedRows === undefined ? {} : { acknowledgeRejectedRows }),
       });
-    }
-    case 'close_filing_upload_month': {
-      const { month } = args as { month: string };
-      return callApi('POST', `/filings/upload/months/${encodeURIComponent(month)}/close`, {});
     }
     case 'get_filing_upload_error_report': {
       const { month, fileId } = args as { month: string; fileId: string };

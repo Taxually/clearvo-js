@@ -88,10 +88,11 @@ export function createProgram(): Command {
       if (data.code) parts.push(`Code: ${data.code}`);
       else if (filingsCode) parts.push(`Code: ${filingsCode}`);
       if (filingsCode) {
-        // Extra body fields of a Filings refusal: existingId, reason, rejectedRows, rejectedFiles, currentVersion, declaration, ...
+        // Extra body fields of a Filings refusal: existingId, reason, filesWithErrors, contactUrl, currentVersion, declaration, ...
         const extras = Object.fromEntries(Object.entries(data).filter(([k]) => !['error', 'message', 'detail', 'hint', 'field', 'code', 'errors'].includes(k)));
         if (Object.keys(extras).length > 0) parts.push(`Details: ${JSON.stringify(extras)}`);
-        if (filingsCode === 'ACKNOWLEDGEMENT_REQUIRED') parts.push('Next: look at the error reports (`clearvo filings upload error-report <month> <fileId>`), then repeat with --acknowledge-rejected to go ahead without the rejected rows.');
+        if (filingsCode === 'FILE_ERRORS') parts.push('Next: look at the error reports (`clearvo filings upload error-report <month> <fileId>`), fix the file and upload it again or delete it, then run process again.');
+        if (filingsCode === 'SYSTEM_FILE_ERRORS') parts.push('Next: a file we prepared for you has errors and cannot be changed by you. Contact support (see contactUrl in the details).');
         if (filingsCode === 'DECLARATION_VERSION_MISMATCH') parts.push('Next: read the current declaration (`clearvo filings upload month <month>`) and repeat with --declaration-version set to its version.');
       }
       if (Array.isArray(data.errors) && data.errors.length > 0) {
@@ -2051,9 +2052,9 @@ export function createProgram(): Command {
     });
 
   // ── clearvo filings ──────────────────────────────────────────────────────────
-  // US sales tax filing: setup (GET /filings/setups, GET|PUT /tax/registrations/{id}/filing), the return lifecycle
+  // Tax filing for any country or scheme the filing service supports (US states are one example): setup (GET /filings/setups, GET|PUT /tax/registrations/{id}/filing), the return lifecycle
   // (/filings/*) and the data upload (/filings/upload/*). The key needs the `filings` product; changes need a write key.
-  const filings = program.command('filings').description('US sales tax filing: set up, review and approve returns, upload your data');
+  const filings = program.command('filings').description('Tax filing: set up, review and approve returns, upload your data');
   const entityHdr = (entity?: string): Record<string, string> | undefined => (entity ? { 'x-entity-id': entity } : undefined);
   const parseVersion = (v: string): number => {
     const n = Number(v);
@@ -2106,7 +2107,7 @@ export function createProgram(): Command {
     });
 
   for (const [name, path, text] of [
-    ['approve', 'approve', 'Approve a return for submission to the state (reversible with `undo` until it is submitted)'],
+    ['approve', 'approve', 'Approve a return for submission to the tax authority (reversible with `undo` until it is submitted)'],
     ['undo', 'undo', 'Take an approval back to PENDING_APPROVAL (only before submission)'],
     ['pause', 'pause', 'Pause a return so it is not approved automatically (limited per year; the on-time filing commitment is lost while paused)'],
     ['resume', 'resume', 'Resume a paused return'],
@@ -2193,7 +2194,7 @@ export function createProgram(): Command {
 
   filings
     .command('bank-account')
-    .description('The account the state debits (last four digits only). Bank details are changed in the dashboard')
+    .description('The account the tax authority debits (last four digits only). Bank details are changed in the dashboard')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { entity?: string; pretty?: boolean }) => {
@@ -2223,11 +2224,11 @@ export function createProgram(): Command {
       print(await api('GET', '/filings/setups', undefined, entityHdr(opts.entity)), !!opts.pretty);
     });
 
-  const filingSetup = filings.command('setup').description('The filing setup of one US state sales tax registration');
+  const filingSetup = filings.command('setup').description('The filing setup of one registration');
 
   filingSetup
     .command('get <registrationId>')
-    .description('The full setup: frequencies the state offers, start periods, bank requirement and whether it can start')
+    .description('The full setup: frequencies the tax authority offers, start periods, bank requirement and whether it can start')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (registrationId: string, opts: { entity?: string; pretty?: boolean }) => {
@@ -2238,14 +2239,14 @@ export function createProgram(): Command {
     .command('request <registrationId>')
     .description('Request filing for a registration. Filing starts once Clearvo has completed onboarding. Without a subscription this is 402 plan_required')
     .requiredOption('--frequency <code>', 'A frequency code from `filings setup get` (frequencyOptions[].code), e.g. Monthly')
-    .option('--attest', 'Confirm this is the filing frequency on your state sales tax account (required)')
+    .option('--attest', 'Confirm this is the filing frequency on your tax account (required)')
     .option('--start <choice>', 'asap (first available period, default) or later', 'asap')
     .option('--start-period <key>', 'Required with --start later: a key from startOptionsByFrequency[frequency].later, e.g. 2026-12')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (registrationId: string, opts: { frequency: string; attest?: boolean; start: string; startPeriod?: string; entity?: string; pretty?: boolean }) => {
       if (!opts.attest) {
-        console.error('Error: pass --attest to confirm the frequency is the one on your state sales tax account');
+        console.error('Error: pass --attest to confirm the frequency is the one on your tax account');
         process.exit(1);
       }
       if (opts.start !== 'asap' && opts.start !== 'later') {
@@ -2346,25 +2347,23 @@ export function createProgram(): Command {
 
   upload
     .command('process <month>')
-    .description('Confirm that all data for the month is added and process it once. Read the declaration first: `filings upload month <month>` shows declaration.text and declaration.version')
+    .description('Confirm that all data for the month is added and process it once (refused while any file has errors: fix or remove it first). Read the declaration first: `filings upload month <month>` shows declaration.text and declaration.version')
     .option('--accept-declaration', 'The person confirming has read and accepts the declaration (required)')
     .requiredOption('--declaration-version <version>', 'The declaration version shown with the month (month.declaration.version)')
-    .option('--acknowledge-rejected', 'Go ahead although some rows were rejected; they are left out of the return')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (month: string, opts: { acceptDeclaration?: boolean; declarationVersion: string; acknowledgeRejected?: boolean; entity?: string; pretty?: boolean }) => {
+    .action(async (month: string, opts: { acceptDeclaration?: boolean; declarationVersion: string; entity?: string; pretty?: boolean }) => {
       if (!opts.acceptDeclaration) {
         console.error('Error: pass --accept-declaration to confirm the declaration (read it with `clearvo filings upload month ' + month + '`)');
         process.exit(1);
       }
       const body: Record<string, unknown> = { declarationAccepted: true, declarationVersion: opts.declarationVersion };
-      if (opts.acknowledgeRejected) body.acknowledgeRejectedRows = true;
       print(await api('POST', `/filings/upload/months/${encodeURIComponent(month)}/process`, body, entityHdr(opts.entity)), !!opts.pretty);
     });
 
   upload
     .command('error-report <month> <fileId>')
-    .description('A fresh download link for the rows of a file that were rejected (the link is new on every call; do not store it)')
+    .description('A fresh download link for the error and warning report of a processed file (the link is new on every call; do not store it)')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (month: string, fileId: string, opts: { entity?: string; pretty?: boolean }) => {

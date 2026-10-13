@@ -159,11 +159,15 @@ describe('data upload', () => {
     expect(call(m).init.method).toBe('DELETE');
   });
 
-  it('processes a month with the declaration and the acknowledgement', async () => {
+  it('processes a month with the declaration only', async () => {
     const m = mock({ ok: true }, { status: 202 });
-    await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: '2026-10-11.1', acknowledgeRejectedRows: true });
+    await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: '2026-10-13.1' });
     expect(call(m).url).toBe('http://x/v1/filings/upload/months/2026-09/process');
-    expect(JSON.parse(call(m).init.body as string)).toEqual({ declarationAccepted: true, declarationVersion: '2026-10-11.1', acknowledgeRejectedRows: true });
+    expect(JSON.parse(call(m).init.body as string)).toEqual({ declarationAccepted: true, declarationVersion: '2026-10-13.1' });
+  });
+
+  it('has no method to close a month', () => {
+    expect((client() as unknown as Record<string, unknown>).closeFilingUploadMonth).toBeUndefined();
   });
 
   it('fetches the error report', async () => {
@@ -203,10 +207,15 @@ describe('errors', () => {
     expect(dup.body.existingId).toBe('f9');
     expect(dup.body.reason).toBe('same_name');
 
-    mock({ error: 'ACKNOWLEDGEMENT_REQUIRED', message: 'Some rows were rejected.', rejectedRows: 4, rejectedFiles: 1 }, { status: 409 });
-    const ack = await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: 'v' }).catch((e) => e);
-    expect(ack.body.rejectedRows).toBe(4);
-    expect(ack.body.rejectedFiles).toBe(1);
+    mock({ error: 'FILE_ERRORS', message: 'One or more files have errors.', filesWithErrors: 2 }, { status: 409 });
+    const fe = await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: 'v' }).catch((e) => e);
+    expect(fe.code).toBe('FILE_ERRORS');
+    expect(fe.body.filesWithErrors).toBe(2);
+
+    mock({ error: 'SYSTEM_FILE_ERRORS', message: 'A file we prepared for you has errors.', filesWithErrors: 1, contactUrl: 'https://example.test/contact' }, { status: 409 });
+    const sfe = await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: 'v' }).catch((e) => e);
+    expect(sfe.code).toBe('SYSTEM_FILE_ERRORS');
+    expect(sfe.body.contactUrl).toBe('https://example.test/contact');
 
     mock({ error: 'DECLARATION_VERSION_MISMATCH', message: 'Changed.', currentVersion: 'v2', declaration: { version: 'v2', text: 'T' } }, { status: 422 });
     const mm = await client().processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: 'v1' }).catch((e) => e);

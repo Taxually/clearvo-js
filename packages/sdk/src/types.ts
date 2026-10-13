@@ -3913,10 +3913,10 @@ export interface ClearvoErrorBody extends Record<string, unknown> {
   reason?: string;
   /** PERIOD_PROCESSING: `processing`. */
   state?: string;
-  /** ACKNOWLEDGEMENT_REQUIRED: rows rejected across the month. */
-  rejectedRows?: number;
-  /** ACKNOWLEDGEMENT_REQUIRED: files with rejected rows. */
-  rejectedFiles?: number;
+  /** FILE_ERRORS, SYSTEM_FILE_ERRORS: how many files in the month have errors. */
+  filesWithErrors?: number;
+  /** SYSTEM_FILE_ERRORS: where to contact support. */
+  contactUrl?: string;
   /** DECLARATION_VERSION_MISMATCH: the version to send now. */
   currentVersion?: string;
   /** DECLARATION_VERSION_MISMATCH: the current declaration to show. */
@@ -3926,7 +3926,7 @@ export interface ClearvoErrorBody extends Record<string, unknown> {
 /** The `error` codes of a Filings upload refusal (409 and 422), as in `ClearvoError.code`. */
 export type FilingUploadErrorCode =
   | 'FILE_ALREADY_ADDED' | 'SYSTEM_FILE_NOT_DELETABLE' | 'MONTH_NOT_OPEN' | 'MONTH_CLOSED' | 'MONTH_LOCKED'
-  | 'MONTH_NOT_CLOSABLE' | 'PERIOD_PROCESSING' | 'PERIOD_CONFLICT' | 'PROCESSING_REFUSED' | 'ACKNOWLEDGEMENT_REQUIRED'
+  | 'PERIOD_PROCESSING' | 'PERIOD_CONFLICT' | 'PROCESSING_REFUSED' | 'FILE_ERRORS' | 'SYSTEM_FILE_ERRORS'
   | 'SYSTEM_FILE_PENDING' | 'DECLARATION_REQUIRED' | 'DECLARATION_VERSION_MISMATCH'
   | 'month_not_available' | 'filing_backend_not_linked' | 'processing_backend_unavailable';
 
@@ -3940,7 +3940,7 @@ export class ClearvoError extends Error {
     public readonly code?: CustomPropertyErrorCode | (string & {}),
     /** The per-field failures of a `POST /v1/send` rejection (see {@link SendRejectionBody}). */
     public readonly errors?: SendRejectionEntry[],
-    /** The whole JSON error body, so fields beyond `message` / `code` are reachable: for the Filings upload routes `existingId` and `reason` (FILE_ALREADY_ADDED), `rejectedRows` and `rejectedFiles` (ACKNOWLEDGEMENT_REQUIRED), `currentVersion` and `declaration` (DECLARATION_VERSION_MISMATCH). Narrow with {@link FilingUploadErrorBody}. */
+    /** The whole JSON error body, so fields beyond `message` / `code` are reachable: for the Filings upload routes `existingId` and `reason` (FILE_ALREADY_ADDED), `filesWithErrors` (FILE_ERRORS, SYSTEM_FILE_ERRORS) and `contactUrl` (SYSTEM_FILE_ERRORS), `currentVersion` and `declaration` (DECLARATION_VERSION_MISMATCH). Narrow with {@link FilingUploadErrorBody}. */
     public readonly body?: ClearvoErrorBody
   ) {
     super(message);
@@ -4487,7 +4487,7 @@ export interface ImportSettlementVariance {
   }>;
 }
 
-// ── Filings (US sales tax returns) ───────────────────────────────────────────────────────────────────────────────
+// ── Filings (tax returns) ───────────────────────────────────────────────────────────────────────────────
 // Routes: /v1/filings/*, /v1/filings/setups, /v1/tax/registrations/{id}/filing and /v1/filings/upload/*.
 // The key needs the `filings` product; reads accept a read key, every POST/PUT/DELETE needs a write key. Account-scoped
 // keys pass an entityId (sent as x-entity-id). Display labels (statusLabel, nextStepLabel, ...) are written to be shown as is.
@@ -4654,7 +4654,7 @@ export interface FilingPeriodOption {
   label: string;
   startsOn: string;
   endsOn: string;
-  /** True when the state due dates were unavailable and the approximation was used. */
+  /** True when the due dates were unavailable and the approximation was used. */
   estimated?: boolean;
 }
 
@@ -4676,7 +4676,7 @@ export interface FilingSetup {
   startPeriodKey: string | null;
   startPeriodLabel: string | null;
   frequencyOptions: Array<{ code: string; label: string; description: string }>;
-  /** `fallback` while the state source is unreachable: Monthly, Quarterly and Quarterly with prepayments, with estimated start periods. */
+  /** `fallback` while the tax authority source is unreachable: Monthly, Quarterly and Quarterly with prepayments, with estimated start periods. */
   frequencyOptionsSource: 'live' | 'fallback';
   startOptionsByFrequency: Record<string, FilingStartOptions>;
   frequencyQuestion: string;
@@ -4740,7 +4740,7 @@ export interface FilingUploadFile {
   deletable: boolean;
   note?: string;
   uploadedAt: string;
-  /** uploaded = not processed yet; processed; had_errors = some rows rejected (see the error report); failed. */
+  /** uploaded = not processed yet; processed; had_errors = a row has an error, so the whole file is not used (see the error report); failed. */
   status: 'uploaded' | 'processed' | 'had_errors' | 'failed';
   statusLabel: string;
   /** Counts are null until the file has been processed. */
@@ -4769,6 +4769,7 @@ export interface FilingUploadMonth extends FilingUploadMonthSummary {
   declaration: FilingUploadDeclaration;
   counts: { transactions: number; errors: number; warnings: number };
   canUpload: boolean;
+  /** False while any file has errors (and `message` says what to do; `contactUrl` for a file prepared for you). */
   canConfirm: boolean;
   allowedActions: { upload: boolean; delete: boolean; process: boolean };
   files: FilingUploadFile[];
@@ -4814,8 +4815,6 @@ export interface ProcessFilingUploadMonthInput {
   declarationAccepted: boolean;
   /** month.declaration.version as shown with the month. A stale version is 422 DECLARATION_VERSION_MISMATCH. */
   declarationVersion: string;
-  /** Go ahead although some rows were rejected (otherwise 409 ACKNOWLEDGEMENT_REQUIRED, with `rejectedRows` and `rejectedFiles` on `ClearvoError.body`). */
-  acknowledgeRejectedRows?: boolean;
 }
 
 /** 202 while processing runs (poll getFilingUploadMonth until state is done or errors); 200 with alreadyApplied when nothing changed. */

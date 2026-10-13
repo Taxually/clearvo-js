@@ -198,14 +198,19 @@ describe('upload', () => {
     expect(last(m).url).toBe('http://x/v1/filings/upload/months/2026-09/files/f1/error-report');
   });
 
-  it('process sends the accepted declaration and its version, and the acknowledgement when asked', async () => {
+  it('process sends the accepted declaration and its version only', async () => {
     const m = mockFetch({ ok: true }, { status: 202 });
-    await run(['upload', 'process', '2026-09', '--accept-declaration', '--declaration-version', '2026-10-11.1']);
+    await run(['upload', 'process', '2026-09', '--accept-declaration', '--declaration-version', '2026-10-13.1']);
     expect(last(m).url).toBe('http://x/v1/filings/upload/months/2026-09/process');
-    expect(JSON.parse(last(m).init.body as string)).toEqual({ declarationAccepted: true, declarationVersion: '2026-10-11.1' });
-    const m2 = mockFetch({ ok: true }, { status: 202 });
-    await run(['upload', 'process', '2026-09', '--accept-declaration', '--declaration-version', 'v', '--acknowledge-rejected']);
-    expect(JSON.parse(last(m2).init.body as string)).toEqual({ declarationAccepted: true, declarationVersion: 'v', acknowledgeRejectedRows: true });
+    expect(JSON.parse(last(m).init.body as string)).toEqual({ declarationAccepted: true, declarationVersion: '2026-10-13.1' });
+  });
+
+  it('has no --acknowledge-rejected option and no close command', async () => {
+    const m = mockFetch();
+    exitThrows();
+    await expect(run(['upload', 'process', '2026-09', '--accept-declaration', '--declaration-version', 'v', '--acknowledge-rejected'])).rejects.toThrow();
+    await expect(run(['upload', 'close', '2026-09'])).rejects.toThrow();
+    expect(m).not.toHaveBeenCalled();
   });
 
   it('process never sends without --accept-declaration', async () => {
@@ -241,13 +246,14 @@ describe('errors', () => {
   });
 
   it('prints the extra fields of an upload refusal and what to do next', async () => {
-    mockFetch({ error: 'ACKNOWLEDGEMENT_REQUIRED', message: 'Some rows were rejected.', rejectedRows: 4, rejectedFiles: 1 }, { status: 409 });
+    mockFetch({ error: 'FILE_ERRORS', message: 'One or more files have errors.', filesWithErrors: 2 }, { status: 409 });
     exitThrows();
     await expect(run(['upload', 'process', '2026-09', '--accept-declaration', '--declaration-version', 'v'])).rejects.toThrow('process.exit called');
     const printed = errSpy.mock.calls.map((c) => String(c[0])).join('\n');
-    expect(printed).toContain('Code: ACKNOWLEDGEMENT_REQUIRED');
-    expect(printed).toContain('Details: {"rejectedRows":4,"rejectedFiles":1}');
-    expect(printed).toContain('--acknowledge-rejected');
+    expect(printed).toContain('Code: FILE_ERRORS');
+    expect(printed).toContain('Details: {"filesWithErrors":2}');
+    expect(printed).toContain('upload error-report');
+    expect(printed).not.toContain('--acknowledge-rejected');
   });
 
   it('prints existingId on a duplicate file', async () => {

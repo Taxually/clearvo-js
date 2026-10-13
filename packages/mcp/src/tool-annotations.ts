@@ -62,10 +62,10 @@ const DESTRUCTIVE = new Set<string>([
   // Overwrites previously stored authority credentials.
   'set_ar_credentials', 'set_pl_credentials', 'set_fr_credentials', 'set_hu_credentials', 'set_pt_credentials',
   'set_eg_credentials', 'set_jo_credentials', 'set_mx_credentials', 'set_br_credentials',
-  // Approving commits the return to be filed with the state; skipping closes it as NOT_FILED for good.
+  // Approving commits the return to be filed with the tax authority; skipping closes it as NOT_FILED for good.
   'approve_filing', 'skip_filing',
-  // Removes uploaded data (replace deletes before it re-adds); closing a month is the customer's "all uploaded".
-  'delete_filing_data_file', 'replace_filing_data_file', 'close_filing_upload_month',
+  // Removes uploaded data (replace deletes before it re-adds).
+  'delete_filing_data_file', 'replace_filing_data_file',
 ]);
 
 const NON_IDEMPOTENT = new Set<string>([
@@ -85,8 +85,8 @@ const NON_IDEMPOTENT = new Set<string>([
 ]);
 
 const OPEN_WORLD = new Set<string>([
-  // Data files, processing and closing go to the filing processing partner.
-  'upload_filing_data_file', 'replace_filing_data_file', 'delete_filing_data_file', 'process_filing_upload_month', 'close_filing_upload_month',
+  // Data files and processing go to the filing processing partner.
+  'upload_filing_data_file', 'replace_filing_data_file', 'delete_filing_data_file', 'process_filing_upload_month',
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
   'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
   'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',

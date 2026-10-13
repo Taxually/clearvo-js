@@ -7,6 +7,7 @@ import type {
   FilingSetup,
   FilingStatus,
   FilingUploadFile,
+  FilingUploadMonth,
   ProcessFilingUploadMonthInput,
   UpdateRegistrationFilingSetupInput,
 } from '../src/index.js';
@@ -22,8 +23,12 @@ const _notAttested: UpdateRegistrationFilingSetupInput = { frequencyCode: 'Month
 const _badStart: UpdateRegistrationFilingSetupInput = { frequencyCode: 'Monthly', frequencyAttested: true, startChoice: 'whenever' };
 
 // @ts-expect-error the declaration is required to process a month
-const _noDeclaration: ProcessFilingUploadMonthInput = { acknowledgeRejectedRows: true };
-const _process: ProcessFilingUploadMonthInput = { declarationAccepted: true, declarationVersion: '2026-10-11.1' };
+const _noDeclaration: ProcessFilingUploadMonthInput = {};
+// @ts-expect-error acknowledgeRejectedRows was removed: a file with errors blocks the month until fixed or removed
+const _noAck: ProcessFilingUploadMonthInput = { declarationAccepted: true, declarationVersion: '2026-10-13.1', acknowledgeRejectedRows: true };
+const _process: ProcessFilingUploadMonthInput = { declarationAccepted: true, declarationVersion: '2026-10-13.1' };
+// @ts-expect-error there is no close action on a month
+const _close: FilingUploadMonth['allowedActions']['close'] = true;
 
 // @ts-expect-error not a filing status
 const _status: FilingStatus = 'RETRO';
@@ -42,12 +47,13 @@ async function _use() {
   await client.processFilingUploadMonth('2026-09', { declarationAccepted: true, declarationVersion: month.month.declaration.version });
   void [_label, _v, csv, xlsx];
 }
-void [_request, _defer, _stop, _notAttested, _badStart, _noDeclaration, _process, _status, _file, _use];
+void [_request, _defer, _stop, _notAttested, _badStart, _noDeclaration, _noAck, _process, _close, _status, _file, _use];
 
 // frequencyOptionsSource is closed (live | fallback); the error body's extra fields are typed.
 // @ts-expect-error not an allowed source
 const _badSource: FilingSetup['frequencyOptionsSource'] = 'cached';
 declare const _err: ClearvoError;
 const _existing: string | undefined = _err.body?.existingId;
-const _rows: number | undefined = _err.body?.rejectedRows;
+const _filesWithErrors: number | undefined = _err.body?.filesWithErrors;
+const _contactUrl: string | undefined = _err.body?.contactUrl;
 const _declaration: { version: string; text: string } | undefined = _err.body?.declaration;

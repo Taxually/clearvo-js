@@ -1201,7 +1201,7 @@ export class ClearvoClient {
   }
 
   // ── Filings ───────────────────────────────────────────────────────────────────
-  // US sales tax returns Clearvo prepares and files. The key needs the `filings` product; every change needs a write key.
+  // Tax returns Clearvo prepares and files, for any country or scheme the filing service supports (US states are one example). The key needs the `filings` product; every change needs a write key.
   // Account-scoped keys pass `entityId` (sent as x-entity-id). Display labels in the responses are written to be shown as is.
 
   /** GET /filings/setups: where filing setup stands for each registration, and the next step. */
@@ -1209,7 +1209,7 @@ export class ClearvoClient {
     return this.request('GET', '/filings/setups', undefined, entityHeaders(entityId));
   }
 
-  /** GET /tax/registrations/{id}/filing: the full filing setup of one US state sales tax registration (frequency options, start periods, bank requirement). */
+  /** GET /tax/registrations/{id}/filing: the full filing setup of one registration (frequency options, start periods, bank requirement). */
   getRegistrationFilingSetup(registrationId: string, entityId?: string): Promise<GetRegistrationFilingSetupResponse> {
     return this.request('GET', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, undefined, entityHeaders(entityId));
   }
@@ -1223,7 +1223,7 @@ export class ClearvoClient {
     return this.request('PUT', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, input, entityHeaders(entityId));
   }
 
-  /** GET /filings/bank-account: the account the state debits (last four digits only). Bank details are changed in the dashboard. */
+  /** GET /filings/bank-account: the account the tax authority debits (last four digits only). Bank details are changed in the dashboard. */
   getFilingBankAccount(entityId?: string): Promise<FilingBankAccountResponse> {
     return this.request('GET', '/filings/bank-account', undefined, entityHeaders(entityId));
   }
@@ -1343,15 +1343,16 @@ export class ClearvoClient {
   /**
    * POST /filings/upload/months/{month}/process: confirm that all data for the month is added and process it once. The person confirming
    * accepts the declaration shown with the month: send `declarationAccepted: true` and its `declarationVersion` (otherwise 422
-   * DECLARATION_REQUIRED / DECLARATION_VERSION_MISMATCH, with `body.currentVersion` and `body.declaration`). If some rows were rejected the first call is 409 ACKNOWLEDGEMENT_REQUIRED (`body.rejectedRows`, `body.rejectedFiles`);
-   * repeat with `acknowledgeRejectedRows: true` to go ahead. Resolves with 202 while processing runs: poll getFilingUploadMonth until
-   * `state` is `done` or `errors`.
+   * DECLARATION_REQUIRED / DECLARATION_VERSION_MISMATCH, with `body.currentVersion` and `body.declaration`). If any row in a file has an error, the whole file is not used: while any file in the month has errors the call is
+   * 409 FILE_ERRORS (`body.filesWithErrors`), or 409 SYSTEM_FILE_ERRORS (with `body.contactUrl`) when a file prepared for you has errors; fix the file
+   * and upload it again, or delete it, then confirm. Warnings never block. Resolves with 202 while processing runs: poll getFilingUploadMonth until
+   * `state` is `done` or `errors`. A month is finished by approving the return.
    */
   processFilingUploadMonth(month: string, input: ProcessFilingUploadMonthInput, entityId?: string): Promise<ProcessFilingUploadMonthResponse> {
     return this.request('POST', `/filings/upload/months/${encodeURIComponent(month)}/process`, input, entityHeaders(entityId));
   }
 
-  /** GET /filings/upload/months/{month}/files/{fileId}/error-report: a fresh download link for the rows of a file that were rejected (404 no_error_report when none). Do not store the link. */
+  /** GET /filings/upload/months/{month}/files/{fileId}/error-report: a fresh download link (https only) for the error and warning report of a processed file (404 no_error_report when it has neither). Do not store the link. */
   getFilingUploadErrorReport(month: string, fileId: string, entityId?: string): Promise<FilingUploadErrorReportResponse> {
     return this.request('GET', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}/error-report`, undefined, entityHeaders(entityId));
   }
