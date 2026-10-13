@@ -1771,7 +1771,12 @@ const TOOLS = [
     description:
       'List the tax registrations and obligations for an entity: VAT registrations by country, ' +
       'OSS/IOSS scheme registrations, and compliance threshold status. ' +
-      'Use this to see where an entity is registered and whether it is compliant, approaching threshold, or exposed.',
+      'Use this to see where an entity is registered and whether it is compliant, approaching threshold, or exposed. ' +
+      'The response carries monitoring { enabled, message? }. When monitoring.enabled is false, Compliance Radar is switched off for ' +
+      'this account (an Enterprise administrator choice): thresholds and mandate dates are NOT being monitored, so every row has ' +
+      'obligationStatus, threshold and currentPeriodAmount null and obligationStatusLabel "Not monitored", and Radar-created ' +
+      '"Not Registered" monitoring rows are omitted. Never describe a not-monitored row as compliant or all clear; relay monitoring.message. ' +
+      'The registrations themselves are unchanged.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -2064,7 +2069,8 @@ const TOOLS = [
       'Also returns nextSteps — a step-by-step integration guide URL and summary for each enabled ' +
       'solution (currently tax calculations and e-invoicing), so once the checklist is done you know ' +
       'how to actually wire the API into the customer\'s application, not just that setup is complete. ' +
-      'Call this right after connecting, and again after completing a step, to verify it registered.',
+      'Call this right after connecting, and again after completing a step, to verify it registered. ' +
+      'solutionAccess.compliance_radar is "not_selected" when an Enterprise administrator has switched Compliance Radar off: thresholds and mandate dates are then not monitored, and the Radar obligations API answers 403 solution_not_enabled.',
     inputSchema: {
       type: 'object' as const,
       properties: {},

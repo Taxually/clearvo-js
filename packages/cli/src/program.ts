@@ -969,7 +969,7 @@ export function createProgram(): Command {
   
   registrations
     .command('list')
-    .description('List tax registrations and obligations for an entity')
+    .description('List tax registrations and obligations for an entity (monitoring.enabled false means Compliance Radar is off: obligation fields are null and labelled "Not monitored")')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { entity?: string; pretty?: boolean }) => {
