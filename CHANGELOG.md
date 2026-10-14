@@ -2,6 +2,12 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — publish only AFTER the backend silent-loss intake PR (Taxually-einvoicing 17673) is deployed
+
+Behaviour change in the API, mirrored here: bulk CSV rows with an unknown `document_type`, a non-numeric `deductible_vat_amount` or misaligned columns are row errors, and an async upload over 2,000,000 rows reports the unprocessed rows as ERRORED with a `ROW_LIMIT_EXCEEDED` entry.
+
+- MCP: `get_bulk_upload_status` and `list_bulk_upload_errors` descriptions state this.
+
 ## Unreleased — publish only AFTER the backend Filings data upload PR (Taxually-einvoicing 17450) is deployed
 
 Additive: the public Filings API (tax returns for any country or scheme the filing service supports; US states are one example) is now in the SDK, MCP and CLI: filing setup, the return lifecycle and the data upload. Not published; the product owner publishes to npm. Needs the docs PR in clearvo-marketing (`public/openapi.json`, `/docs/filings`) to ship with it.

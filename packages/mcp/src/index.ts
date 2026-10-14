@@ -3309,7 +3309,9 @@ const TOOLS = [
       'batchId when submit_invoices_bulk\'s own file had more than 500 rows. Returns status (UPLOADED/VALIDATING/' +
       'COMPLETED/FAILED/CANCELLED), total, outcomeCounts keyed by the same BulkSendRowOutcome vocabulary submit_invoices_bulk ' +
       'returns per row (ACCEPTED/ACCUMULATED/NEEDS_INFO/HELD/NO_OBLIGATION/SKIPPED_DUPLICATE/ERRORED), and a human-readable ' +
-      'summary. Call list_bulk_upload_errors afterward when outcomeCounts.ERRORED is greater than zero. 404 means no such ' +
+      'summary. Call list_bulk_upload_errors afterward when outcomeCounts.ERRORED is greater than zero. An upload over the ' +
+      '2,000,000-row limit never silently drops rows: the rows beyond it are counted under ERRORED and list_bulk_upload_errors ' +
+      'carries one ROW_LIMIT_EXCEEDED entry giving the first unprocessed row and how many were left out. 404 means no such ' +
       'batch, or it belongs to a different entity than this key is scoped to.',
     inputSchema: {
       type: 'object' as const,
@@ -3328,7 +3330,10 @@ const TOOLS = [
       'errorCode, its rowNumber in the original file, and a plain-language errorMessage. A row that DID reach resolution ' +
       '(however it was classified — accepted/accumulated/held/needs-info/no-obligation) is not a structural error and is not ' +
       'listed here; call list_mandate_transactions with the same uploadBatchId instead — it covers every row from the ' +
-      'batch, structural-error or not. JSON only — there is no CSV export on this tool.',
+      'batch, structural-error or not. A row can also be rejected for a column it cannot be read from (MISSING_OR_INVALID_FIELD ' +
+      'naming the column — including an unrecognised document_type, never coerced to invoice; COLUMN_COUNT_MISMATCH for a row ' +
+      'misaligned by an unquoted comma), and one ROW_LIMIT_EXCEEDED entry marks the first row left unprocessed when an upload ' +
+      'exceeded the 2,000,000-row limit. JSON only — there is no CSV export on this tool.',
     inputSchema: {
       type: 'object' as const,
       properties: {
