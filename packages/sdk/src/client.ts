@@ -10,6 +10,8 @@ import type {
   InvoiceStatusResponse,
   ListInvoicesParams,
   ListInvoicesResponse,
+  SimulateReceivedInvoicesInput,
+  SimulateReceivedInvoicesResponse,
   TaxCalculateRequest,
   QuoteDutiesInput,
   DutiesResult,
@@ -323,6 +325,16 @@ export class ClearvoClient {
       'GET',
       `/status?id=${encodeURIComponent(referenceId)}&country=${encodeURIComponent(country)}`
     );
+  }
+
+  /**
+   * Sandbox only (a csk_test_ key; a live key gets 403 SANDBOX_ONLY). Creates sample received invoices or credit notes
+   * from a fictional supplier through the same pipeline as a real received document: stored, archived and announced
+   * with the invoice.received webhook. With no input it creates one invoice for the entity's own country.
+   */
+  simulateReceivedInvoices(input: SimulateReceivedInvoicesInput = {}): Promise<SimulateReceivedInvoicesResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/receive/simulate', body, entityHeaders(entityId));
   }
 
   listInvoices(params: ListInvoicesParams = {}): Promise<ListInvoicesResponse> {

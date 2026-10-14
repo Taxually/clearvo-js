@@ -74,6 +74,15 @@ Additive: default US shipping facts. A customer can save a standing answer for `
 - MCP: `calculate_tax` (and `quote_duties`) line items gain the three fields; `list_rule_templates` names the `default_shipping_carrier`, `default_shipping_charge_avoidable` and `default_shipping_actual_cost` templates.
 - CLI: no change (`clearvo calculate` reads a JSON file).
 
+## Unreleased — publish only AFTER the backend sandbox inbound simulator PR (Taxually-einvoicing 17701) is deployed
+
+New endpoint `POST /v1/receive/simulate` (sandbox keys only): create sample received invoices and credit notes from a fictional supplier, through the same pipeline as a real received document (stored, archived, `invoice.received` webhook, no email). Needs the docs PR in clearvo-marketing (`public/openapi.json`, docs page, `llms.txt`) to ship with it.
+
+- SDK: `client.simulateReceivedInvoices({ country?, type?, count?, supplier?, totalAmount?, currency?, lines?, issueDate?, businessStatus?, entityId? })`, with `SimulateReceivedInvoicesInput` and `SimulateReceivedInvoicesResponse` types. `ReceivedInvoiceFields.intakeChannel` lists the France and `SANDBOX_SIMULATION` values.
+- MCP: `simulate_received_invoices` tool.
+- CLI: `clearvo receive simulate [--country] [--type] [--count] [--total] [--currency] [--issue-date] [--status] [--entity]`.
+- Not bumped: the product owner sets versions when publishing.
+
 ## Unreleased — backend webhook test-event PR (Taxually-einvoicing 17676) is deployed; ready to publish
 
 New endpoint `POST /v1/webhooks/test`: send a signed test event to one of your webhooks and see what your endpoint answered.

@@ -840,7 +840,7 @@ export type ValidationOutcome =
  */
 export interface ReceivedInvoiceFields {
   validationOutcome?: ValidationOutcome | null;
-  /** PEPPOL_AS4, DE_INBOUND_API, DE_INBOUND_DASHBOARD, DE_INBOUND_BULK or DE_INBOUND_EMAIL. */
+  /** PEPPOL_AS4, DE_INBOUND_API/DASHBOARD/BULK/EMAIL, FR_INBOUND_API/DASHBOARD/BULK, FR_PLATFORM_INBOUND or SANDBOX_SIMULATION. */
   intakeChannel?: string;
   /** When the platform received the document (not when it was stored). */
   receivedAt?: string;
@@ -874,6 +874,40 @@ export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+}
+
+export interface SimulateReceivedInvoicesInput {
+  /** DE or FR. Defaults to the entity's own country; a different value is rejected with 400 COUNTRY_MISMATCH. */
+  country?: 'DE' | 'FR';
+  /** Default invoice. A credit note references an invoice from the same call. */
+  type?: 'invoice' | 'credit_note';
+  /** 1 to 20 documents (default 1). Every call adds new documents. */
+  count?: number;
+  /** Optional override of the fictional supplier; the name always keeps a sample marker. */
+  supplier?: { name?: string; taxNumber?: string; legalRegistrationNumber?: string };
+  /** Gross total of each document (default 1200). Not allowed together with `lines`. */
+  totalAmount?: number;
+  /** Three-letter code. Default EUR; France accepts EUR only. */
+  currency?: string;
+  /** Net unit prices at the standard rate. Not allowed together with `totalAmount`. */
+  lines?: Array<{ description: string; quantity: number; unitPrice: number }>;
+  /** YYYY-MM-DD. Default today; the due date is 30 days later. */
+  issueDate?: string;
+  /** Lifecycle status to move each created document to after it arrives (default IN_HAND). */
+  businessStatus?: string;
+  /** Required for account-scoped keys. */
+  entityId?: string;
+}
+
+export interface SimulateReceivedInvoicesResponse {
+  ok: boolean;
+  sandbox: true;
+  /** Received invoices in the same shape GET /v1/invoices returns (cast to ReceivedInvoiceFields for the inbound fields). */
+  created: unknown[];
+  /** Ids of documents that were already present and so were not created again. */
+  duplicates: string[];
+  webhooks: { event: string; subscribedEndpoints: number };
+  notes: string[];
 }
 
 export interface ListInvoicesResponse {

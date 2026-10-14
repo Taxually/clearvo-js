@@ -1022,6 +1022,34 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo receive simulate ─────────────────────────────────────────────────
+  // Sandbox only: creates sample received invoices / credit notes through the real inbound pipeline.
+  const receive = program.command('receive').description('Received (inbound) invoices');
+  receive
+    .command('simulate')
+    .description('Sandbox only: create sample received invoices or credit notes from a fictional supplier (needs a csk_test_ key)')
+    .option('--country <code>', 'DE or FR (default: the entity\'s own country)')
+    .option('--type <type>', 'invoice (default) or credit_note')
+    .option('--count <n>', 'How many documents, 1-20 (default 1)')
+    .option('--total <amount>', 'Gross total of each document (default 1200)')
+    .option('--currency <code>', 'Three-letter currency code (France: EUR only)')
+    .option('--issue-date <date>', 'YYYY-MM-DD (default today)')
+    .option('--status <status>', 'Move each document to this lifecycle status after it arrives (e.g. APPROVED, DISPUTED, REFUSED)')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; type?: string; count?: string; total?: string; currency?: string; issueDate?: string; status?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.country) body.country = opts.country.toUpperCase();
+      if (opts.type) body.type = opts.type;
+      if (opts.count) body.count = Number(opts.count);
+      if (opts.total) body.totalAmount = Number(opts.total);
+      if (opts.currency) body.currency = opts.currency.toUpperCase();
+      if (opts.issueDate) body.issueDate = opts.issueDate;
+      if (opts.status) body.businessStatus = opts.status;
+      const result = await api('POST', '/receive/simulate', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo validate-tin-batch ───────────────────────────────────────────────
   program
     .command('validate-tin-batch <file>')
