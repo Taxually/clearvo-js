@@ -380,6 +380,13 @@ export interface EsCountrySpecific {
 export interface SubmitInvoiceInput {
   documentType?: 'invoice' | 'credit_note' | 'debit_note';
   invoiceNumber: string;
+  /**
+   * Optional company code (a division of the entity; Enterprise plans only). Trimmed, max 50, matched without regard
+   * to case against the entity's active codes (`listCompanyCodes()`). Omitted: the entity's default company code,
+   * else none. An unknown or archived code is a 422 `company_code_unknown` before anything is calculated or stored; a code not valid on the transaction's own invoice/tax-point date (outside its `validFrom`/`validTo` window) is a 422 `company_code_not_valid_on_date` (an entity default outside its window is just not applied: `companyCodeSource` 'none' plus a warning);
+   * a plan without company codes is a 403 `company_codes_not_included`.
+   */
+  companyCode?: string;
   issueDate: string;
   dueDate?: string;
   currency: string;
@@ -861,6 +868,13 @@ export type CustomPropertyErrorCode = 'BUILT_IN_PROPERTY_AS_CUSTOM' | 'UNKNOWN_C
 export interface TaxCalculateRequest {
   currency: string;
   commit?: boolean;
+  /**
+   * Optional company code (a division of the entity; Enterprise plans only). Trimmed, max 50, matched without regard
+   * to case against the entity's active codes (`listCompanyCodes()`). Omitted: the entity's default company code,
+   * else none. An unknown or archived code is a 422 `company_code_unknown` before anything is calculated or stored; a code not valid on the transaction's own invoice/tax-point date (outside its `validFrom`/`validTo` window) is a 422 `company_code_not_valid_on_date` (an entity default outside its window is just not applied: `companyCodeSource` 'none' plus a warning);
+   * a plan without company codes is a 403 `company_codes_not_included`.
+   */
+  companyCode?: string;
   idempotencyKey?: string;
   /**
    * `'sale'` (default) — an outgoing transaction: the entity is the
@@ -1129,6 +1143,10 @@ export interface TaxCalcParty {
 
 export interface TaxCalculateResponse {
   calculationId: string;
+  /** The company code this calculation was recorded under (the casing configured on the entity). Present only when a code resolved or the entity uses company codes. */
+  companyCode?: string;
+  /** Where `companyCode` came from ('none' when no code resolved, e.g. the entity default is outside its validity window, with a warning). A lapsed plan with a default still configured keeps applying it and adds a `company_codes_entitlement_lapsed` warning. */
+  companyCodeSource?: 'request' | 'entity_default' | 'none';
   /** US use tax only: the sum of the lines' `useTax.selfAssessedTaxAmount`. */
   selfAssessedTaxAmount?: number;
   /** Present with `selfAssessedTaxAmount`; `USE_TAX` for a use tax calculation. */
@@ -1688,6 +1706,62 @@ export interface ListBankAccountsResponse {
   bankAccounts: BankAccount[];
 }
 
+// ── Company codes (Enterprise) ───────────────────────────────────────────────
+// An internal split of ONE entity's transactions (an SAP company code, a Coupa
+// business unit): same taxable person and registrations, a separate bucket for
+// rules and Explore. Codes are never deleted (archive them) and never change.
+
+export interface CompanyCode {
+  id: string;
+  code: string;
+  name: string | null;
+  status: 'active' | 'archived';
+  /** First day (YYYY-MM-DD, inclusive) the code may be used on a transaction; null = no start limit. */
+  validFrom: string | null;
+  /** Last day (YYYY-MM-DD, inclusive) the code may be used on a transaction; null = no end limit. */
+  validTo: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListCompanyCodesParams {
+  /** Pass 'active' to leave archived codes out. */
+  status?: 'active';
+  entityId?: string;
+}
+
+export interface ListCompanyCodesResponse {
+  ok: true;
+  companyCodes: CompanyCode[];
+}
+
+export interface CreateCompanyCodeInput {
+  /** The code as your ERP writes it, trimmed, 1 to 50 characters. A repeat (case-insensitive) is a 409 `company_code_exists`. */
+  code: string;
+  name?: string | null;
+  /** First day (YYYY-MM-DD, inclusive) the code is valid. Omitted or null: no start limit. */
+  validFrom?: string | null;
+  /** Last day (YYYY-MM-DD, inclusive) the code is valid. Omitted or null: no end limit. Must not be before `validFrom`. */
+  validTo?: string | null;
+  entityId?: string;
+}
+
+export interface UpdateCompanyCodeInput {
+  name?: string | null;
+  /** 'archived' stops the code being accepted on new transactions. Archiving the entity default is a 409 `company_code_is_default`. */
+  status?: 'active' | 'archived';
+  /** `null` clears the start limit; omit to leave unchanged. */
+  validFrom?: string | null;
+  /** `null` clears the end limit; omit to leave unchanged. Must not be before `validFrom`. */
+  validTo?: string | null;
+  entityId?: string;
+}
+
+export interface CompanyCodeResponse {
+  ok: true;
+  companyCode: CompanyCode;
+}
+
 export interface Webhook {
   id: string;
   url: string;
@@ -1809,6 +1883,8 @@ export interface UpdateRegistrationResponse {
 export interface TaxCalculationSummary {
   id: string;
   entityId: string | null;
+  /** The company code the calculation was recorded under, if any. */
+  companyCode?: string | null;
   jurisdictionCountry: string;
   jurisdictionRegion: string | null;
   transactionType: string;
@@ -3173,7 +3249,7 @@ export type RuleKind = 'NORMALIZATION' | 'ENRICHMENT' | 'ADJUSTMENT' | 'WARNING'
 export type RuleStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
 export type RuleLegalBasisTag = 'LEGAL_MANDATE' | 'BUSINESS_POLICY';
 
-export interface RuleCondition {
+export interface RuleConditionLeaf {
   property: string;
   /**
    * One of the operators getRulesEngineSchema() lists for the property, including the date operators
@@ -3186,6 +3262,17 @@ export interface RuleCondition {
   /** String comparisons only. true = exact-case match, false = case-insensitive. Omit to use the property's default case handling. */
   caseSensitive?: boolean;
 }
+
+/** An OR (`any`) or AND (`all`) group — exactly one key, at least one child. Groups nest at most 2 levels deep; a rule carries at most 50 leaf conditions in total. */
+export type RuleConditionGroup =
+  | { any: RuleConditionItem[]; all?: never }
+  | { all: RuleConditionItem[]; any?: never };
+
+/** A leaf or a group. A rule's `conditions` array is ANDed at the top level; a flat array of leaves behaves exactly as before. */
+export type RuleConditionItem = RuleConditionLeaf | RuleConditionGroup;
+
+/** @deprecated Use RuleConditionLeaf; kept so existing imports keep compiling. */
+export type RuleCondition = RuleConditionLeaf;
 
 export interface RuleAction {
   property: string;
@@ -3213,7 +3300,9 @@ export interface Rule {
   /** A platform default (isSystem) can also be 'PLATFORM_INVARIANT' (a shape/vocabulary check) — system-authored only, never settable through createRule()/updateRule(). */
   legalBasisTag: RuleLegalBasisTag | 'PLATFORM_INVARIANT';
   sortOrder: number;
-  conditions: RuleCondition[];
+  conditions: RuleConditionItem[];
+  /** The company code this rule is scoped to (Enterprise), or null for an entity-wide rule. A company-code rule fires only for requests carrying that code and outranks the entity-wide rule with the same `code`. */
+  companyCode?: string | null;
   actions: RuleAction[];
   templateId: string | null;
   /** A platform default. A system LEGAL_MANDATE or PLATFORM_INVARIANT rule keeps its shape: changing its window, conditions, actions, checkpoint, sortOrder or legalBasisTag is rejected with 422 SYSTEM_RULE_SHAPE_FROZEN; name and description stay editable. */
@@ -3242,6 +3331,8 @@ export interface ListRulesParams {
   conditionValue?: string;
   /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). */
   includeDefaults?: boolean;
+  /** Only rules scoped to this company code (case-insensitive). */
+  companyCode?: string;
   entityId?: string;
 }
 
@@ -3296,14 +3387,16 @@ export interface CreateRuleInput {
   /** Default 'BUSINESS_POLICY'. */
   legalBasisTag?: RuleLegalBasisTag;
   sortOrder?: number;
-  /** Flat, ANDed array — empty (or omitted) means "always matches". */
-  conditions?: RuleCondition[];
+  /** ANDed at the top level — empty (or omitted) means "always matches". An element is a leaf or an `{any: [...]}` / `{all: [...]}` group (at most 50 leaves, 2 levels deep). */
+  conditions?: RuleConditionItem[];
   actions?: RuleAction[];
   templateId?: string;
   /** ISO datetime. Live from this instant, judged against ingestion time (not the document date). */
   effectiveFrom?: string;
   /** ISO datetime. Live until this instant (exclusive), judged against ingestion time. */
   effectiveTo?: string;
+  /** Scope the rule to one of the entity's ACTIVE company codes (Enterprise; entity-scoped keys only; not for CONFIGURATION rules). Omit for an entity-wide rule. 422 `company_code_unknown`, 403 `company_codes_not_included`. */
+  companyCode?: string;
   entityId?: string;
 }
 
@@ -3321,12 +3414,14 @@ export interface UpdateRuleInput {
   description?: string;
   legalBasisTag?: RuleLegalBasisTag;
   sortOrder?: number;
-  conditions?: RuleCondition[];
+  conditions?: RuleConditionItem[];
   actions?: RuleAction[];
   /** ISO datetime. Live from this instant, judged against ingestion time (not the document date). */
   effectiveFrom?: string;
   /** ISO datetime. Live until this instant (exclusive), judged against ingestion time. */
   effectiveTo?: string;
+  /** Re-scope to another active company code; `null` makes the rule entity-wide again; omit to leave unchanged. */
+  companyCode?: string | null;
   enabled?: boolean;
   /** The only status this may ever set — a one-way, terminal retirement. Reaching ACTIVE is only ever done via activateRule(). */
   status?: 'ARCHIVED';
@@ -3656,7 +3751,7 @@ export interface FieldMapping {
 
 /** Field mappings are inherently per-entity — entityId is required (either directly, or via an entity-scoped key). */
 export interface ListFieldMappingsParams {
-  /** e.g. "xero". */
+  /** e.g. "xero" or "coupa". */
   sourceSystem: string;
   entityId?: string;
 }
@@ -3674,6 +3769,22 @@ export interface UpdateFieldMappingInput {
   /** The only status a PATCH may ever set — retires the row. */
   status?: 'ARCHIVED';
   entityId?: string;
+}
+
+/** Adds one row to a source that maps a whole calculation request (today "coupa"). */
+export interface CreateFieldMappingInput {
+  sourceSystem: string;
+  /** `companyCode`, or `customProperties.<key>` / `lineItems[].customProperties.<key>` for a custom property already defined for the entity. */
+  fieldPath: string;
+  /** Dot path into the source payload; `a||b` tries a then b. */
+  sourcePath: string;
+  transform?: FieldMappingTransform;
+  entityId?: string;
+}
+
+export interface CreateFieldMappingResponse {
+  ok: true;
+  mapping: FieldMapping;
 }
 
 export interface GetFieldMappingResponse {

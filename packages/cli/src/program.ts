@@ -789,6 +789,64 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo company-codes (Enterprise) ──────────────────────────────────────
+  // An internal split of ONE entity's transactions; never deleted, only archived.
+  const companyCodes = program.command('company-codes').description('Manage an entity\'s company codes (Enterprise plans only)');
+
+  companyCodes
+    .command('list')
+    .description('List company codes')
+    .option('--active', 'Leave archived codes out')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { active?: boolean; entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/company-codes${opts.active ? '?status=active' : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  companyCodes
+    .command('create')
+    .description('Add a company code')
+    .requiredOption('--code <code>', 'The code as your ERP writes it (1 to 50 characters)')
+    .option('--name <name>', 'Display name')
+    .option('--valid-from <date>', 'First day (YYYY-MM-DD, inclusive) the code is valid. Omit for no start limit')
+    .option('--valid-to <date>', 'Last day (YYYY-MM-DD, inclusive) the code is valid. Omit for no end limit')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { code: string; name?: string; validFrom?: string; validTo?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, string> = { code: opts.code };
+      if (opts.name) body.name = opts.name;
+      if (opts.validFrom) body.validFrom = opts.validFrom;
+      if (opts.validTo) body.validTo = opts.validTo;
+      const result = await api('POST', '/company-codes', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  companyCodes
+    .command('update <id>')
+    .description('Rename, archive or reactivate a company code (the code itself never changes; there is no delete)')
+    .option('--name <name>', 'New display name')
+    .option('--archive', 'Set status=archived')
+    .option('--activate', 'Set status=active')
+    .option('--valid-from <date>', 'First day (YYYY-MM-DD, inclusive) the code is valid; "none" clears the start limit')
+    .option('--valid-to <date>', 'Last day (YYYY-MM-DD, inclusive) the code is valid; "none" clears the end limit')
+    .option('--clear-valid-from', 'Clear the start limit (same as --valid-from none)')
+    .option('--clear-valid-to', 'Clear the end limit (same as --valid-to none)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { name?: string; archive?: boolean; activate?: boolean; validFrom?: string; validTo?: string; clearValidFrom?: boolean; clearValidTo?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, string | null> = {};
+      if (opts.name) body.name = opts.name;
+      if (opts.clearValidFrom || opts.validFrom?.toLowerCase() === 'none') body.validFrom = null;
+      else if (opts.validFrom) body.validFrom = opts.validFrom;
+      if (opts.clearValidTo || opts.validTo?.toLowerCase() === 'none') body.validTo = null;
+      else if (opts.validTo) body.validTo = opts.validTo;
+      if (opts.archive) body.status = 'archived';
+      if (opts.activate) body.status = 'active';
+      const result = await api('PATCH', `/company-codes/${encodeURIComponent(id)}`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo bank-accounts ───────────────────────────────────────────────────
   // Entity-owned IBAN/BIC master data (one per currency, plus an optional
   // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
@@ -894,7 +952,7 @@ export function createProgram(): Command {
   webhooks
     .command('create')
     .description('Register a new webhook endpoint')
-    .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to')
+    .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
     .option('--events <events>', 'Comma-separated event types (default: *). Options: invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending', '*')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; pretty?: boolean }) => {
@@ -1537,10 +1595,11 @@ export function createProgram(): Command {
     .option('--condition-value <value>', 'Combined with --condition-property — narrows to a condition whose value equals this')
     .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing)')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--company-code <code>', 'Only rules scoped to this company code (case-insensitive)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
       domain?: string; recordType?: string; direction?: string; conditionProperty?: string; conditionValue?: string;
-      includeDefaults?: boolean; entity?: string; pretty?: boolean;
+      includeDefaults?: boolean; companyCode?: string; entity?: string; pretty?: boolean;
     }) => {
       const qs = new URLSearchParams();
       if (opts.domain) qs.set('domain', opts.domain);
@@ -1549,6 +1608,7 @@ export function createProgram(): Command {
       if (opts.conditionProperty) qs.set('conditionProperty', opts.conditionProperty);
       if (opts.conditionValue) qs.set('conditionValue', opts.conditionValue);
       if (opts.includeDefaults) qs.set('includeDefaults', '1');
+      if (opts.companyCode) qs.set('companyCode', opts.companyCode);
       const q = qs.toString();
       const result = await api('GET', `/rules-engine/rules${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
@@ -1575,7 +1635,8 @@ export function createProgram(): Command {
     .option('--description <text>', 'Rule description')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY — default BUSINESS_POLICY')
     .option('--sort-order <n>', 'Evaluation order within this ruleKind')
-    .option('--conditions <json>', 'JSON array of {property, operator, value?} — flat, ANDed. Omit or [] to always match', '[]')
+    .option('--conditions <json>', 'JSON array, ANDed at the top level: each element is {property, operator, value?} or a group {any: [...]} / {all: [...]} (max 50 leaves, 2 levels deep). Omit or [] to always match', '[]')
+    .option('--company-code <code>', 'Scope the rule to one of the entity\'s active company codes (Enterprise). Omit for an entity-wide rule')
     .option('--actions <json>', 'JSON array of {property, value} (literal) or {property, fn, args?} (function dispatch)', '[]')
     .option('--template-id <id>', 'Originating template id, if any')
     .option('--effective-from <iso>', 'ISO datetime')
@@ -1585,7 +1646,7 @@ export function createProgram(): Command {
     .action(async (opts: {
       domain: string; recordType?: string; ruleKind: string; code: string; name: string; description?: string;
       legalBasisTag?: string; sortOrder?: string; conditions: string; actions: string; templateId?: string;
-      effectiveFrom?: string; effectiveTo?: string; entity?: string; pretty?: boolean;
+      effectiveFrom?: string; effectiveTo?: string; companyCode?: string; entity?: string; pretty?: boolean;
     }) => {
       const body: Record<string, unknown> = {
         domain: opts.domain, ruleKind: opts.ruleKind, code: opts.code, name: opts.name,
@@ -1599,6 +1660,7 @@ export function createProgram(): Command {
       if (opts.templateId) body.templateId = opts.templateId;
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
       if (opts.effectiveTo) body.effectiveTo = opts.effectiveTo;
+      if (opts.companyCode) body.companyCode = opts.companyCode;
       const result = await api('POST', '/rules-engine/rules', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
@@ -1611,7 +1673,9 @@ export function createProgram(): Command {
     .option('--description <text>')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY')
     .option('--sort-order <n>')
-    .option('--conditions <json>', 'JSON array replacing the rule\'s own conditions')
+    .option('--conditions <json>', 'JSON array replacing the rule\'s own conditions (leaves or {any|all: [...]} groups)')
+    .option('--company-code <code>', 'Re-scope to another active company code')
+    .option('--entity-wide', 'Make the rule entity-wide again (company code null)')
     .option('--actions <json>', 'JSON array replacing the rule\'s own actions')
     .option('--effective-from <iso>')
     .option('--effective-to <iso>')
@@ -1623,6 +1687,7 @@ export function createProgram(): Command {
     .action(async (id: string, opts: {
       version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string;
       conditions?: string; actions?: string; effectiveFrom?: string; effectiveTo?: string;
+      companyCode?: string; entityWide?: boolean;
       enabled?: boolean; disabled?: boolean; archive?: boolean; entity?: string; pretty?: boolean;
     }) => {
       const body: Record<string, unknown> = { version: Number(opts.version) };
@@ -1634,6 +1699,8 @@ export function createProgram(): Command {
       if (opts.actions) body.actions = parseJsonOption('--actions', opts.actions);
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
       if (opts.effectiveTo) body.effectiveTo = opts.effectiveTo;
+      if (opts.companyCode) body.companyCode = opts.companyCode;
+      if (opts.entityWide) body.companyCode = null;
       if (opts.enabled) body.enabled = true;
       if (opts.disabled) body.enabled = false;
       if (opts.archive) body.status = 'ARCHIVED';
@@ -1932,13 +1999,29 @@ export function createProgram(): Command {
 
   ruleMappings
     .command('list')
-    .description('An entity\'s own field-mapping rows for one source system (e.g. "xero")')
+    .description('An entity\'s own field-mapping rows for one source system ("xero" or "coupa")')
     .requiredOption('--source-system <system>', 'e.g. "xero"')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { sourceSystem: string; entity?: string; pretty?: boolean }) => {
       const qs = new URLSearchParams({ sourceSystem: opts.sourceSystem });
       const result = await api('GET', `/rules-engine/mappings?${qs.toString()}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  ruleMappings
+    .command('create')
+    .description('Add one row to a source that maps a whole calculation request (today "coupa"): companyCode or a defined custom property')
+    .requiredOption('--source-system <system>', 'e.g. "coupa"')
+    .requiredOption('--field-path <path>', '"companyCode", "customProperties.<key>" or "lineItems[].customProperties.<key>"')
+    .requiredOption('--source-path <path>', 'Dot path into the source payload; "a||b" tries a then b')
+    .option('--transform <json>', 'JSON object {fn, args?}')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { sourceSystem: string; fieldPath: string; sourcePath: string; transform?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { sourceSystem: opts.sourceSystem, fieldPath: opts.fieldPath, sourcePath: opts.sourcePath };
+      if (opts.transform) body.transform = parseJsonOption('--transform', opts.transform);
+      const result = await api('POST', '/rules-engine/mappings', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 
