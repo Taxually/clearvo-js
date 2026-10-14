@@ -2,7 +2,7 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
-## Unreleased — publish only AFTER the backend webhook test-event PR is deployed
+## Unreleased — backend webhook test-event PR (Taxually-einvoicing 17676) is deployed; ready to publish
 
 New endpoint `POST /v1/webhooks/test`: send a signed test event to one of your webhooks and see what your endpoint answered.
 
