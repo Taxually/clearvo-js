@@ -24,6 +24,8 @@ export type {
   InvoiceStatusResponse,
   ListInvoicesParams,
   ListInvoicesResponse,
+  SimulateReceivedInvoicesInput,
+  SimulateReceivedInvoicesResponse,
   TaxCalculateRequest,
   TaxCalculateResponse,
   QuoteDutiesInput,

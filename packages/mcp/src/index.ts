@@ -1784,6 +1784,54 @@ const TOOLS = [
     },
   },
   {
+    name: 'simulate_received_invoices',
+    description:
+      'Sandbox only: create sample incoming (received) invoices or credit notes for this entity, to build and test an accounts-payable ' +
+      'integration without waiting for a real supplier. Needs a sandbox API key; a live key returns 403 SANDBOX_ONLY. Each document is a ' +
+      'realistic e-invoice (Factur-X for France, ZUGFeRD for Germany) from a clearly fictional supplier, received through the same ' +
+      'pipeline as a real received document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
+      'intakeChannel SANDBOX_SIMULATION, and no email is sent. With no arguments it creates one invoice for the entity\'s own country. ' +
+      'country (DE or FR) defaults to the entity\'s country and a different value is 400 COUNTRY_MISMATCH. count creates 1-20 documents ' +
+      '(each call adds new ones). businessStatus (e.g. APPROVED, DISPUTED, REFUSED) moves each document along its lifecycle after it arrives, ' +
+      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. French samples are EUR only. ' +
+      'Returns the created invoices, any duplicates, how many of your webhook endpoints are subscribed to invoice.received, and notes.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', enum: ['DE', 'FR'], description: 'Optional. Defaults to the entity\'s own country; a different value is rejected with 400 COUNTRY_MISMATCH.' },
+        type: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Document type. Default invoice.' },
+        count: { type: 'integer', minimum: 1, maximum: 20, description: 'How many documents to create (1-20). Default 1.' },
+        supplier: {
+          type: 'object',
+          description: 'Optional override of the fictional supplier. The name always keeps a sample marker.',
+          properties: {
+            name: { type: 'string' },
+            taxNumber: { type: 'string', description: 'Must be a valid number for the country and never a real registered one.' },
+            legalRegistrationNumber: { type: 'string', description: 'France: SIREN or SIRET.' },
+          },
+        },
+        totalAmount: { type: 'number', description: 'Gross total of each document. Default 1200. Not allowed together with lines.' },
+        currency: { type: 'string', description: 'Three-letter currency code. Default EUR; France accepts EUR only.' },
+        lines: {
+          type: 'array',
+          description: 'Optional lines (description, quantity, unitPrice net); the tax rate is the standard rate. Not allowed together with totalAmount.',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string' },
+              quantity: { type: 'number' },
+              unitPrice: { type: 'number', description: 'Net unit price.' },
+            },
+            required: ['description', 'quantity', 'unitPrice'],
+          },
+        },
+        issueDate: { type: 'string', description: 'Issue date, YYYY-MM-DD. Default today; the due date is 30 days later.' },
+        businessStatus: { type: 'string', description: 'Lifecycle status to move each created document to after it arrives. Default IN_HAND (leave as received).' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'validate_tax_numbers_batch',
     description:
       'Validate up to 20 tax/VAT numbers in a single request. ' +
@@ -4257,6 +4305,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'test_webhook':
       return callApi('POST', '/webhooks/test', args);
+
+    case 'simulate_received_invoices': {
+      const { entityId, ...body } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/receive/simulate', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
 
     case 'validate_tax_numbers_batch':
       return callApi('POST', '/tax-numbers/validate-batch', args);
