@@ -2,13 +2,21 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
-## Unreleased — publish only AFTER the backend exemption certificate number check PR (branch claude/ecm-cert-number-format) is deployed
+## Unreleased — backend exemption certificate number check (Taxually-einvoicing 17707) is deployed; ready to publish
 
 Exemption certificates now carry a warn-only number format check. `certificateRef` is the number printed on the certificate; a number that does not match the state's documented format is still saved and flagged.
 
 - SDK: types `ExemptionCertificateNumberFormatStatus`, `ExemptionCertificateNumberFormat` (`numberFormatStatus`, `numberFormatWarning`), `ExemptionCertificateWarning` and `CreateExemptionCertificateResponse` (`warnings[]`). The SDK has no exemption certificate methods yet, so these are types only.
 - MCP: `create_exemption_certificate` `certificateRef` description updated to match the backend.
 - CLI: no exemption certificate commands exist, so nothing to change.
+
+## Unreleased — backend default-shipping-facts (Taxually-einvoicing 17718) is deployed; ready to publish
+
+Additive: default US shipping facts. A customer can save a standing answer for `shippingCarrier`, `chargeAvoidable` and `actualCostOfShipment` as a rule; it fills a line that omits the fact, and the shipping rules still decide.
+
+- SDK: `TaxCalculateRequest.lineItems[]` gains `shippingCarrier`, `chargeAvoidable`, `actualCostOfShipment`; `TemplateParamDto` gains `optionLabels`.
+- MCP: `calculate_tax` (and `quote_duties`) line items gain the three fields; `list_rule_templates` names the `default_shipping_carrier`, `default_shipping_charge_avoidable` and `default_shipping_actual_cost` templates.
+- CLI: no change (`clearvo calculate` reads a JSON file).
 
 ## Unreleased — backend webhook test-event PR (Taxually-einvoicing 17676) is deployed; ready to publish
 

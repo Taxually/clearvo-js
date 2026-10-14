@@ -1043,6 +1043,16 @@ export interface TaxCalculateRequest {
     supplyType?: 'GOODS' | 'SERVICES';
     amountIncludesTax?: boolean;
     /**
+     * Shipping/handling lines, US only: who delivers the goods. Omitted, the account's default shipping rule
+     * (template `default_shipping_carrier`) may fill it; otherwise the cautious taxable assumption applies.
+     * A value sent here is never overwritten, and the shipping rules always decide the tax.
+     */
+    shippingCarrier?: 'common' | 'seller_vehicle';
+    /** Shipping/handling lines, US only: whether the customer could have avoided this charge. Omitted, the default rule `default_shipping_charge_avoidable` may fill it; else not avoidable. */
+    chargeAvoidable?: boolean;
+    /** Shipping/handling lines, US only: whether this charge is exactly the actual cost of shipment. Omitted, the default rule `default_shipping_actual_cost` may fill it; else not the actual cost. */
+    actualCostOfShipment?: boolean;
+    /**
      * When true, the customer claims exemption for this line item with no
      * ECM certificate on file yet. A real certificate — matched via a
      * direct certificate reference, or auto-looked-up by `customer.ref` —
@@ -3568,12 +3578,15 @@ export interface TemplateParamDto {
   options?: readonly string[];
   helpText?: string;
   suffix?: string;
+  /** Plain-English label per allowed value: an enum's option values, or the keys "true" and "false" for a boolean. */
+  optionLabels?: Record<string, string>;
 }
 
 export interface TemplateInstanceDto {
   ruleId: string;
   status: RuleStatus;
   enabled: boolean;
+  /** The param values this rule was saved with, keyed by the template's param keys (for example `{ carrier: 'common' }`). */
   params: Record<string, unknown>;
   version: number;
 }
