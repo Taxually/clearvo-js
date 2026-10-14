@@ -97,7 +97,9 @@ async function callApi(
     // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection, which
     // also carries errors[] (one entry per failed check, JSON-pointer path and stable code).
     const errObj = err.error !== null && typeof err.error === 'object' ? err.error as Record<string, unknown> : null;
-    const errorText = errObj ? String(errObj.message ?? errObj.code ?? 'Unknown error') : String(err.error ?? 'Unknown error');
+    // The Filings routes put the stable code in `error` and the sentence in `message` or `detail`.
+    const filingsCode = !errObj && typeof err.error === 'string' && (typeof err.message === 'string' || typeof err.detail === 'string') ? err.error : undefined;
+    const errorText = errObj ? String(errObj.message ?? errObj.code ?? 'Unknown error') : filingsCode ? String(err.message ?? err.detail) : String(err.error ?? 'Unknown error');
     const errorList = Array.isArray(err.errors)
       ? (err.errors as Array<Record<string, unknown>>).slice(0, 25).map(e =>
           `  - ${String(e.path ?? '/')} ${String(e.errorCode ?? e.code ?? '')}: ${String(e.message ?? '')}`)
@@ -109,11 +111,17 @@ async function callApi(
         'Run the list_entities tool to find your entity ID, then add it to the env config and restart.'
       );
     }
+    // Filing upload refusals (same format as the hosted connector): the stable code on the first line, then the plain-language
+    // message and the extra body fields (existingId, filesWithErrors, contactUrl, currentVersion, declaration) as JSON.
+    const uploadRefusal = path.startsWith('/filings/upload/') && typeof err.error === 'string';
+    const uploadExtras = uploadRefusal ? Object.fromEntries(Object.entries(err).filter(([k]) => k !== 'error' && k !== 'message')) : {};
     const msg = [
-      `HTTP ${res.status}: ${errorText}`,
+      `HTTP ${res.status}: ${uploadRefusal ? err.error : errorText}`,
+      uploadRefusal && typeof err.message === 'string' ? `Message: ${err.message}` : null,
+      uploadRefusal && Object.keys(uploadExtras).length > 0 ? `Details: ${JSON.stringify(uploadExtras)}` : null,
       err.hint ? `Hint: ${err.hint}` : null,
       err.field ? `Field: ${err.field}` : null,
-      err.code ? `Code: ${err.code}` : null,
+      err.code ? `Code: ${err.code}` : filingsCode && !uploadRefusal ? `Code: ${filingsCode}` : null,
       errorList.length > 0 ? `Errors:\n${errorList.join('\n')}` : null,
     ].filter(Boolean).join('\n');
     throw new Error(msg);
@@ -137,6 +145,23 @@ const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 // which decides the real transport by request size regardless of which tool was called.
 const MAX_BULK_ROWS = 500;
 const MAX_BULK_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+// Filing data files (POST /v1/filings/upload/months/{month}/files) — same limits as the route and the hosted connector.
+const MAX_FILING_UPLOAD_BYTES = 25 * 1024 * 1024;
+const FILING_UPLOAD_EXTENSIONS = ['.csv', '.xlsx', '.xls'];
+
+/** Multipart body for POST /v1/filings/upload/months/{month}/files: field "file". Content type follows the extension. */
+function filingUploadForm(fileName: string, contentBase64: string): FormData {
+  const lower = String(fileName ?? '').toLowerCase();
+  if (!FILING_UPLOAD_EXTENSIONS.some((e) => lower.endsWith(e))) throw new Error('fileName must end in .csv, .xlsx or .xls.');
+  const buffer = Buffer.from(String(contentBase64 ?? ''), 'base64');
+  if (buffer.length === 0) throw new Error('contentBase64 decodes to an empty file. Check it is base64-encoded file content with no data: URI prefix.');
+  if (buffer.length > MAX_FILING_UPLOAD_BYTES) throw new Error(`contentBase64 decodes to ${buffer.length} bytes, exceeding the ${MAX_FILING_UPLOAD_BYTES / (1024 * 1024)}MB limit for filing data files.`);
+  const type = lower.endsWith('.csv') ? 'text/csv' : lower.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type }), fileName);
+  return form;
+}
 
 /**
  * Data-row count of a CSV's raw text (header row excluded, blank lines ignored) — used only by
@@ -1724,7 +1749,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected',
+          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
         },
       },
       required: ['url'],
@@ -1887,6 +1912,328 @@ const TOOLS = [
       },
       required: ['registrationId'],
     },
+  },
+  {
+    name: 'get_registration_filing_setup',
+    description:
+      'Read the filing setup for a registration: state (NOT_SET_UP, REQUESTED, ENABLED, STOPPED_AFTER), ' +
+      'the frequency options the tax authority offers ({ code, label, description }; frequencyOptionsSource is "live", or "fallback" when the live source is unreachable and the three standard options are offered), ' +
+      'startOptionsByFrequency (the periods to start from: firstAvailable, later, earlier), the stored startChoice / startPeriodKey / startPeriodLabel, whether a bank account is required and ' +
+      'on file (last four digits only), canStart / startBlockedReason (whether a request would be accepted now and, if not, why: ' +
+      'for example a bank account is required to start when the tax is paid by debit, or filing data is temporarily unavailable), a pendingChange when a frequency change or restart ' +
+      'is waiting for the operations team (filing carries on meanwhile), the first filing period once enabled, and the earlier periods that are NOT filed ' +
+      'for you. filingAccess says whether the account may set up filing now (canSetUp, message, subscribeUrl, subscribeLabel): ' +
+      'when canSetUp is false, update_registration_filing_setup refuses a request with 402 plan_required. ' +
+      'Local registrations (locality rows) are not eligible: local returns are prepared from the main registration. Programme registrations share the state\'s setup. ineligibleReason is "locality", "country" or null (the former "scheme" value no longer exists). Use list_registrations\' filingSetup ' +
+      'field for a summary across registrations.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        registrationId: { type: 'string', description: 'The registration ID (from list_registrations — use taxNumberId or obligationId field)' },
+      },
+      required: ['registrationId'],
+    },
+  },
+  {
+    name: 'update_registration_filing_setup',
+    description:
+      'Request, defer or stop filing for a registration. Send exactly one of: ' +
+      '(1) frequencyCode + frequencyAttested=true + startChoice (+ startPeriodKey) to request filing — the frequency must be ' +
+      'one the tax authority offers (see get_registration_filing_setup frequencyOptions) and attested as the frequency on the customer\'s tax account; ' +
+      'startChoice is required (no default): asap starts from the first available period, later and backdated also need a startPeriodKey ' +
+      'taken from startOptionsByFrequency[frequencyCode].later / .earlier (422 START_CHOICE_REQUIRED, START_PERIOD_REQUIRED, INVALID_START_PERIOD). ' +
+      'Backdated is recorded for the operations team: earlier periods are not prepared for you. ' +
+      'it does not change the frequency with the tax authority, and filing starts only after the operations team enables it. When the tax is ' +
+      'paid by debit a bank account must be on file first (422 BANK_ACCOUNT_REQUIRED). On a filing that is already enabled or stopped, a ' +
+      'new frequency or a restart is recorded as pending and applied by the operations team; filing carries on meanwhile; ' +
+      '(2) deferFirstPeriodTo (YYYY-MM-DD) to move the first filing period later, before it has been prepared; ' +
+      '(3) stop=true to stop filing from the next period (the current period is still prepared; the registration stays ' +
+      'active with the tax authority and returns remain due). Requires a write key. 503 FILING_DATA_UNAVAILABLE means filing data is temporarily unavailable: try again shortly. ' +
+      'Requesting (or replacing) a setup needs a subscription once billing is live: without one it returns 402 plan_required ' +
+      '(reason filing_requires_subscription, message, and upgradeUrl only when the caller can start a subscription); check filingAccess.canSetUp from get_registration_filing_setup first. ' +
+      'Deferring and stopping are never refused for this reason.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        registrationId: { type: 'string', description: 'The registration ID (from list_registrations — use taxNumberId or obligationId field)' },
+        frequencyCode: { type: 'string', description: 'Filing frequency code offered for this registration, e.g. "Monthly" or "Quarterly" (from get_registration_filing_setup frequencyOptions).' },
+        frequencyAttested: { type: 'boolean', description: 'Must be true: confirms this is the filing frequency on the customer\'s tax account.' },
+        startChoice: { type: 'string', enum: ['asap', 'later', 'backdated'], description: 'Required when requesting filing. asap = first available period; later = a period after it; backdated = an earlier period (recorded for the operations team, not prepared for you).' },
+        startPeriodKey: { type: 'string', description: 'Required for later and backdated: a period key from startOptionsByFrequency[frequencyCode].later or .earlier in get_registration_filing_setup, e.g. "2026-12" or "2027-Q1".' },
+        deferFirstPeriodTo: { type: 'string', description: 'Move the first filing period later: the date (YYYY-MM-DD) filing should start from. Cannot move it earlier.' },
+        stop: { type: 'boolean', description: 'Pass true to stop filing from the next period.' },
+      },
+      required: ['registrationId'],
+    },
+  },
+  {
+    name: 'list_filings',
+    description:
+      'List the tax returns Clearvo prepares for this entity, one per jurisdiction and period. Each row shows the status ' +
+      '(DRAFT, PENDING_APPROVAL, PAUSED, APPROVED, SUBMITTED, FILED, NOT_FILED), due date, amount due, snapshotVersion, ' +
+      'anything that needs action and which actions are currently allowed. view=upcoming shows open returns, view=filed ' +
+      'shows closed ones, view=backdated shows catch-up returns.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        view: { type: 'string', enum: ['upcoming', 'filed', 'backdated'], description: 'Which group of filings to list. Omit for all.' },
+        status: { type: 'string', description: 'Only filings with this exact status.' },
+        jurisdictionId: { type: 'string', description: 'Only this jurisdiction, e.g. "US_CA" or "DE".' },
+        limit: { type: 'number', description: 'Page size, 1 to 100 (default 25).' },
+        offset: { type: 'number', description: 'Rows to skip (default 0).' },
+      },
+    },
+  },
+  {
+    name: 'get_filing',
+    description:
+      'Get one filing: display labels (statusLabel, jurisdictionLabel, dueDateLabel, nextStepLabel), totals, the by-authority lines ' +
+      '(each with rateLabel), what the return includes (scopeNotes), approval and pause policy, ' +
+      'payment, bank account (last four digits only), proof and confirmation number once filed, and the timeline. ' +
+      'Use the returned snapshotVersion when approving, pausing, resuming, skipping or setting a prepayment.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { filingId: { type: 'string', description: 'The filing ID (starts with fil_), from list_filings.' } },
+      required: ['filingId'],
+    },
+  },
+  {
+    name: 'approve_filing',
+    description:
+      'Approve a filing that is PENDING_APPROVAL so it is submitted to the tax authority. Approving is a commitment: ' +
+      'it is reversible with undo_filing_approval only until the filing is submitted. Fails with BANK_DETAILS_REQUIRED, ' +
+      'CONTENT_MISSING or FILING_STALE when it cannot proceed. Repeating the call on an approved filing changes nothing. Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filingId: { type: 'string', description: 'The filing ID.' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+      },
+      required: ['filingId', 'snapshotVersion'],
+    },
+  },
+  {
+    name: 'undo_filing_approval',
+    description: 'Take an APPROVED filing back to PENDING_APPROVAL. Only possible before it is submitted to the tax authority (ALREADY_SUBMITTED otherwise). Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filingId: { type: 'string', description: 'The filing ID.' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+      },
+      required: ['filingId', 'snapshotVersion'],
+    },
+  },
+  {
+    name: 'pause_filing',
+    description:
+      'Pause a go-forward filing that is PENDING_APPROVAL so it is not approved automatically. Limited per year by policy ' +
+      '(PAUSE_LIMIT_REACHED), only up to the policy cut-off day (PAUSE_PAST_CUTOFF), and a pause ends on its own after the ' +
+      'policy maximum. Pausing stops automatic approval at the end of the review day (23:59 UTC) and loses the on-time filing ' +
+      'commitment, which is best efforts per the Terms of Service. Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filingId: { type: 'string', description: 'The filing ID.' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+      },
+      required: ['filingId', 'snapshotVersion'],
+    },
+  },
+  {
+    name: 'resume_filing',
+    description: 'Resume a PAUSED filing so it returns to PENDING_APPROVAL. Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filingId: { type: 'string', description: 'The filing ID.' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+      },
+      required: ['filingId', 'snapshotVersion'],
+    },
+  },
+  {
+    name: 'skip_filing',
+    description:
+      'Skip a filing: it becomes NOT_FILED and Clearvo will not file it. Only possible before it is submitted to the tax authority ' +
+      '(ALREADY_SUBMITTED otherwise) and cannot be reversed. Requires a reason. Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filingId: { type: 'string', description: 'The filing ID.' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+        reason: { type: 'string', description: 'Why this filing is being skipped (up to 500 characters).' },
+      },
+      required: ['filingId', 'snapshotVersion', 'reason'],
+    },
+  },
+  {
+    name: 'set_filing_prepayment',
+    description:
+      'Record an amount already paid to the tax authority for this period; it is subtracted from the amount due. Only before the ' +
+      'filing is approved (ALREADY_APPROVED / ALREADY_SUBMITTED otherwise). Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filingId: { type: 'string', description: 'The filing ID.' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+        amount: { type: 'number', description: 'Amount already paid, zero or more, in the filing currency.' },
+      },
+      required: ['filingId', 'snapshotVersion', 'amount'],
+    },
+  },
+  {
+    name: 'list_filing_change_requests',
+    description: 'List the change requests already sent to the operations team for a filing.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { filingId: { type: 'string', description: 'The filing ID.' } },
+      required: ['filingId'],
+    },
+  },
+  {
+    name: 'request_filing_change',
+    description:
+      'Ask the operations team to change something on a filing that cannot be edited directly (the transactions in a filing are frozen). ' +
+      'Describe the change; the team follows up. Each call adds a new request. Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filingId: { type: 'string', description: 'The filing ID.' },
+        message: { type: 'string', description: 'What needs to change and why (up to 2000 characters).' },
+      },
+      required: ['filingId', 'message'],
+    },
+  },
+  {
+    name: 'generate_sandbox_filing',
+    description:
+      'Sandbox only. Build a filing on demand for one period of a registration whose filing frequency is set, so the whole ' +
+      'return lifecycle (review, approve, pause, skip) can be tried without waiting for the daily job. The filing opens ' +
+      'for approval straight away. Nothing is emailed, billed or sent to operations. Repeating the call for the same ' +
+      'period returns the existing filing. A live key gets SANDBOX_ONLY. Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        registrationId: { type: 'string', description: 'The registration whose filing setup to use (a UUID from list_registrations).' },
+        periodKey: { type: 'string', description: 'The period to build, for example "2026-09" (monthly) or "2026-Q3" (quarterly). Omit for the most recent closed period.' },
+      },
+      required: ['registrationId'],
+    },
+  },
+  {
+    name: 'list_filing_setups',
+    description:
+      'List, for every registration that could file, where filing setup stands and what to do next: the state (not set up, ' +
+      'waiting for onboarding, active, stopped), the next step (set up, add the payment account, wait for onboarding, restart, ' +
+      'or none) with a plain sentence for it, the chosen frequency and start period, and whether the registration is eligible ' +
+      'with the reason when it is not (a local registration, or one that cannot be filed yet; while filing data is temporarily unavailable the reason says so). Registrations needing action come first. Use it to find ' +
+      'registrations with unfinished setup, then get_registration_filing_setup / update_registration_filing_setup to continue. ' +
+      'The result carries one top-level filingAccess (canSetUp, message, subscribeUrl, subscribeLabel): when canSetUp is false, ' +
+      'requesting filing returns 402 plan_required until the account subscribes.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'get_filing_bank_account',
+    description:
+      'Read the bank account the tax authority debits for filing payments: holder name, account type and the last four digits of the ' +
+      'routing and account numbers. Full numbers are never returned. Bank details are changed in the dashboard.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'list_filing_upload_months',
+    description:
+      'List the months the customer can add transaction data to for filing, newest first: each month\'s period, kind (go_forward or retro), ' +
+      'state and stateLabel (not_open, open, processing, done, errors, closed, locked), and its upload window (opensAt, closesAt, lockReason). ' +
+      'linked is false until the business profile is set up for filing. Use get_filing_upload_month for a month\'s files.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'get_filing_upload_month',
+    description:
+      'Get one upload month: its files (id, name, status, transactionCount, errorCount, warningCount, whether an error report is available, ' +
+      'whether the file can be deleted), the month totals, the confirmation, and canUpload / canConfirm. File ids from here are used by ' +
+      'delete_filing_data_file, replace_filing_data_file and get_filing_upload_error_report.',
+    inputSchema: { type: 'object' as const, properties: { month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' } }, required: ['month'] },
+  },
+  {
+    name: 'upload_filing_data_file',
+    description:
+      'Add a transaction data file (.csv, .xlsx or .xls, up to 25 MB) to an upload month, sent as multipart form data. The content must be base64-encoded. ' +
+      'Use get_filing_upload_template for the expected columns. A file with the same name or the same content as one already added is refused with ' +
+      '409 FILE_ALREADY_ADDED (the error text carries Details with existingId); use replace_filing_data_file to swap it. Refused when the month is not open (MONTH_NOT_OPEN, MONTH_CLOSED, MONTH_LOCKED, ' +
+      'PERIOD_PROCESSING). Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' },
+        fileName: { type: 'string', description: 'File name including the extension (.csv, .xlsx or .xls), up to 200 characters.' },
+        contentBase64: { type: 'string', description: 'Base64-encoded file content, no data: URI prefix.' },
+      },
+      required: ['month', 'fileName', 'contentBase64'],
+    },
+  },
+  {
+    name: 'replace_filing_data_file',
+    description:
+      'Swap a file you added for a corrected one: deletes the existing file, then uploads the new content. The two steps are not atomic: if the upload ' +
+      'is refused after the delete, the old file is already gone and the error says so, so upload again. System files cannot be replaced. Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' },
+        fileId: { type: 'string', description: 'The id of the file to replace, from get_filing_upload_month.' },
+        fileName: { type: 'string', description: 'File name of the new file including the extension (.csv, .xlsx or .xls).' },
+        contentBase64: { type: 'string', description: 'Base64-encoded content of the new file, no data: URI prefix.' },
+      },
+      required: ['month', 'fileId', 'fileName', 'contentBase64'],
+    },
+  },
+  {
+    name: 'delete_filing_data_file',
+    description:
+      'Remove a file you added to an upload month, while the month is open. Files Clearvo calculated itself cannot be removed (SYSTEM_FILE_NOT_DELETABLE). Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' }, fileId: { type: 'string', description: 'The file id from get_filing_upload_month.' } },
+      required: ['month', 'fileId'],
+    },
+  },
+  {
+    name: 'process_filing_upload_month',
+    description:
+      'Confirm that all data for the month is added and process it once. Returns while processing runs (poll get_filing_upload_month for the result). ' +
+      'The person confirming must accept the declaration shown in get_filing_upload_month (month.declaration): pass declarationAccepted=true and its declarationVersion, otherwise 422. ' +
+      'If any row in a file has an error, the whole file is not used: while any file has errors the call is refused with 409 FILE_ERRORS (Details: filesWithErrors), or SYSTEM_FILE_ERRORS when a file prepared for you has errors (contact support; Details include contactUrl). Fix the file and upload it again (replace_filing_data_file) or delete it, then confirm. Warnings do not block. ' +
+      'Other refusals: 409 MONTH_NOT_OPEN, MONTH_CLOSED, PROCESSING_REFUSED, SYSTEM_FILE_PENDING (calculated transactions still being added: retry shortly); ' +
+      '422 DECLARATION_REQUIRED or DECLARATION_VERSION_MISMATCH (Details carry the current declaration). Requires a write key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' },
+        declarationAccepted: { type: 'boolean', description: 'Must be true: the person confirming accepted the declaration text (month.declaration.text).' },
+        declarationVersion: { type: 'string', description: 'The declaration version shown with the month (month.declaration.version).' },
+      },
+      required: ['month'],
+    },
+  },
+  {
+    name: 'get_filing_upload_error_report',
+    description:
+      'Get a fresh download link (url) for the error and warning report of an uploaded file. The link is new on every call; do not store it. ' +
+      '404 no_error_report when the file has no errors or warnings.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { month: { type: 'string', description: 'The month as yyyy-MM, e.g. "2026-09" (from list_filing_upload_months).' }, fileId: { type: 'string', description: 'The file id from get_filing_upload_month.' } },
+      required: ['month', 'fileId'],
+    },
+  },
+  {
+    name: 'get_filing_upload_template',
+    description:
+      'Get the upload template definition (columns, formats and rules) as JSON, the same definition behind the CSV and XLSX templates in the dashboard. ' +
+      'Only the JSON form is exposed here; the CSV and XLSX downloads are on GET /v1/filings/upload/template?format=csv|xlsx.',
+    inputSchema: { type: 'object' as const, properties: {} },
   },
   {
     name: 'get_registration_field_definitions',
@@ -3922,6 +4269,107 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('PATCH', `/tax/registrations/${encodeURIComponent(registrationId)}`, body);
     }
 
+    case 'get_registration_filing_setup': {
+      const { registrationId } = args as { registrationId: string };
+      return callApi('GET', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`);
+    }
+    case 'update_registration_filing_setup': {
+      const { registrationId, ...rest } = args as { registrationId: string } & Record<string, unknown>;
+      const body: Record<string, unknown> = {};
+      for (const k of ['frequencyCode', 'frequencyAttested', 'startChoice', 'startPeriodKey', 'deferFirstPeriodTo', 'stop'] as const) {
+        if (k in rest && rest[k] !== undefined) body[k] = rest[k];
+      }
+      return callApi('PUT', `/tax/registrations/${encodeURIComponent(registrationId)}/filing`, body);
+    }
+    case 'list_filings': {
+      const qs = new URLSearchParams();
+      for (const k of ['view', 'status', 'jurisdictionId', 'limit', 'offset'] as const) {
+        if (args[k] !== undefined && args[k] !== null) qs.set(k, String(args[k]));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/filings${q ? `?${q}` : ''}`);
+    }
+    case 'get_filing': {
+      const { filingId } = args as { filingId: string };
+      return callApi('GET', `/filings/${encodeURIComponent(filingId)}`);
+    }
+    case 'approve_filing': {
+      const { filingId, snapshotVersion } = args as { filingId: string; snapshotVersion: number };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/approve`, { snapshotVersion });
+    }
+    case 'undo_filing_approval': {
+      const { filingId, snapshotVersion } = args as { filingId: string; snapshotVersion: number };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/undo`, { snapshotVersion });
+    }
+    case 'pause_filing': {
+      const { filingId, snapshotVersion } = args as { filingId: string; snapshotVersion: number };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/pause`, { snapshotVersion });
+    }
+    case 'resume_filing': {
+      const { filingId, snapshotVersion } = args as { filingId: string; snapshotVersion: number };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/resume`, { snapshotVersion });
+    }
+    case 'skip_filing': {
+      const { filingId, snapshotVersion, reason } = args as { filingId: string; snapshotVersion: number; reason: string };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/skip`, { snapshotVersion, reason });
+    }
+    case 'generate_sandbox_filing': {
+      const { registrationId, periodKey } = args as { registrationId: string; periodKey?: string };
+      return callApi('POST', '/filings/sandbox/generate', { registrationId, ...(periodKey ? { periodKey } : {}) });
+    }
+    case 'set_filing_prepayment': {
+      const { filingId, snapshotVersion, amount } = args as { filingId: string; snapshotVersion: number; amount: number };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/prepayment`, { snapshotVersion, amount });
+    }
+    case 'list_filing_change_requests': {
+      const { filingId } = args as { filingId: string };
+      return callApi('GET', `/filings/${encodeURIComponent(filingId)}/change-requests`);
+    }
+    case 'request_filing_change': {
+      const { filingId, message } = args as { filingId: string; message: string };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/change-requests`, { message });
+    }
+    case 'list_filing_setups':
+      return callApi('GET', '/filings/setups');
+    case 'get_filing_bank_account':
+      return callApi('GET', '/filings/bank-account');
+    case 'list_filing_upload_months':
+      return callApi('GET', `/filings/upload/months`);
+    case 'get_filing_upload_month': {
+      const { month } = args as { month: string };
+      return callApi('GET', `/filings/upload/months/${encodeURIComponent(month)}`);
+    }
+    case 'upload_filing_data_file': {
+      const { month, fileName, contentBase64 } = args as { month: string; fileName: string; contentBase64: string };
+      return callApi('POST', `/filings/upload/months/${encodeURIComponent(month)}/files`, filingUploadForm(fileName, contentBase64));
+    }
+    case 'replace_filing_data_file': {
+      const { month, fileId, fileName, contentBase64 } = args as { month: string; fileId: string; fileName: string; contentBase64: string };
+      const form = filingUploadForm(fileName, contentBase64);
+      await callApi('DELETE', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}`);
+      try {
+        return await callApi('POST', `/filings/upload/months/${encodeURIComponent(month)}/files`, form);
+      } catch (err) {
+        throw new Error(`The old file ${fileId} was deleted but the new file was not added. Upload it again with upload_filing_data_file.\n${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    case 'delete_filing_data_file': {
+      const { month, fileId } = args as { month: string; fileId: string };
+      return callApi('DELETE', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}`);
+    }
+    case 'process_filing_upload_month': {
+      const { month, declarationAccepted, declarationVersion } = args as { month: string; declarationAccepted?: boolean; declarationVersion?: string };
+      return callApi('POST', `/filings/upload/months/${encodeURIComponent(month)}/process`, {
+        ...(declarationAccepted === undefined ? {} : { declarationAccepted }),
+        ...(declarationVersion === undefined ? {} : { declarationVersion }),
+      });
+    }
+    case 'get_filing_upload_error_report': {
+      const { month, fileId } = args as { month: string; fileId: string };
+      return callApi('GET', `/filings/upload/months/${encodeURIComponent(month)}/files/${encodeURIComponent(fileId)}/error-report`);
+    }
+    case 'get_filing_upload_template':
+      return callApi('GET', `/filings/upload/template?format=json`);
     case 'get_registration_field_definitions': {
       const { country, region, scheme } = args as { country: string; region?: string; scheme?: string };
       const qs = new URLSearchParams({ country });
