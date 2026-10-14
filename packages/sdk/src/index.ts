@@ -345,4 +345,6 @@ export type {
   FilingUploadErrorCode,
   FilingUploadTemplate,
   FilingUploadTemplateFormat,
+  TestWebhookInput,
+  TestWebhookResponse,
 } from './types.js';

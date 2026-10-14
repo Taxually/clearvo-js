@@ -1767,6 +1767,23 @@ const TOOLS = [
     },
   },
   {
+    name: 'test_webhook',
+    description:
+      'Send a signed test event to one of your webhook endpoints, to check it is reachable, verifies the signature and returns 2xx. ' +
+      'The request is built and signed exactly like a real delivery (x-taxually-signature, x-taxually-timestamp) and carries "test": true. ' +
+      'It is sent once with no retries; the response says whether your endpoint accepted it (delivered, status, durationMs, any error) and includes the exact payload sent. ' +
+      'Nothing is stored and no real invoice changes. Pass invoiceId to build the payload from one of your own invoices instead of sample values.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        webhookId: { type: 'string', description: 'The webhook ID to test (from list_webhooks or create_webhook)' },
+        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending or invoice.business_status_changed' },
+        invoiceId: { type: 'string', description: 'Optional: the ID of one of your invoices (from list_invoices) to build the test payload from' },
+      },
+      required: ['webhookId'],
+    },
+  },
+  {
     name: 'validate_tax_numbers_batch',
     description:
       'Validate up to 20 tax/VAT numbers in a single request. ' +
@@ -4237,6 +4254,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const webhookId = args.webhookId as string;
       return callApi('DELETE', `/webhooks?id=${encodeURIComponent(webhookId)}`);
     }
+
+    case 'test_webhook':
+      return callApi('POST', '/webhooks/test', args);
 
     case 'validate_tax_numbers_batch':
       return callApi('POST', '/tax-numbers/validate-batch', args);

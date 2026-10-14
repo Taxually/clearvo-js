@@ -1785,6 +1785,29 @@ export interface ListWebhooksResponse {
   pagination: { total: number; page: number; limit: number; pages: number; hasNext: boolean; hasPrev: boolean };
 }
 
+export interface TestWebhookInput {
+  webhookId: string;
+  /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending or .business_status_changed. */
+  event?: string;
+  /** Build the payload from one of your own invoices instead of sample values. */
+  invoiceId?: string;
+}
+
+export interface TestWebhookResponse {
+  webhookId: string;
+  event: string;
+  /** True when your endpoint answered with a 2xx status. A failing endpoint is still an HTTP 200 here, with delivered: false. */
+  delivered: boolean;
+  status: number | null;
+  durationMs: number;
+  /** False when the webhook is not subscribed to `event`, so a real event of that type would not be sent to it. */
+  subscribed: boolean;
+  /** The exact JSON body sent (it carries `test: true`). */
+  payload: Record<string, unknown>;
+  error?: { code: string; message: string };
+  note?: string;
+}
+
 export interface TaxNumberBatchItem {
   countryCode: string;
   taxNumber: string;

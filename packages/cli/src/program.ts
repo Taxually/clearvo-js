@@ -974,6 +974,20 @@ export function createProgram(): Command {
       const result = await api('DELETE', `/webhooks?id=${encodeURIComponent(id)}`);
       print(result, !!opts.pretty);
     });
+
+  webhooks
+    .command('test <id>')
+    .description('Send a signed test event to a webhook endpoint and show what it answered (sent once, nothing is stored)')
+    .option('--event <event>', 'Event to simulate: invoice.received (default), accepted, rejected, duplicate, undelivered, pending or business_status_changed (prefix invoice.)')
+    .option('--invoice <invoiceId>', 'Build the payload from one of your own invoices instead of sample values')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { event?: string; invoice?: string; pretty?: boolean }) => {
+      const body: Record<string, string> = { webhookId: id };
+      if (opts.event) body.event = opts.event;
+      if (opts.invoice) body.invoiceId = opts.invoice;
+      const result = await api('POST', '/webhooks/test', body);
+      print(result, !!opts.pretty);
+    });
   
   // ── clearvo validate-tin-batch ───────────────────────────────────────────────
   program

@@ -2,6 +2,14 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — backend webhook test-event PR (Taxually-einvoicing 17676) is deployed; ready to publish
+
+New endpoint `POST /v1/webhooks/test`: send a signed test event to one of your webhooks and see what your endpoint answered.
+
+- SDK: `client.testWebhook({ webhookId, event?, invoiceId? })`, with `TestWebhookInput` and `TestWebhookResponse` types.
+- MCP: `test_webhook` tool.
+- CLI: `clearvo webhooks test <id> [--event <event>] [--invoice <invoiceId>]`.
+
 ## Unreleased — publish only AFTER the backend Filings data upload PR (Taxually-einvoicing 17450) is deployed
 
 Additive: the public Filings API (tax returns for any country or scheme the filing service supports; US states are one example) is now in the SDK, MCP and CLI: filing setup, the return lifecycle and the data upload. Not published; the product owner publishes to npm. Needs the docs PR in clearvo-marketing (`public/openapi.json`, `/docs/filings`) to ship with it.
