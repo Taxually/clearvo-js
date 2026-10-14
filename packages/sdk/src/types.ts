@@ -4108,6 +4108,37 @@ export interface ExemptionCertificateApplied {
   effectiveTo: string | null;
 }
 
+/**
+ * Result of the warn-only check of `certificateRef` against the state's documented certificate number format.
+ * `OK` matches; `MISMATCH` does not (the certificate is still saved); `NO_RULE` means no format is held for the
+ * state or certificate type, so nothing was checked. `null` on a certificate that was never checked.
+ */
+export type ExemptionCertificateNumberFormatStatus = 'OK' | 'MISMATCH' | 'NO_RULE';
+
+/** A non-blocking notice on a certificate create response. */
+export interface ExemptionCertificateWarning {
+  /** `CERTIFICATE_NUMBER_FORMAT`: `certificateRef` does not match the state's documented number format. */
+  code: 'CERTIFICATE_NUMBER_FORMAT';
+  /** Plain-English text to show the user. */
+  message: string;
+}
+
+/**
+ * Number-format check fields carried by every exemption certificate returned by POST /v1/tax/exemptions,
+ * GET /v1/tax/exemptions and GET /v1/tax/exemptions/{id}.
+ */
+export interface ExemptionCertificateNumberFormat {
+  numberFormatStatus: ExemptionCertificateNumberFormatStatus | null;
+  /** Plain-English message to show when `numberFormatStatus` is `MISMATCH`; null otherwise. */
+  numberFormatWarning: string | null;
+}
+
+/** POST /v1/tax/exemptions 201 response: the saved certificate plus any non-blocking warnings (empty when none). */
+export interface CreateExemptionCertificateResponse<C extends ExemptionCertificateNumberFormat = ExemptionCertificateNumberFormat> {
+  certificate: C;
+  warnings: ExemptionCertificateWarning[];
+}
+
 /** A certificate was found for the line's destination but not applied; the tax is unchanged. */
 export type CertificateHint = 'CERT_COVERS_JURISDICTION_USE_UNCONFIRMED' | 'CERT_LAPSED_ON_PURCHASE_DATE';
 
