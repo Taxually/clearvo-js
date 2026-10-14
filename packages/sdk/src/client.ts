@@ -47,6 +47,8 @@ import type {
   ListBankAccountsResponse,
   Webhook,
   CreateWebhookInput,
+  TestWebhookInput,
+  TestWebhookResponse,
   CreateWebhookResponse,
   ListWebhooksResponse,
   TaxRegistration,
@@ -537,6 +539,11 @@ export class ClearvoClient {
 
   deleteWebhook(webhookId: string): Promise<{ ok: boolean; id: string }> {
     return this.request('DELETE', `/webhooks?id=${encodeURIComponent(webhookId)}`);
+  }
+
+  /** Sends one signed test event to a webhook you registered and reports what your endpoint did. Nothing is stored. */
+  testWebhook(input: TestWebhookInput): Promise<TestWebhookResponse> {
+    return this.request('POST', '/webhooks/test', input);
   }
 
   // ── Batch TIN Validation ──────────────────────────────────────────────────────
