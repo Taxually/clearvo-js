@@ -1777,7 +1777,7 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         webhookId: { type: 'string', description: 'The webhook ID to test (from list_webhooks or create_webhook)' },
-        event: { type: 'string', description: 'An invoice.* event to simulate, e.g. invoice.received (default), invoice.accepted, invoice.rejected, invoice.business_status_changed' },
+        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending or invoice.business_status_changed' },
         invoiceId: { type: 'string', description: 'Optional: the ID of one of your invoices (from list_invoices) to build the test payload from' },
       },
       required: ['webhookId'],

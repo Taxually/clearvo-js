@@ -978,7 +978,7 @@ export function createProgram(): Command {
   webhooks
     .command('test <id>')
     .description('Send a signed test event to a webhook endpoint and show what it answered (sent once, nothing is stored)')
-    .option('--event <event>', 'An invoice.* event to simulate (default: invoice.received)')
+    .option('--event <event>', 'Event to simulate: invoice.received (default), accepted, rejected, duplicate, undelivered, pending or business_status_changed (prefix invoice.)')
     .option('--invoice <invoiceId>', 'Build the payload from one of your own invoices instead of sample values')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { event?: string; invoice?: string; pretty?: boolean }) => {

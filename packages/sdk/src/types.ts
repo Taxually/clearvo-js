@@ -1787,7 +1787,7 @@ export interface ListWebhooksResponse {
 
 export interface TestWebhookInput {
   webhookId: string;
-  /** An invoice.* event to simulate (default 'invoice.received'). */
+  /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending or .business_status_changed. */
   event?: string;
   /** Build the payload from one of your own invoices instead of sample values. */
   invoiceId?: string;
