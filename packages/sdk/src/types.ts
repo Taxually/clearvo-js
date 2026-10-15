@@ -4670,7 +4670,10 @@ export interface ImportSettlementVariance {
 // The key needs the `filings` product; reads accept a read key, every POST/PUT/DELETE needs a write key. Account-scoped
 // keys pass an entityId (sent as x-entity-id). Display labels (statusLabel, nextStepLabel, ...) are written to be shown as is.
 
-export type FilingStatus = 'DRAFT' | 'PENDING_APPROVAL' | 'PAUSED' | 'APPROVED' | 'SUBMITTED' | 'FILED' | 'NOT_FILED';
+/** A live return (id `ret_...`) only ever has IN_PREPARATION, READY_FOR_APPROVAL, APPROVED, FILED or NEEDS_ATTENTION. */
+export type FilingStatus =
+  | 'DRAFT' | 'PENDING_APPROVAL' | 'PAUSED' | 'APPROVED' | 'SUBMITTED' | 'FILED' | 'NOT_FILED'
+  | 'IN_PREPARATION' | 'READY_FOR_APPROVAL' | 'NEEDS_ATTENTION';
 
 export interface FilingAllowedActions {
   approve: boolean;
@@ -4682,14 +4685,29 @@ export interface FilingAllowedActions {
 }
 
 export interface FilingSummary {
+  /** `fil_...`, or `ret_<number>` for a return read live. */
   id: string;
+  /** True for a return read live (id `ret_...`): it can only be approved; every other action answers 404. */
+  live?: boolean;
+  /** A country code (`GB`, `DE`), a state (`US_CA`) or an EU scheme: `EU` (EU sales), `EN` (sellers outside the EU), `XM` (imports). Show `jurisdictionLabel`. */
   jurisdictionId: string;
   returnType: string;
-  periodKey: string;
-  periodStart: string;
-  periodEnd: string;
+  /** `2026-09`, `2026-Q3` or `yyyy-MM-dd_yyyy-MM-dd`. Null only for a live return whose period is not known yet. */
+  periodKey: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
   dueDate: string | null;
-  filingClass: string;
+  /** Stored returns only. */
+  filingClass?: string;
+  /** Live returns only: the return is a nil return. */
+  isNil?: boolean;
+  /** Live returns only. */
+  paymentDeadline?: string | null;
+  paymentDeadlineLabel?: string | null;
+  /** Live returns only, omitted when it could not be determined: the return covers a period before the filing start. */
+  backdated?: boolean;
+  /** Live returns only: the amount with its currency, "Nil return", or null while it is not calculated. Show as is. */
+  amountLabel?: string | null;
   status: FilingStatus;
   /** Display text for `status`; render it as is. */
   statusLabel: string;
@@ -4700,35 +4718,58 @@ export interface FilingSummary {
   nextStepLabel: string | null;
   paymentStatus: string;
   currency: string;
-  amountDue: number;
-  taxCollected: number;
-  /** Send this back with every action. A mismatch is 409 FILING_STALE. */
-  snapshotVersion: number;
-  pauseEndsAt: string | null;
+  /** Null for a live return whose amount is not calculated yet. */
+  amountDue: number | null;
+  /** Stored returns only. */
+  taxCollected?: number;
+  /** Stored returns only. Send it back with every action; a mismatch is 409 FILING_STALE. */
+  snapshotVersion?: number;
+  pauseEndsAt?: string | null;
+  /** For a live return, `label` says what to do and by when ("Approve before 5 Oct 2026"). */
   actionNeeded: Array<{ code: string; label: string }>;
-  allowedActions: FilingAllowedActions;
+  /** A live return only ever has `approve`; the other actions are absent. */
+  allowedActions: Partial<FilingAllowedActions>;
 }
 
+/** A document of a live return. Download it with `downloadFilingDocument`. */
+export interface FilingDocument {
+  id: string;
+  name: string;
+  /** Display text for the kind of document. */
+  label: string;
+  downloadPath: string;
+}
+
+/** The detail of a stored return has everything below `documents`; a live return has `approveConfirmation` (when approvable) and `documents` instead. */
 export interface FilingDetail extends FilingSummary {
-  contentMissing: boolean;
-  totals: Record<string, number>;
-  lines: Array<{ rate: number | null; rateLabel: string; [key: string]: unknown }>;
-  totalLine: Record<string, unknown> | null;
-  adjustments: Array<Record<string, unknown>>;
+  /** Live returns only, present only when `allowedActions.approve` is true: the wording to show before approving. */
+  approveConfirmation?: { title: string; body: string; confirmLabel: string };
+  /** Live returns only. */
+  documents?: FilingDocument[];
+  contentMissing?: boolean;
+  totals?: Record<string, number>;
+  lines?: Array<{ rate: number | null; rateLabel: string; [key: string]: unknown }>;
+  totalLine?: Record<string, unknown> | null;
+  adjustments?: Array<Record<string, unknown>>;
   /** What the return includes and excludes, in words. */
-  scopeNotes: string[];
-  approval: { by: 'customer' | 'system' | null; at: string | null; channel: string | null };
-  policy: Record<string, unknown>;
-  payment: { status: string; method: string | null; initiatedOn: string | null; nothingToPay: boolean; note: string | null };
-  bank: { required: boolean; account: { last4: string } | null };
-  filed: { confirmationNumber: string | null; filedAmount: number | null; differenceReason: string | null; proofAvailable: boolean };
-  autoApproveBlockers: string[];
-  timeline: Array<{ type: string; label: string; at: string; actor: 'customer' | 'system' | 'operations' }>;
+  scopeNotes?: string[];
+  approval?: { by: 'customer' | 'system' | null; at: string | null; channel: string | null };
+  policy?: Record<string, unknown>;
+  payment?: { status: string; method: string | null; initiatedOn: string | null; nothingToPay: boolean; note: string | null };
+  bank?: { required: boolean; account: { last4: string } | null };
+  filed?: { confirmationNumber: string | null; filedAmount: number | null; differenceReason: string | null; proofAvailable: boolean };
+  autoApproveBlockers?: string[];
+  timeline?: Array<{ type: string; label: string; at: string; actor: 'customer' | 'system' | 'operations' }>;
 }
 
 export interface ListFilingsParams {
-  /** upcoming = open returns; filed = FILED or NOT_FILED. */
-  view?: 'upcoming' | 'filed';
+  /**
+   * open = every return not yet filed (backdated included), soonest due date first; filed = every filed return;
+   * upcoming = open go-forward returns; backdated = catch-up returns.
+   */
+  view?: 'open' | 'upcoming' | 'filed' | 'backdated';
+  /** true = only backdated returns, false = only returns that are not backdated. Combined with `view` by AND. */
+  backdated?: boolean;
   status?: string;
   /** e.g. US_CA */
   jurisdictionId?: string;
@@ -4745,6 +4786,10 @@ export interface ListFilingsResponse {
   total: number;
   limit: number;
   offset: number;
+  /** True when the list was read live. */
+  live?: boolean;
+  /** Live list only: wording for an empty list, chosen by the view and backdated filter. Show it as is. */
+  emptyState?: { title: string; body?: string };
 }
 
 export interface GetFilingResponse {
@@ -4756,7 +4801,10 @@ export interface GetFilingResponse {
 export interface FilingActionResponse {
   ok: boolean;
   alreadyApplied?: boolean;
-  filing: FilingSummary;
+  /** Approving a live return only: display text for the result. Show it as is. */
+  message?: string;
+  /** Approving a live return answers with the full refreshed detail (including `documents`). */
+  filing: FilingSummary & Partial<FilingDetail>;
 }
 
 export interface FilingChangeRequest {

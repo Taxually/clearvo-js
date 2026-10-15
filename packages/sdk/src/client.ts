@@ -1284,9 +1284,19 @@ export class ClearvoClient {
     return this.request('GET', `/filings/${encodeURIComponent(filingId)}`, undefined, entityHeaders(entityId));
   }
 
-  /** POST /filings/{id}/approve. `snapshotVersion` is the one from getFiling or listFilings; a mismatch is 409 FILING_STALE. Repeating on an approved filing returns `alreadyApplied: true`. */
-  approveFiling(filingId: string, snapshotVersion: number, entityId?: string): Promise<FilingActionResponse> {
-    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/approve`, { snapshotVersion }, entityHeaders(entityId));
+  /**
+   * POST /filings/{id}/approve. For a stored filing `snapshotVersion` is the one from getFiling or listFilings; a mismatch is 409 FILING_STALE.
+   * For a live return (id `ret_...`) it is ignored and may be omitted: the approval cannot be undone or withdrawn, and the answer carries `message` and the refreshed return.
+   * Repeating on an approved filing returns `alreadyApplied: true`.
+   */
+  approveFiling(filingId: string, snapshotVersion?: number, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/approve`, snapshotVersion === undefined ? {} : { snapshotVersion }, entityHeaders(entityId));
+  }
+
+  /** GET /filings/{id}/documents/{docId}: one document of a live return (id `ret_...`), from `getFiling().filing.documents`. Nothing is stored; other ids answer 404. */
+  async downloadFilingDocument(filingId: string, documentId: string, entityId?: string): Promise<{ contentType: string; data: ArrayBuffer }> {
+    const response = await this.requestFile(`/filings/${encodeURIComponent(filingId)}/documents/${encodeURIComponent(documentId)}`, entityHeaders(entityId));
+    return { contentType: response.headers.get('content-type') ?? 'application/octet-stream', data: await response.arrayBuffer() };
   }
 
   /** POST /filings/{id}/undo: take an approval back to PENDING_APPROVAL before the filing is submitted (409 ALREADY_SUBMITTED afterwards). */

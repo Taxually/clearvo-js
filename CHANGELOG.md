@@ -2,6 +2,14 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+## Unreleased — live Filings (backend is deployed); ready to publish
+
+Returns read live (id `ret_...`) can be listed, read, approved and have their documents downloaded. A live return has only one action, approve, which cannot be undone or withdrawn.
+
+- SDK: `FilingStatus` gains `IN_PREPARATION`, `READY_FOR_APPROVAL`, `NEEDS_ATTENTION`. `ListFilingsParams` gains `view: 'open' | 'backdated'` and `backdated`. `ListFilingsResponse` gains `live` and `emptyState`. `FilingSummary` gains `live`, `isNil`, `paymentDeadline`, `paymentDeadlineLabel`, `backdated`, `amountLabel`; `amountDue` and the period fields can be null and the stored-only fields (`snapshotVersion`, `taxCollected`, `filingClass`, `pauseEndsAt`) are now optional, as is everything on `FilingDetail` beyond the summary. New `FilingDocument`, `FilingDetail.documents` and `approveConfirmation`, `FilingActionResponse.message`. `approveFiling(id, snapshotVersion?)` takes no version for a live return. New `downloadFilingDocument(id, docId)`. Breaking for TypeScript callers that read the now-optional fields without a check.
+- MCP: `list_filings` gains `backdated` and `view=open`; `list_filings`, `get_filing` and `approve_filing` descriptions match the backend for live returns.
+- CLI: `clearvo filings list --view open|backdated --backdated`, `clearvo filings approve` (`--snapshot-version` only for a stored return), new `clearvo filings document <id> <docId> --out <file>`.
+
 ## Unreleased — backend exemption certificate number check (Taxually-einvoicing 17707) is deployed; ready to publish
 
 Exemption certificates now carry a warn-only number format check. `certificateRef` is the number printed on the certificate; a number that does not match the state's documented format is still saved and flagged.
