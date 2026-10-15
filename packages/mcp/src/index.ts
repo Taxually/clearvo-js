@@ -414,6 +414,9 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
             required: ['value', 'unit'],
           },
           exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
+          shippingCarrier: { type: 'string', enum: ['common', 'seller_vehicle'], description: "Shipping/handling lines, US only: who delivers the goods, 'common' (an independent carrier) or 'seller_vehicle' (your own vehicles). Some states treat delivery differently. Omit it and the default rule (template default_shipping_carrier) fills it if you have one, else the cautious taxable assumption applies. The shipping rules always decide." },
+          chargeAvoidable: { type: 'boolean', description: "Shipping/handling lines, US only: whether the customer could have avoided this charge (for example by choosing pickup). Omit it and the default rule (template default_shipping_charge_avoidable) fills it if you have one, else it is treated as not avoidable." },
+          actualCostOfShipment: { type: 'boolean', description: "Shipping/handling lines, US only: whether this charge is exactly the carrier's actual cost rather than a flat fee or marked up. Omit it and the default rule (template default_shipping_actual_cost) fills it if you have one, else it is treated as not the actual cost." },
           exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
         },
         required: ['id', 'productName'],
@@ -3800,7 +3803,7 @@ const TOOLS = [
   },
   {
     name: 'list_rule_templates',
-    description: 'List starter rule templates visible to this key (its own scope plus every platform template) — a template has a paramsSchema (get_rule_template for the detail) and is turned into a real rule via instantiate_rule_template.',
+    description: 'List starter rule templates visible to this key (its own scope plus every platform template) — a template has a paramsSchema (get_rule_template for the detail) and is turned into a real rule via instantiate_rule_template. Includes default_shipping_carrier, default_shipping_charge_avoidable and default_shipping_actual_cost: standing defaults for the US shipping facts a calculate_tax line omits.',
     inputSchema: {
       type: 'object' as const,
       properties: {
