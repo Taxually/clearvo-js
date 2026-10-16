@@ -514,11 +514,13 @@ const TOOLS = [
       'there is no silent alias. The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), ' +
       '`unitOfMeasure` and `sellerItemId` — the retired `discount`/`unit`/`itemCode`/`exemption` line keys are rejected with 422 ' +
       '`code: "UNKNOWN_FIELD_LINE_RENAMED"` the same way. ' +
-      'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
-      'a failure returns 422 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
-      'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
-      'Correct it and resend the same invoiceNumber. If the validation rules cannot be loaded the call returns 503 VALIDATION_RULES_UNAVAILABLE ' +
-      'with nothing stored: retry with the same idempotency key. GET /v1/validations lists every code. ' +
+      'A well-formed invoice is always stored in full and the call returns 200; a 200 means STORED, not accepted or succeeded. ' +
+      'The result is in the body: read `outcome` (CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD), `clearanceStatus`, `statusClass` and `terminal`, ' +
+      'never the HTTP status alone. A failed check is a stored status, not an error: `errors[]` (one entry per field, JSON-pointer path and stable code) ' +
+      'explains a NEEDS_INFO (a required fact is missing, you can fix it) or REJECTED (a value is invalid). Correct it and resend the same invoiceNumber. ' +
+      'For HELD or NEEDS_INFO act on `nextStep` (who must act and where, with a `fixUrl` when you can); a document waiting for the merchant never expires. ' +
+      'NO_MANDATE and NOT_SUPPORTED are finished outcomes, not errors. Only an unreadable request (400), auth or plan (401/403), a rate limit (429) or a changed re-send of an already processed document (409) is a 4xx. ' +
+      'GET /v1/validations lists every code. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
@@ -882,13 +884,14 @@ const TOOLS = [
   {
     name: 'poll_status',
     description:
-      'Check the clearance or submission status of an invoice previously submitted via submit_invoice. ' +
-      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, UNDELIVERED, ' +
-      'NEEDS_INFO, SETUP_NEEDED, or HELD_UNMAPPED_TAX_CODE (a line\'s clientTaxCode/taxTreatment isn\'t configured ' +
-      'yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then ' +
-      'resubmit under a new idempotency key). ' +
-      'NEEDS_INFO and SETUP_NEEDED are not dead ends: call submit_invoice again with correctsInvoiceId set to ' +
-      'this invoice\'s id (under a different invoiceNumber) once the underlying data or setup gap is fixed. ' +
+      'Check the status of a document previously submitted via submit_invoice. Reads the stored status only: it never calls the authority, so it is safe to repeat. ' +
+      'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns clearanceStatus, and `statusClass` which says who the document is waiting for: ' +
+      'IN_FLIGHT (RECEIVED, PENDING, ACCUMULATED: wait, do nothing), ' +
+      'WAIT_MERCHANT (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
+      'WAIT_PLATFORM (HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
+      'DONE_OK (ACCEPTED, DELIVERED, CANCELLED), DONE_REJECTED (REJECTED: see errors and nextStep) and DONE_NA (NO_MANDATE, EXCLUDED, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
+      'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
+      'or resubmit the corrected document under the same invoiceNumber. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
     inputSchema: {
@@ -1737,6 +1740,7 @@ const TOOLS = [
       'payload authenticity via HMAC-SHA256. ' +
       'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
       'invoice.pending, product.classification_changed, ' +
+      'invoice.status_changed (fires on EVERY status change with from/to/statusClass/terminal/nextStep/reason; the `statuses` option (valid status values) chooses which new statuses are delivered, omit it for all; prefer this for new integrations — the specific events above keep working, and subscribing to both gives two deliveries per change), ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
       'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
       'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
@@ -1749,10 +1753,15 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         url: { type: 'string', description: 'HTTPS endpoint URL to deliver events to. Must be a public address: no credentials in the URL, no internal or private addresses, and redirects are not followed.' },
+        statuses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Only for invoice.status_changed: the statuses to receive (e.g. ["NEEDS_INFO","REJECTED","ACCEPTED"]), matched on the new status. Omit or leave empty for every status change.',
+        },
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
+          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
         },
       },
       required: ['url'],

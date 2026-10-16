@@ -4,6 +4,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below; all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — DRAFT: e-invoice lifecycle (ingest-first). Do not merge or publish until backend stage 7 is released
+
+Descriptions and types for the e-invoice lifecycle as designed (Taxually-Einvoicing PR 17863, stage 7): a well-formed document is stored and answered 200, the result is in the body, one status model, a general `invoice.status_changed` webhook with subscriber-selected statuses. Pairs with clearvo-marketing PRs 81 and 82.
+
+- SDK: `ClearanceStatus` gains `RECEIVED`. New `StatusClass` and `NextStep`; `InvoiceSubmitResponse` and `InvoiceStatusResponse` gain `statusClass` and `nextStep`. `Webhook` and `CreateWebhookInput` gain `statuses`.
+- MCP: `submit_invoice` and `poll_status` descriptions state that a 200 means stored, list every status by class and who acts; `create_webhook` documents `invoice.status_changed` and the `statuses` option.
+- CLI: no change.
+- Backend follow-up (not in this repo): the hosted MCP descriptions in Taxually-Einvoicing `lib/mcp/tools.ts` (`submit_invoice` around :598, `poll_status` around :1088) need the same wording in stage 7.
+
 ## Unreleased — live Filings (backend is deployed); ready to publish
 
 Returns read live (id `ret_...`) can be listed, read, approved and have their documents downloaded. A live return has only one action, approve, which cannot be undone or withdrawn.
