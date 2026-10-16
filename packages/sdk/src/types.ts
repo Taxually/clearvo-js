@@ -115,6 +115,13 @@ export interface InvoiceSubmitResponse {
    * new idempotency key to unblock it.
    */
   status: ClearanceStatus;
+  /**
+   * Who the document is waiting for, derived from `status`. A 200 response means the document is stored, not that it
+   * succeeded: read `outcome`, `status`, `statusClass` and `terminal`.
+   */
+  statusClass?: StatusClass;
+  /** What has to happen next, who does it and where. Null when nothing is outstanding. */
+  nextStep?: NextStep | null;
   message?: string;
   /** Present only when status is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
   errorCode?: string;
@@ -679,9 +686,21 @@ export interface UnmappedTaxCodeReason {
   deepLink: string;
 }
 
+/** IN_FLIGHT: Clearvo is working on it. WAIT_MERCHANT: you can fix it (never expires). WAIT_PLATFORM: Clearvo resolves it. DONE_OK / DONE_REJECTED / DONE_NA: finished. */
+export type StatusClass = 'IN_FLIGHT' | 'WAIT_MERCHANT' | 'WAIT_PLATFORM' | 'DONE_OK' | 'DONE_REJECTED' | 'DONE_NA';
+
+export interface NextStep {
+  actor: 'merchant' | 'platform' | 'authority' | 'system';
+  message: string;
+  /** Where you can fix it yourself, when you can. */
+  fixUrl?: string;
+}
+
 export interface InvoiceStatusResponse {
   referenceId: string;
   clearanceStatus: ClearanceStatus;
+  statusClass?: StatusClass;
+  nextStep?: NextStep | null;
   clearanceStatusLabel?: string;
   ksefNumber?: string;
   updatedAt: string;
@@ -1776,6 +1795,8 @@ export interface Webhook {
   id: string;
   url: string;
   events: string[];
+  /** Only for `invoice.status_changed`: the statuses delivered. Empty means every status change. */
+  statuses?: ClearanceStatus[];
   entityId: string | null;
   active: boolean;
   createdAt: string;
@@ -1783,7 +1804,10 @@ export interface Webhook {
 
 export interface CreateWebhookInput {
   url: string;
+  /** Include `invoice.status_changed` to be told about every status change; the specific events keep working. */
   events?: string[];
+  /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
+  statuses?: ClearanceStatus[];
 }
 
 export interface CreateWebhookResponse extends Webhook {
