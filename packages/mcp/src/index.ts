@@ -1990,13 +1990,18 @@ const TOOLS = [
     name: 'list_filings',
     description:
       'List the tax returns Clearvo prepares for this entity, one per jurisdiction and period. Each row shows the status ' +
-      '(DRAFT, PENDING_APPROVAL, PAUSED, APPROVED, SUBMITTED, FILED, NOT_FILED), due date, amount due, snapshotVersion, ' +
-      'anything that needs action and which actions are currently allowed. view=upcoming shows open returns, view=filed ' +
-      'shows closed ones, view=backdated shows catch-up returns.',
+      '(DRAFT, PENDING_APPROVAL, PAUSED, APPROVED, SUBMITTED, FILED, NOT_FILED, or for live filings IN_PREPARATION, ' +
+      'READY_FOR_APPROVAL, APPROVED, FILED, NEEDS_ATTENTION), due date, amount due (and amountLabel for live filings), snapshotVersion, ' +
+      'anything that needs action and which actions are currently allowed. view=open shows every return not yet filed (backdated ' +
+      'ones included, soonest due date first), view=filed shows filed ones (live: backdated or not; stored: go-forward only), view=upcoming shows open go-forward returns, ' +
+      'view=backdated shows catch-up returns; backdated=true|false filters on whether a return is backdated and is ANDed with view. Live rows carry a backdated boolean, and a live list carries emptyState {title} wording for an empty result. A live filing has an id starting ret_ and live=true and is read ' +
+      'live on each call. The only action on it is approve_filing: allowedActions.approve is true only while it is READY_FOR_APPROVAL, ' +
+      'the key can write and any bank account the tax authority debits is on file (a list row may offer it more loosely: get_filing decides). 503 FILING_DATA_UNAVAILABLE means filing data is temporarily unavailable: try again shortly.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        view: { type: 'string', enum: ['upcoming', 'filed', 'backdated'], description: 'Which group of filings to list. Omit for all.' },
+        view: { type: 'string', enum: ['open', 'upcoming', 'filed', 'backdated'], description: 'Which group of filings to list. Omit for all.' },
+        backdated: { type: 'boolean', description: 'true = only backdated returns, false = only returns that are not backdated. Combined with view by AND.' },
         status: { type: 'string', description: 'Only filings with this exact status.' },
         jurisdictionId: { type: 'string', description: 'Only this jurisdiction, e.g. "US_CA" or "DE".' },
         limit: { type: 'number', description: 'Page size, 1 to 100 (default 25).' },
@@ -2010,24 +2015,31 @@ const TOOLS = [
       'Get one filing: display labels (statusLabel, jurisdictionLabel, dueDateLabel, nextStepLabel), totals, the by-authority lines ' +
       '(each with rateLabel), what the return includes (scopeNotes), approval and pause policy, ' +
       'payment, bank account (last four digits only), proof and confirmation number once filed, and the timeline. ' +
-      'Use the returned snapshotVersion when approving, pausing, resuming, skipping or setting a prepayment.',
+      'Use the returned snapshotVersion when approving, pausing, resuming, skipping or setting a prepayment. A live filing (id starting ret_) ' +
+      'returns its status (IN_PREPARATION, READY_FOR_APPROVAL, APPROVED, FILED or NEEDS_ATTENTION), period, deadlines, amount and a documents list ' +
+      '(id, name, label, downloadPath; download with GET /v1/filings/{id}/documents/{docId} in the API) instead of totals, lines and timeline, and an ' +
+      'approveConfirmation to show before approving when allowedActions.approve is true. A live filing can only be approved (approve_filing): ' +
+      'no undo, pause, resume, skip, prepayment or change request.',
     inputSchema: {
       type: 'object' as const,
-      properties: { filingId: { type: 'string', description: 'The filing ID (starts with fil_), from list_filings.' } },
+      properties: { filingId: { type: 'string', description: 'The filing ID (starts with fil_, or ret_ for a live filing), from list_filings.' } },
       required: ['filingId'],
     },
   },
   {
     name: 'approve_filing',
     description:
-      'Approve a filing that is PENDING_APPROVAL so it is submitted to the tax authority. Approving is a commitment: ' +
-      'it is reversible with undo_filing_approval only until the filing is submitted. Fails with BANK_DETAILS_REQUIRED, ' +
-      'CONTENT_MISSING or FILING_STALE when it cannot proceed. Repeating the call on an approved filing changes nothing. Requires a write key.',
+      'Approve a filing so it is submitted to the tax authority. Requires a write key. Repeating the call on an approved filing changes nothing. ' +
+      'Stored filing (PENDING_APPROVAL): approving is reversible with undo_filing_approval only until the filing is submitted; fails with ' +
+      'BANK_DETAILS_REQUIRED, CONTENT_MISSING or FILING_STALE when it cannot proceed. ' +
+      'Live return (filingId starting ret_): the approval cannot be undone, withdrawn, paused, skipped or changed afterwards, so only call this once the user has confirmed. ' +
+      'snapshotVersion can be any number for it (it is kept required for stored filings). It fails with NOT_AWAITING_APPROVAL when the return is not ready for approval, ' +
+      'BANK_DETAILS_REQUIRED, or APPROVAL_UNCONFIRMED (check the return before retrying); the response carries a message and the refreshed return.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         filingId: { type: 'string', description: 'The filing ID.' },
-        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE). Ignored for a live return (ret_ id): send any number.' },
       },
       required: ['filingId', 'snapshotVersion'],
     },
@@ -4306,7 +4318,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
     case 'list_filings': {
       const qs = new URLSearchParams();
-      for (const k of ['view', 'status', 'jurisdictionId', 'limit', 'offset'] as const) {
+      for (const k of ['view', 'backdated', 'status', 'jurisdictionId', 'limit', 'offset'] as const) {
         if (args[k] !== undefined && args[k] !== null) qs.set(k, String(args[k]));
       }
       const q = qs.toString();

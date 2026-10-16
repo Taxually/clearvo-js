@@ -311,6 +311,7 @@ export type {
   FilingAllowedActions,
   FilingSummary,
   FilingDetail,
+  FilingDocument,
   ListFilingsParams,
   ListFilingsResponse,
   GetFilingResponse,

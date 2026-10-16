@@ -2,6 +2,16 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
+**2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below; all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
+
+## Unreleased — live Filings (backend is deployed); ready to publish
+
+Returns read live (id `ret_...`) can be listed, read, approved and have their documents downloaded. A live return has only one action, approve, which cannot be undone or withdrawn.
+
+- SDK: `FilingStatus` gains `IN_PREPARATION`, `READY_FOR_APPROVAL`, `NEEDS_ATTENTION`. `ListFilingsParams` gains `view: 'open' | 'backdated'` and `backdated`. `ListFilingsResponse` gains `live` and `emptyState`. `FilingSummary` gains `live`, `isNil`, `paymentDeadline`, `paymentDeadlineLabel`, `backdated`, `amountLabel`; `amountDue` and the period fields can be null and the stored-only fields (`snapshotVersion`, `taxCollected`, `filingClass`, `pauseEndsAt`) are now optional, as is everything on `FilingDetail` beyond the summary. New `FilingDocument`, `FilingDetail.documents` and `approveConfirmation`, `FilingActionResponse.message`. `approveFiling(id, snapshotVersion?)` takes no version for a live return. New `downloadFilingDocument(id, docId)`. Breaking for TypeScript callers that read the now-optional fields without a check.
+- MCP: `list_filings` gains `backdated` and `view=open`; `list_filings`, `get_filing` and `approve_filing` descriptions match the backend for live returns.
+- CLI: `clearvo filings list --view open|backdated --backdated`, `clearvo filings approve` (`--snapshot-version` only for a stored return), new `clearvo filings document <id> <docId> --out <file>`.
+
 ## Unreleased — backend exemption certificate number check (Taxually-einvoicing 17707) is deployed; ready to publish
 
 Exemption certificates now carry a warn-only number format check. `certificateRef` is the number printed on the certificate; a number that does not match the state's documented format is still saved and flagged.

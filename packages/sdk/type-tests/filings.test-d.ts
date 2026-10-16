@@ -37,8 +37,12 @@ const _file: FilingUploadFile['status'] = 'had_errors';
 async function _use() {
   const f = await client.getFiling('fil_1');
   const _label: string = f.filing.statusLabel;
-  const _v: number = f.filing.snapshotVersion;
+  const _v: number | undefined = f.filing.snapshotVersion;
   await client.approveFiling('fil_1', f.filing.snapshotVersion);
+  await client.approveFiling('ret_1');
+  const _live: FilingStatus = 'READY_FOR_APPROVAL';
+  const doc = await client.downloadFilingDocument('ret_1', '11111111-2222-4333-8444-555555555555');
+  void [_live, doc.contentType];
   const csv: string = await client.getFilingUploadTemplate('csv');
   const json = await client.getFilingUploadTemplate();
   const _cols: string = json.columns[0].column;

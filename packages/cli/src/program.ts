@@ -2176,16 +2176,18 @@ export function createProgram(): Command {
   filings
     .command('list')
     .description('List your returns')
-    .option('--view <view>', 'upcoming (open returns) or filed (FILED or NOT_FILED)')
+    .option('--view <view>', 'open (not yet filed, backdated included, soonest due first), upcoming (open go-forward returns), filed, or backdated (catch-up returns)')
+    .option('--backdated <true|false>', 'true = only backdated returns, false = only returns that are not backdated (combined with --view)')
     .option('--status <status>', 'Only returns with this exact status')
     .option('--jurisdiction <id>', 'e.g. US_CA')
     .option('--limit <n>', '1 to 100 (default 25)')
     .option('--offset <n>', 'Skip this many returns')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { view?: string; status?: string; jurisdiction?: string; limit?: string; offset?: string; entity?: string; pretty?: boolean }) => {
+    .action(async (opts: { view?: string; backdated?: string; status?: string; jurisdiction?: string; limit?: string; offset?: string; entity?: string; pretty?: boolean }) => {
       const qs = new URLSearchParams();
       if (opts.view) qs.set('view', opts.view);
+      if (opts.backdated) qs.set('backdated', opts.backdated);
       if (opts.status) qs.set('status', opts.status);
       if (opts.jurisdiction) qs.set('jurisdictionId', opts.jurisdiction);
       if (opts.limit) qs.set('limit', opts.limit);
@@ -2203,8 +2205,32 @@ export function createProgram(): Command {
       print(await api('GET', `/filings/${encodeURIComponent(id)}`, undefined, entityHdr(opts.entity)), !!opts.pretty);
     });
 
+  filings
+    .command('approve <id>')
+    .description('Approve a return for submission to the tax authority. A stored return (fil_) needs --snapshot-version and can be undone until it is submitted; a live return (ret_) needs none and can never be undone or withdrawn')
+    .option('--snapshot-version <n>', 'The return\'s current snapshotVersion (from `filings get`); a mismatch is 409 FILING_STALE. Not needed for a ret_ id')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion?: string; entity?: string; pretty?: boolean }) => {
+      if (opts.snapshotVersion === undefined && !id.startsWith('ret_')) {
+        console.error('Error: --snapshot-version is required for a stored return (a whole number from `clearvo filings get`); only a live ret_ return needs none');
+        process.exit(1);
+      }
+      const body = opts.snapshotVersion === undefined ? {} : { snapshotVersion: parseVersion(opts.snapshotVersion) };
+      print(await api('POST', `/filings/${encodeURIComponent(id)}/approve`, body, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filings
+    .command('document <id> <docId>')
+    .description('Download a document of a live return (ret_ id); the ids are in `filings get` under documents')
+    .requiredOption('--out <file>', 'Where to save the file')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .action(async (id: string, docId: string, opts: { out: string; entity?: string }) => {
+      const res = await apiFile(`/filings/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, entityHdr(opts.entity));
+      writeOut(opts.out, new Uint8Array(await res.arrayBuffer()), 'the document');
+    });
+
   for (const [name, path, text] of [
-    ['approve', 'approve', 'Approve a return for submission to the tax authority (reversible with `undo` until it is submitted)'],
     ['undo', 'undo', 'Take an approval back to PENDING_APPROVAL (only before submission)'],
     ['pause', 'pause', 'Pause a return so it is not approved automatically (limited per year; the on-time filing commitment is lost while paused)'],
     ['resume', 'resume', 'Resume a paused return'],
