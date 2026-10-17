@@ -125,7 +125,7 @@ export function createProgram(): Command {
   const program = new Command()
     .name('clearvo')
     .description('Clearvo CLI — submit invoices, calculate tax, validate tax numbers')
-    .version('0.3.0');
+    .version('0.4.0');
   
   // ── clearvo send <file> ───────────────────────────────────────────────────────
   // Hard cut: there is no `taxCode` field anywhere in the request — not on a
