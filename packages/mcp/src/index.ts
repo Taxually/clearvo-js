@@ -519,7 +519,13 @@ const TOOLS = [
       'never the HTTP status alone. A failed check is a stored status, not an error: `errors[]` (one entry per field, JSON-pointer path and stable code) ' +
       'explains a NEEDS_INFO (a required fact is missing, you can fix it) or REJECTED (a value is invalid). Correct it and resend the same invoiceNumber. ' +
       'For HELD or NEEDS_INFO act on `nextStep` (who must act and where, with a `fixUrl` when you can); a document waiting for the merchant never expires. ' +
-      'NO_MANDATE and NOT_SUPPORTED are finished outcomes, not errors. Only an unreadable request (400), auth or plan (401/403), a rate limit (429) or a changed re-send of an already processed document (409) is a 4xx. ' +
+      'NO_MANDATE and NOT_SUPPORTED are finished outcomes, not errors (NOT_SUPPORTED means the document is dated before the mandate\'s support start, errorCode MANDATE_NOT_SUPPORTED). ' +
+      'HELD_AWAITING_AUTHORIZATION (errorCode MANDATE_SUPPORT_NOT_OPERATIONAL) is also a 200, not a 422: live Portugal sends while the AT certificate is pending, and Greece, Malaysia, Israel, Egypt and Jordan until Clearvo can submit there; it is released automatically, do nothing. ' +
+      'RECEIVED means stored and still being processed: resending the same document returns the same `id`, so never create a duplicate. ' +
+      'Every exit that stores the document (including an error body) carries `id`. ' +
+      'Only an unreadable request (400), auth or plan (401/403), a rate limit (429) or an EDITED re-send of an already processed document (409 IDEMPOTENT_BODY_MISMATCH) is a 4xx. ' +
+      'Reusing an x-idempotency-key for a DIFFERENT document is no longer a 409: the call succeeds and returns the warning IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS; a document without the fields that identify it returns NO_IDENTITY_NO_DEDUP (a re-send cannot be recognised as a duplicate). ' +
+      'If `terminal` is false, poll poll_status until it is true, or subscribe with create_webhook to invoice.status_changed to be told. ' +
       'GET /v1/validations lists every code. ' +
       'Call get_requirements first if unsure what fields are needed for a country. ' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
@@ -886,14 +892,15 @@ const TOOLS = [
     description:
       'Check the status of a document previously submitted via submit_invoice. Reads the stored status only: it never calls the authority, so it is safe to repeat. ' +
       'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns clearanceStatus, and `statusClass` which says who the document is waiting for: ' +
-      'IN_FLIGHT (RECEIVED, PENDING, ACCUMULATED: wait, do nothing), ' +
-      'WAIT_MERCHANT (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
+      'IN_FLIGHT (RECEIVED = stored and still processing, PENDING, ACCUMULATED: wait, do nothing), ' +
+      'WAIT_MERCHANT (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
       'WAIT_PLATFORM (HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
       'DONE_OK (ACCEPTED, DELIVERED, CANCELLED), DONE_REJECTED (REJECTED: see errors and nextStep) and DONE_NA (NO_MANDATE, EXCLUDED, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resubmit the corrected document under the same invoiceNumber. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
-      'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
+      'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate. ' +
+      'To be told instead of polling, subscribe with create_webhook to invoice.status_changed.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1626,7 +1633,7 @@ const TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices (including ingestedAt) plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt), plus `statusClass` (IN_FLIGHT: wait; WAIT_MERCHANT: you can fix it; WAIT_PLATFORM: Clearvo resolves it; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
@@ -1723,7 +1730,7 @@ const TOOLS = [
     name: 'list_webhooks',
     description:
       'List registered webhook endpoints for this account. ' +
-      'Shows URLs, subscribed event types, and entity scope for each webhook.',
+      'Shows URLs, subscribed event types, entity scope and, for a webhook subscribed to invoice.status_changed, its `statuses` filter (empty or missing means every status change) for each webhook.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1740,7 +1747,7 @@ const TOOLS = [
       'payload authenticity via HMAC-SHA256. ' +
       'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
       'invoice.pending, product.classification_changed, ' +
-      'invoice.status_changed (fires on EVERY status change with from/to/statusClass/terminal/nextStep/reason; the `statuses` option (valid status values) chooses which new statuses are delivered, omit it for all; prefer this for new integrations — the specific events above keep working, and subscribing to both gives two deliveries per change), ' +
+      'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, statusClass, terminal, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
       'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
       'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
@@ -1756,12 +1763,12 @@ const TOOLS = [
         statuses: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Only for invoice.status_changed: the statuses to receive (e.g. ["NEEDS_INFO","REJECTED","ACCEPTED"]), matched on the new status. Omit or leave empty for every status change.',
+          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["NEEDS_INFO","REJECTED","ACCEPTED"]), matched on the new status. Omit or leave empty for every status change. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
         },
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
+          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
         },
       },
       required: ['url'],
@@ -1784,12 +1791,14 @@ const TOOLS = [
       'Send a signed test event to one of your webhook endpoints, to check it is reachable, verifies the signature and returns 2xx. ' +
       'The request is built and signed exactly like a real delivery (x-taxually-signature, x-taxually-timestamp) and carries "test": true. ' +
       'It is sent once with no retries; the response says whether your endpoint accepted it (delivered, status, durationMs, any error) and includes the exact payload sent. ' +
-      'Nothing is stored and no real invoice changes. Pass invoiceId to build the payload from one of your own invoices instead of sample values.',
+      'Nothing is stored and no real invoice changes. Pass invoiceId to build the payload from one of your own invoices instead of sample values. ' +
+      'To rehearse a status change, use event invoice.status_changed and set `to` to the status you want to see (for example NEEDS_INFO).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         webhookId: { type: 'string', description: 'The webhook ID to test (from list_webhooks or create_webhook)' },
-        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending or invoice.business_status_changed' },
+        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.business_status_changed or invoice.status_changed' },
+        to: { type: 'string', description: 'Only with event invoice.status_changed: the new status the sample reports, e.g. NEEDS_INFO, SETUP_NEEDED, ACCEPTED. Default: the invoice\'s own status, else ACCEPTED. Any other event with `to` is a 400.' },
         invoiceId: { type: 'string', description: 'Optional: the ID of one of your invoices (from list_invoices) to build the test payload from' },
       },
       required: ['webhookId'],

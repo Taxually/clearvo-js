@@ -282,8 +282,10 @@ export class ClearvoClient {
    * supplier.taxId + issueDate), returned in the `X-Idempotency-Key` response header; that, not your
    * key, is what deduplicates. A re-send of the same identity with different content is refused
    * 409 IDEMPOTENT_BODY_MISMATCH (unless the earlier attempt is NEEDS_INFO or REJECTED, which re-run
-   * in place), and reusing your key for a different document is refused 409 IDEMPOTENCY_KEY_REUSED.
-   * A document missing one of its identity fields is refused 422 MISSING_IDENTITY_FIELD.
+   * in place). Reusing your key for a DIFFERENT document is no longer a 409: the send is processed and the response carries the
+   * warning IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS (a document lacking identity fields gets NO_IDENTITY_NO_DEDUP).
+   * A 200 means the document is STORED, not accepted: read `outcome`, `status`, `statusClass` and `terminal`, and act on
+   * `nextStep` for a hold. Poll getInvoiceStatus until terminal, or subscribe to the `invoice.status_changed` webhook.
    */
   submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
     const headers: Record<string, string> = {};

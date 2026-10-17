@@ -8,10 +8,12 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 Descriptions and types for the e-invoice lifecycle as designed (Taxually-Einvoicing PR 17863, stage 7): a well-formed document is stored and answered 200, the result is in the body, one status model, a general `invoice.status_changed` webhook with subscriber-selected statuses. Pairs with clearvo-marketing PRs 81 and 82.
 
-- SDK: `ClearanceStatus` gains `RECEIVED`. New `StatusClass` and `NextStep`; `InvoiceSubmitResponse` and `InvoiceStatusResponse` gain `statusClass` and `nextStep`. `Webhook` and `CreateWebhookInput` gain `statuses`.
-- MCP: `submit_invoice` and `poll_status` descriptions state that a 200 means stored, list every status by class and who acts; `create_webhook` documents `invoice.status_changed` and the `statuses` option.
-- CLI: no change.
-- Backend follow-up (not in this repo): the hosted MCP descriptions in Taxually-Einvoicing `lib/mcp/tools.ts` (`submit_invoice` around :598, `poll_status` around :1088) need the same wording in stage 7.
+NOT FOR RELEASE until the ingest-first backend (stage 7) ships. Nothing below works against production today.
+
+- SDK: `ClearanceStatus` gains `RECEIVED`. New `StatusClass`, `NextStep`, `WebhookEventName` and `StatusChangedWebhookPayload` (the `invoice.status_changed` body: from, to, statusClass, terminal, reason, nextStep, at, test). `InvoiceSubmitResponse` gains `statusClass`, `nextStep`, `id`, `outcome`, `terminal` and `warnings` (adds `IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS` and `NO_IDENTITY_NO_DEDUP`); `InvoiceStatusResponse` gains `statusClass` and `nextStep`. `Webhook` and `CreateWebhookInput` gain `statuses`; `TestWebhookInput` gains `to`. Doc comments updated: a reused idempotency key for a different document is a warning, no longer 409 `IDEMPOTENCY_KEY_REUSED`; `MISSING_IDENTITY_FIELD` is gone; `HELD_AWAITING_AUTHORIZATION` (`MANDATE_SUPPORT_NOT_OPERATIONAL`) for live Portugal while the AT certificate is pending and for GR, MY, IL, EG, JO; `NOT_SUPPORTED` means dated before the mandate's support start. No runtime change.
+- MCP: `submit_invoice` states that a 200 means stored, not accepted, and what to do per outcome and status class; `poll_status` lists every status by class (including `RECEIVED`) and points to the webhook as the push alternative; `get_invoice` mentions `statusClass` and `nextStep`; `create_webhook` gains the `statuses` array and documents `invoice.status_changed` (not covered by `*`); `list_webhooks` output mentions `statuses`; `test_webhook` gains `to` and the `invoice.status_changed` event.
+- CLI: `webhooks create --statuses <list>`; `webhooks test --to <status>` and `--event invoice.status_changed`; help text notes `*` excludes `invoice.status_changed`.
+- Backend follow-up (not in this repo): the hosted MCP descriptions in Taxually-Einvoicing `lib/mcp/tools.ts` need the same wording in stage 7.
 
 ## Unreleased — live Filings (backend is deployed); ready to publish
 
