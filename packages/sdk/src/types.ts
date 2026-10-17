@@ -123,7 +123,11 @@ export interface PeppolCustomerUnreachableResponse {
  */
 export interface SendResult {
   referenceId: string;
-  /** False for a rejection (REJECTED / NEEDS_INFO) or a dry run that would be one; true for an accepted, in-flight, held or accumulated document. */
+  /**
+   * Derived from the status alone: false for REJECTED, NEEDS_INFO, SETUP_NEEDED and HELD_PLATFORM_FAULT (or a dry run that would be
+   * one), true for everything else (accepted, in flight, other holds, accumulated, PROCESSING, NEEDS_ACTION). A replay of the same
+   * document carries the same `ok`, `error`, `errors[]`, `fixUrl` and `nextStep`. Branch on `outcome`, not `ok`.
+   */
   ok?: boolean;
   /** The stored record's status: REJECTED, NEEDS_INFO, SETUP_NEEDED, HELD_*, NOT_SUPPORTED, ACCUMULATED, PENDING, RECEIVED, ... Same value as `status`. */
   clearanceStatus?: ClearanceStatus;
@@ -155,8 +159,14 @@ export interface SendResult {
   nextStep?: NextStep | null;
   /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
   id?: string;
-  /** CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION or HELD. Read this, not the HTTP status (200 for every stored document, including ACCUMULATED, which used to be 202). */
-  outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD';
+  /**
+   * CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD, PROCESSING or NEEDS_ACTION. Read this, not the HTTP status (200 for
+   * every stored document, including ACCUMULATED, which used to be 202).
+   * PROCESSING: stored (status RECEIVED) but not processed yet, so not an answer: keep `id` and poll getInvoiceStatus or wait for
+   * `invoice.status_changed`. NEEDS_ACTION: stored and only the sender can move it (UNROUTABLE: fix the recipient's address). UNDELIVERED is HELD
+   * (it was CLEARED); RECEIVED and UNROUTABLE are no longer CLEARED.
+   */
+  outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING' | 'NEEDS_ACTION';
   /** True when the status is final. A 200 with `terminal: false` means stored and still moving: poll getInvoiceStatus or subscribe to `invoice.status_changed`. */
   terminal?: boolean;
   /**
@@ -213,7 +223,7 @@ export interface SendResult {
 /** @deprecated Renamed {@link SendResult}; the shape is identical. */
 export type InvoiceSubmitResponse = SendResult;
 
-/** True when the stored outcome is REJECTED or NEEDS_INFO, the two outcomes `throwOnRejected` turns into a thrown error. Reads `outcome`, falling back to `clearanceStatus`. */
+/** True when the stored outcome is REJECTED or NEEDS_INFO, the two outcomes `throwOnRejected` turns into a thrown error (NEEDS_ACTION and PROCESSING never throw). Reads `outcome`, falling back to `clearanceStatus`. */
 export function isRejected(result: Pick<SendResult, 'outcome' | 'clearanceStatus' | 'status'>): boolean {
   const outcome = result.outcome ?? result.clearanceStatus ?? result.status;
   return outcome === 'REJECTED' || outcome === 'NEEDS_INFO';
@@ -565,10 +575,9 @@ export interface SubmitInvoiceInput {
   /**
    * Id (from a prior submit response) of the invoice this submission corrects
    * — either a fiscal credit/debit note reversing it, or a plain resubmission
-   * re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO
-   * invoice can all be corrected this way (previously only REJECTED/
-   * UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Submit
-   * under a fresh idempotency key alongside this field.
+   * re-attempting it. A REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be
+   * corrected this way — a NEEDS_INFO record is no longer a dead end. To
+   * resubmit, resend the corrected document to POST /v1/send with the same invoice number.
    */
   correctsInvoiceId?: string;
   customerReference?: string;
@@ -4129,7 +4138,7 @@ export interface SendRejectionEntry {
   /** Present when a rule produced the entry: the rule's own name (the message a caller reads). */
   ruleName?: string;
   source?: 'rule';
-  /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or NEEDS_INFO (a required fact is missing; Fix & Resubmit applies). */
+  /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or NEEDS_INFO (a required fact is missing; resend the corrected document to POST /v1/send with the same invoice number). */
   clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
   [key: string]: unknown;
 }
@@ -4291,6 +4300,10 @@ export type WebhookEventName =
  */
 export interface StatusChangedWebhookPayload {
   event: 'invoice.status_changed';
+  /** Unique id of this event, the same on every delivery retry of it: dedupe on it. */
+  eventId: string;
+  /** Increases per invoice: order one invoice's events by it and ignore an event whose `seq` is lower than the one you applied (deliveries are retried and can arrive out of order). */
+  seq: number;
   /** The e-invoice record id; same as `submissionId`. */
   id: string;
   submissionId: string;

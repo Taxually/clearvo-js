@@ -62,6 +62,33 @@ describe('clearvo send outcome', () => {
     await expect(run()).rejects.toThrow('exit 1');
   });
 
+  it('exits 1 on NEEDS_ACTION and tells the sender to fix the recipient', async () => {
+    reply({ ok: true, id: 'EI-U', clearanceStatus: 'UNROUTABLE', outcome: 'NEEDS_ACTION', nextStep: { actor: 'merchant', message: 'Recipient not reachable' } });
+    exitThrows();
+    await expect(run()).rejects.toThrow('exit 1');
+    expect(stdout()).toContain('"outcome":"NEEDS_ACTION"');
+    expect(stderr()).toContain('fix the recipient');
+  });
+
+  it('exits 0 on PROCESSING and prints how to poll', async () => {
+    reply({ ok: true, id: 'EI-P', clearanceStatus: 'RECEIVED', outcome: 'PROCESSING' });
+    const exit = exitThrows();
+    await run();
+    expect(exit).not.toHaveBeenCalled();
+    expect(stderr()).toContain('PROCESSING (EI-P)');
+    expect(stderr()).toContain('clearvo status EI-P');
+    expect(stderr()).toContain('invoice.status_changed');
+  });
+
+  it('exits 0 for UNDELIVERED (HELD) and for NEEDS_ACTION with --no-throw-on-rejected', async () => {
+    reply({ ok: true, id: 'EI-D', clearanceStatus: 'UNDELIVERED', outcome: 'HELD' });
+    const exit = exitThrows();
+    await run();
+    reply({ ok: true, id: 'EI-U', clearanceStatus: 'UNROUTABLE', outcome: 'NEEDS_ACTION' });
+    await run(['--no-throw-on-rejected']);
+    expect(exit).not.toHaveBeenCalled();
+  });
+
   it('exits 0 for a stored rejection with --no-throw-on-rejected', async () => {
     reply(rejected);
     const exit = exitThrows();

@@ -31,6 +31,9 @@ const REJECTED = {
 const NEEDS_INFO = { ...REJECTED, id: 'EI-IT-2', referenceId: 'EI-IT-2', clearanceStatus: 'NEEDS_INFO', outcome: 'NEEDS_INFO', statusClass: 'WAIT_MERCHANT', terminal: false };
 const CLEARED = { ok: true, id: 'EI-IT-3', referenceId: 'EI-IT-3', clearanceStatus: 'PENDING', outcome: 'CLEARED', statusClass: 'IN_FLIGHT', terminal: false };
 
+const PROCESSING = { ok: true, id: 'EI-IT-4', referenceId: 'EI-IT-4', clearanceStatus: 'RECEIVED', outcome: 'PROCESSING', statusClass: 'IN_FLIGHT', terminal: false };
+const NEEDS_ACTION = { ok: true, id: 'EI-IT-5', referenceId: 'EI-IT-5', clearanceStatus: 'UNROUTABLE', outcome: 'NEEDS_ACTION', statusClass: 'WAIT_MERCHANT', terminal: false };
+
 const api = http.createServer((req, res) => {
   let raw = '';
   req.on('data', c => { raw += c; });
@@ -38,7 +41,7 @@ const api = http.createServer((req, res) => {
     const body = raw ? JSON.parse(raw) : {};
     const conflict = body.invoiceNumber === 'EDITED';
     res.writeHead(conflict ? 409 : 200, { 'Content-Type': 'application/json' });
-    const reply = body.invoiceNumber === 'NEEDS' ? NEEDS_INFO : body.invoiceNumber === 'OK' ? CLEARED : REJECTED;
+    const reply = body.invoiceNumber === 'NEEDS' ? NEEDS_INFO : body.invoiceNumber === 'OK' ? CLEARED : body.invoiceNumber === 'PROC' ? PROCESSING : body.invoiceNumber === 'ACT' ? NEEDS_ACTION : REJECTED;
     res.end(JSON.stringify(conflict ? { error: { code: 'IDEMPOTENT_BODY_MISMATCH', message: 'edited resend' } } : reply));
   });
 });
@@ -108,6 +111,15 @@ api.listen(0, '127.0.0.1', async () => {
 
   const ok = await call(6, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'OK' } });
   if (ok.result?.isError) return fail('a CLEARED 200 must not be an error');
+
+  for (const [id, num] of [[7, 'PROC'], [8, 'ACT']]) {
+    const r = await call(id, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: num } });
+    if (r.result?.isError) return fail(`${num} must not be flagged isError (matches hosted MCP)`);
+  }
+  const desc = tool.description;
+  for (const needle of ['PROCESSING', 'NEEDS_ACTION', 'SETUP_NEEDED and HELD_PLATFORM_FAULT']) {
+    if (!desc.includes(needle)) return fail(`submit_invoice description must mention ${needle}`);
+  }
 
   const edited = await call(4, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'EDITED' } });
   if (!edited.result?.isError || !edited.result.content[0].text.includes('HTTP 409')) return fail('a 409 must still surface as an error');

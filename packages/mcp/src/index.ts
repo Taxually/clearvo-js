@@ -442,7 +442,7 @@ const TOOLS = [
       '(no upgradeUrl; nothing is submitted) unless a reporting obligation already owed is open. Tell the user to contact us to add it, and check ' +
       'solutionAccess in get_setup_status. ' +
       'Returns a referenceId — call poll_status to track the clearance outcome. Every ' +
-      'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED/NO_OBLIGATION), ' +
+      'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED/NO_OBLIGATION, plus PROCESSING for a stored document that is not processed yet and NEEDS_ACTION when only the sender can move it), ' +
       '`mandate`, `reviewRequired`, `statusClass` and `nextStep`. A 200 means the document is STORED, not that it was accepted: ' +
       'a well-formed document is always stored first, and a validation failure, a missing setup or a not-yet-supported country becomes a status on the stored record, not a lost request. ' +
       'Read `outcome`, `clearanceStatus`, `statusClass` (IN_FLIGHT: Clearvo is working on it; WAIT_MERCHANT: you or the user can fix it, and it never expires; WAIT_PLATFORM: Clearvo resolves it, nothing for you to do; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `terminal`. ' +
@@ -462,7 +462,7 @@ const TOOLS = [
       'gets a real AEAT answer (see get_invoice\'s own siiDetail). ' +
       'The issuing company on a sale is this entity and is never supplied by the caller: omit `supplier` entirely and its name, tax ID, address and contact come from the Business Profile (on a purchase the entity is the customer and `supplier` is the vendor you pass). ' +
       'If the profile is incomplete the document is stored NEEDS_INFO (HTTP 200) with error MISSING_SUPPLIER_DATA and a fixUrl — ask the user to complete the Business Profile; do not invent or copy an address. ' +
-      'A response outcome of CLEARED means accepted for dispatch to the authority, not final authority clearance: always follow with poll_status, which carries the authority\'s own answer. ' +
+      'A response outcome of CLEARED means accepted for dispatch to the authority, not final authority clearance: always follow with poll_status, which carries the authority\'s own answer. PROCESSING is not an answer: keep the `id` and poll. `ok` is false for REJECTED, NEEDS_INFO, SETUP_NEEDED and HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. NEEDS_ACTION (UNROUTABLE) is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is HELD. ' +
       'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
       'resolved country is applied automatically (an entity can hold registrations in more than ' +
       'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
@@ -901,7 +901,7 @@ const TOOLS = [
       'WAIT_PLATFORM (HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
       'DONE_OK (ACCEPTED, DELIVERED, CANCELLED), DONE_REJECTED (REJECTED: see errors and nextStep) and DONE_NA (NO_MANDATE, EXCLUDED, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
-      'or resubmit the corrected document under the same invoiceNumber. ' +
+      'or resend the corrected document to POST /v1/send with the same invoice number. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate. ' +
       'To be told instead of polling, subscribe with create_webhook to invoice.status_changed.',

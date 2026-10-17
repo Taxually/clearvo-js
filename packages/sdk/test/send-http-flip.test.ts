@@ -32,6 +32,24 @@ const rejected = {
 const needsInfo = { ...rejected, clearanceStatus: 'NEEDS_INFO', outcome: 'NEEDS_INFO', statusClass: 'WAIT_MERCHANT', terminal: false };
 const cleared = { ok: true, id: 'EI-IT-2', referenceId: 'EI-IT-2', status: 'PENDING', clearanceStatus: 'PENDING', outcome: 'CLEARED', statusClass: 'IN_FLIGHT', terminal: false, nextStep: null };
 
+describe('submitInvoice PROCESSING / NEEDS_ACTION / HELD', () => {
+  it('returns PROCESSING, NEEDS_ACTION and UNDELIVERED (HELD) bodies without throwing', async () => {
+    const client = new ClearvoClient({ apiKey: 'k', baseUrl: 'http://x/v1' });
+    for (const [clearanceStatus, outcome] of [['RECEIVED', 'PROCESSING'], ['UNROUTABLE', 'NEEDS_ACTION'], ['UNDELIVERED', 'HELD']] as const) {
+      reply(200, { ok: true, id: 'EI-1', referenceId: 'EI-1', status: clearanceStatus, clearanceStatus, outcome, terminal: false });
+      const out = await client.submitInvoice(input);
+      expect(out.outcome).toBe(outcome);
+      expect(isRejected(out)).toBe(false);
+    }
+  });
+
+  it('does not throw for ok:false SETUP_NEEDED or HELD_PLATFORM_FAULT (outcome HELD); only REJECTED / NEEDS_INFO throw', async () => {
+    const client = new ClearvoClient({ apiKey: 'k', baseUrl: 'http://x/v1' });
+    reply(200, { ok: false, id: 'EI-2', status: 'SETUP_NEEDED', clearanceStatus: 'SETUP_NEEDED', outcome: 'HELD', error: { code: 'X', message: 'm' } });
+    expect((await client.submitInvoice(input)).ok).toBe(false);
+  });
+});
+
 describe('submitInvoice with a 200 body', () => {
   it('throws ClearvoError on REJECTED by default, with the body, code and errors', async () => {
     reply(200, rejected);
