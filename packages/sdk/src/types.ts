@@ -136,9 +136,9 @@ export interface SendResult {
   errors?: SendRejectionEntry[];
   /**
    * Same value as `clearanceStatus`: RECEIVED/PENDING/ACCEPTED/REJECTED/DELIVERED/UNROUTABLE/
-   * UNDELIVERED/DUPLICATE, or HELD_AWAITING_AUTHORIZATION (errorCode MANDATE_SUPPORT_NOT_OPERATIONAL: live Portugal sends
-   * while the AT certificate is pending, and the closed-gate countries GR, MY, IL, EG, JO; answered 200, released
-   * automatically), NOT_SUPPORTED (dated before the mandate's support start, errorCode MANDATE_NOT_SUPPORTED, terminal), or HELD_UNMAPPED_TAX_CODE — a line/shipping/
+   * UNDELIVERED/DUPLICATE, or HELD_AWAITING_AUTHORIZATION (errorCode MANDATE_SUPPORT_NOT_OPERATIONAL: a country that is not enabled
+   * for the account yet, including live Portugal submissions; answered 200, held and released automatically once the
+   * country is enabled for the account), NOT_SUPPORTED (dated before the mandate's support start, errorCode MANDATE_NOT_SUPPORTED, terminal), or HELD_UNMAPPED_TAX_CODE — a line/shipping/
    * allowance-charge's clientTaxCode or taxTreatment isn't configured for
    * this entity yet. Never a malformed request: the invoice is accepted
    * and held with a machine-readable reason (see errorCode/message/reason

@@ -448,7 +448,7 @@ const TOOLS = [
       'Read `outcome`, `clearanceStatus`, `statusClass` (IN_FLIGHT: Clearvo is working on it; WAIT_MERCHANT: you or the user can fix it, and it never expires; WAIT_PLATFORM: Clearvo resolves it, nothing for you to do; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `terminal`. ' +
       'When the document is held (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION, ...), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
       'Held documents are released automatically once the cause is fixed; poll_status (or an invoice.status_changed webhook) shows the move. ' +
-      'Live Portugal while the AT certificate is pending, and countries whose support has not opened yet, answer 200 HELD_AWAITING_AUTHORIZATION (released automatically); a document dated before a mandate\'s support start is NOT_SUPPORTED (final, never submitted later). ' +
+      'A document for a country that is not enabled for your account yet (including live Portugal submissions) is stored 200 HELD_AWAITING_AUTHORIZATION: it is held and released automatically once the country is enabled for your account, so there is nothing to resend; a document dated before a mandate\'s support start is NOT_SUPPORTED (final, never submitted later). ' +
       'A response of clearanceStatus RECEIVED means stored and still being processed: keep its `id`, and call poll_status or get_invoice to follow it. ' +
       'RECEIVED with a PROCESSING_DELAYED warning means a temporary problem interrupted processing after the document was stored: do not resend, Clearvo re-runs it; follow it with poll_status. ' +
       'ACCUMULATED (France e-reporting, Spain SII batches) is a 200 too, not a 202. ' +
@@ -469,6 +469,23 @@ const TOOLS = [
       'country). If supplied, it must match that registered tax ID exactly (a country prefix ' +
       'is stripped before comparing) or it is stored REJECTED (HTTP 200) with error SUPPLIER_TAX_ID_MISMATCH ' +
       '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). ' +
+      'A Spain SII/VeriFactu invoice for an entity with no current Spanish registration is stored NEEDS_INFO (errorCode ' +
+      'MISSING_SUPPLIER_REGISTRATION, fixUrl): add the registration, then resubmit. A Spain SII submission also carries `reportBy` ' +
+      '(the AEAT deadline); when the entity\'s es_sii submissionMode is batch_auto or batch_review the response is 200 ACCUMULATED ' +
+      'with `batchId`, `reportBy` and `submissionMode`: the registro joined a reporting batch instead of going to AEAT right away (see list_reporting_batches). ' +
+      'Spain VeriFactu covers the Canary Islands: Clearvo registers Canary Islands (IGIC) invoices with the AEAT under ' +
+      'the same Spanish tax number (it does not file IGIC returns or the Canary SII, and does not support IPSI). Set ' +
+      'es_tax_territory (mainland | canary_islands | both) on the Spanish registration first (update_registration): an ' +
+      'IGIC line without it is stored with the error VERIFACTU_TAX_TERRITORY_REQUIRED. An original invoice with no customer.taxId and a ' +
+      'total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); above EUR 3,000 it needs ' +
+      'countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion. A buyer with ' +
+      'a passport or residence document needs countrySpecific.es.customerIdType. VeriFactu applies from 2027-01-01 ' +
+      '(corporate-tax payers) and 2027-07-01 (everyone else); sandbox invoices must be dated on or after 2027-01-01. ' +
+      'Set countrySpecific.peppol.selfBilling=true for a self-billed invoice (you, the customer, ' +
+      'issuing on the real seller\'s behalf): supplier then identifies that real seller (required; ' +
+      'supplierRef resolves a saved one) and customer becomes your OWN entity\'s identity instead ' +
+      '(auto-derived, tax-ID-checked). See supplier/customer/countrySpecific.peppol.selfBilling below ' +
+      'for the full behavior. ' +
       'Hungary (NAV) additionally requires a valid Hungarian tax number (adószám) and street ' +
       'address for the supplier, and — for any customer that is not a private individual — a ' +
       'customer street address plus (only if a Hungarian tax number is given at all) a validly-' +
@@ -496,6 +513,19 @@ const TOOLS = [
       '(errors MISSING_LEITWEG_ID / MISSING_DE_XRECHNUNG_SELLER_CONTACT / MISSING_DE_PEPPOL_* otherwise), and an explicit Peppol address for the customer — a German customer ' +
       'is never derived from a VAT number, so without one the document is stored NEEDS_INFO (HTTP 200) with an unreachable-customer code and ' +
       'lists the ZUGFERD / XRECHNUNG formats to re-send as. Use dryRun to check all of this first. ' +
+      'Germany over Peppol: set countrySpecific.de.invoiceFormat=PEPPOL (or store PEPPOL as the customer\'s or entity\'s default de invoice format) ' +
+      'to send a Peppol BIS Billing 3.0 invoice to the buyer over the Peppol network; the response carries documentFormat UBL_PEPPOL_BIS and ' +
+      'delivery { channel: NETWORK, receiver, evidence }, and the status is PENDING (never ACCEPTED at generation), becoming DELIVERED once the receiving access point confirms. ' +
+      'A customer that cannot be reached is stored NEEDS_INFO (HTTP 200) with error PEPPOL_CUSTOMER_UNREACHABLE (reason NO_CUSTOMER_PEPPOL_ID or NOT_REGISTERED_ON_PEPPOL): ' +
+      'there is no silent fallback, and error.alternatives[] lists the formats to re-send as (each with a resend fragment that includes correctsInvoiceId) plus error.evidence. ' +
+      'A German buyer\'s Peppol address is never derived from a VAT number: send customer.electronicAddress (schemeId + value) or reference a stored confirmed Peppol participant ID. ' +
+      'For German XRechnung and Peppol invoices the customer\'s stored references fill in only when the request has no explicit value: a stored confirmed Peppol participant ID ' +
+      'supplies the customer Peppol address, and a stored LEITWEG_ID supplies the Leitweg-ID (when neither countrySpecific.de.leitwegId nor buyerReference is sent). ' +
+      'Other codes: PEPPOL_SCHEMATRON_VALIDATION_FAILED / XRECHNUNG_SCHEMATRON_VALIDATION_FAILED (the generated document failed its own rule check), ' +
+      'VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes cannot go over Peppol for Singapore, Japan or the UAE; ' +
+      'Germany and the other Peppol countries support them, and a credit note must reverse a previously accepted invoice in full). ' +
+      'Self-billed German invoices cannot use PEPPOL: DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). ' +
+      'dryRun=true on a German PEPPOL invoice runs the real content rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
       'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
       'a failure is answered HTTP 200 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
       'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
@@ -4861,6 +4891,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
   }
 }
 
+/** True when submit_invoice answered 200 with a stored outcome that means the document was NOT sent (REJECTED / NEEDS_INFO). */
+function isUnsentSendOutcome(toolName: string, result: unknown): boolean {
+  if (toolName !== 'submit_invoice') return false;
+  if (!result || typeof result !== 'object') return false;
+  const outcome = (result as { outcome?: unknown }).outcome;
+  return outcome === 'REJECTED' || outcome === 'NEEDS_INFO';
+}
+
 const server = new Server(
   { name: 'clearvo', version: '0.1.0' },
   { capabilities: { tools: {} } }
@@ -4886,6 +4924,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await handleTool(name, (args ?? {}) as Record<string, unknown>);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      // A stored REJECTED or NEEDS_INFO document is HTTP 200 but was not sent: flag it so an agent does not treat it as
+      // delivered. The full body stays in the text so the fix (errors[], nextStep) is still readable.
+      ...(isUnsentSendOutcome(name, result) ? { isError: true } : {}),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
