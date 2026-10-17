@@ -5,7 +5,8 @@ import type {
   CreateEntityInput,
   CreateEntityResponse,
   UpdateEntityInput,
-  InvoiceSubmitResponse,
+  SendResult,
+  SubmitInvoiceOptions,
   InvoiceStatusResponse,
   ListInvoicesParams,
   ListInvoicesResponse,
@@ -184,7 +185,7 @@ import type {
   FilingUploadTemplate,
   FilingUploadTemplateFormat,
 } from './types.js';
-import { ClearvoError } from './types.js';
+import { ClearvoError, isRejected } from './types.js';
 import type { ClearvoErrorBody } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
@@ -215,11 +216,13 @@ function entityHeaders(entityId?: string): Record<string, string> | undefined {
 export class ClearvoClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly throwOnRejected: boolean;
 
   constructor(options: ClearvoClientOptions) {
     if (!options.apiKey) throw new Error('apiKey is required');
     this.apiKey = options.apiKey;
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+    this.throwOnRejected = options.throwOnRejected ?? true;
   }
 
   private async request<T>(
@@ -284,13 +287,35 @@ export class ClearvoClient {
    * 409 IDEMPOTENT_BODY_MISMATCH (unless the earlier attempt is NEEDS_INFO or REJECTED, which re-run
    * in place). Reusing your key for a DIFFERENT document is no longer a 409: the send is processed and the response carries the
    * warning IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS (a document lacking identity fields gets NO_IDENTITY_NO_DEDUP).
-   * A 200 means the document is STORED, not accepted: read `outcome`, `status`, `statusClass` and `terminal`, and act on
+   * A 200 means the document is STORED, not accepted: read `outcome`, `clearanceStatus`, `statusClass` and `terminal`, and act on
    * `nextStep` for a hold. Poll getInvoiceStatus until terminal, or subscribe to the `invoice.status_changed` webhook.
+   *
+   * A rejection is a stored outcome and answers 200 with `ok: false`. With `throwOnRejected` true (the default for this SDK major,
+   * set on the client or per call) a REJECTED or NEEDS_INFO outcome throws a {@link ClearvoError} (status 422, `code`, `errors`,
+   * and the whole body on `body`), as it did before the 200 flip. With false it returns the body. 4xx and 5xx always throw: 400
+   * malformed, 401/403 auth or plan, 409 edited resend, 429 rate limit, 503 INGEST_UNAVAILABLE (nothing stored: retry with the same body).
    */
-  submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string): Promise<InvoiceSubmitResponse> {
+  async submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string, options: SubmitInvoiceOptions = {}): Promise<SendResult> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;
-    return this.request('POST', '/send', input, headers);
+    const result = await this.request<SendResult>('POST', '/send', input, headers);
+    if ((options.throwOnRejected ?? this.throwOnRejected) && isRejected(result)) throw this.rejectionError(result);
+    return result;
+  }
+
+  /** The ClearvoError for a stored REJECTED / NEEDS_INFO outcome: status 422, as before the 200 flip. */
+  private rejectionError(result: SendResult): ClearvoError {
+    const data = result as unknown as ClearvoErrorBody;
+    const err = result.error;
+    return new ClearvoError(
+      422,
+      String(err?.message ?? err?.code ?? `Document ${result.outcome ?? result.clearanceStatus}`),
+      typeof data.hint === 'string' ? data.hint : undefined,
+      typeof err?.field === 'string' ? err.field : undefined,
+      err?.code,
+      result.errors,
+      data
+    );
   }
 
   getInvoiceStatus(referenceId: string, country: string): Promise<InvoiceStatusResponse> {

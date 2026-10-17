@@ -19,6 +19,7 @@
     "test:supplier-tools": "node scripts/verify-supplier-tools.js",
     "test:rules-engine-tools": "node scripts/verify-rules-engine-tools.js",
     "test:filings-tools": "node scripts/verify-filings-tools.js",
+    "test:send-contract": "node scripts/verify-send-contract.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch"
   },

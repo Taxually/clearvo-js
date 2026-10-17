@@ -48,3 +48,6 @@ jobs:
 
       - name: Build all packages
         run: npm run build
+
+      - name: Send contract check (MCP submit_invoice returns the 200 body)
+        run: npm run test:send-contract --workspace packages/mcp
