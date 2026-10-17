@@ -434,99 +434,111 @@ const TOOLS = [
     description:
       'Submit a B2B invoice to a national tax authority for clearance or registration. ' +
       'Required in Italy (SDI), Poland (KSeF), Romania (ANAF), Spain (SII or VeriFactu — ' +
-      'whichever this entity\'s reporting obligations enrolled it in; the two are mutually ' +
+      'whichever this entity\'s Jurisdictions setup enrolled it in; the two are mutually ' +
       'exclusive per entity, resolved automatically, never chosen by the caller), ' +
       'Hungary (NAV), Greece (myDATA), and 20+ other countries. Also routes via Peppol for ' +
       'countries using the 4-corner network (Belgium, Netherlands, Germany B2G, etc.). ' +
+      'E-Invoicing is an Enterprise product that is switched on per account: without it the call fails with HTTP 403 solution_not_enabled ' +
+      '(no upgradeUrl; nothing is submitted) unless a reporting obligation already owed is open. Tell the user to contact us to add it, and check ' +
+      'solutionAccess in get_setup_status. ' +
       'Returns a referenceId — call poll_status to track the clearance outcome. Every ' +
-      'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED), ' +
-      '`mandate`, and `reviewRequired`. A transaction the tax-mandate engine cannot map to any ' +
+      'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED/NO_OBLIGATION, plus PROCESSING for a stored document that is not processed yet and NEEDS_ACTION when only the sender can move it), ' +
+      '`mandate`, `reviewRequired`, `statusClass` and `nextStep`. A 200 means the document is STORED, not that it was accepted: ' +
+      'a well-formed document is always stored first, and a validation failure, a missing setup or a not-yet-supported country becomes a status on the stored record, not a lost request. ' +
+      'Read `outcome`, `clearanceStatus`, `statusClass` (IN_FLIGHT: Clearvo is working on it; WAIT_MERCHANT: you or the user can fix it, and it never expires; WAIT_PLATFORM: Clearvo resolves it, nothing for you to do; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `terminal`. ' +
+      'When the document is held (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION, ...), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
+      'Held documents are released automatically once the cause is fixed; poll_status (or an invoice.status_changed webhook) shows the move. ' +
+      'A document for a country that is not enabled for your account yet (including live Portugal submissions) is stored 200 HELD_AWAITING_AUTHORIZATION: it is held and released automatically once the country is enabled for your account, so there is nothing to resend; a document dated before a mandate\'s support start is NOT_SUPPORTED (final, never submitted later). ' +
+      'A response of clearanceStatus RECEIVED means stored and still being processed: keep its `id`, and call poll_status or get_invoice to follow it. ' +
+      'RECEIVED with a PROCESSING_DELAYED warning means a temporary problem interrupted processing after the document was stored: do not resend, Clearvo re-runs it; follow it with poll_status. ' +
+      'ACCUMULATED (France e-reporting, Spain SII batches) is a 200 too, not a 202. ' +
+      'Error bodies that store the document also carry its `id`. warnings[] can include IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS (an x-idempotency-key reused for a different document never blocks it: it is processed under its own identity, so use a distinct key per document or omit it) and NO_IDENTITY_NO_DEDUP (no invoice identity to deduplicate on: a blind retry stores a second record). ' +
+      'HTTP 4xx is only for a malformed request, an authentication or plan problem, a rate limit (429) and the 409 below; 5xx only when nothing could be stored (503 INGEST_UNAVAILABLE, retry). An edited resend of an already-processed document is refused with 409 IDEMPOTENT_BODY_MISMATCH: send a correction or a credit note instead. A transaction the tax-mandate engine cannot map to any ' +
       'country\'s compliance rule (a configuration gap, never a data problem with this specific ' +
       'invoice) is held as `HELD_UNMAPPED_DECISION` for ANY country — not Spain-specific — with ' +
       '`holdReason`/`actionOwner` (\'platform\') attached; a Spain SII submission additionally ' +
-      'carries `siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate), `reportBy` ' +
-      '(the AEAT deadline) and its own held/actionOwner when applicable — never the AEAT CSV, which ' +
-      'only exists once AEAT answers (see get_invoice\'s siiDetail). When the entity\'s es_sii ' +
-      'submissionMode is batch_auto or batch_review the response is 202 ACCUMULATED with `batchId`, ' +
-      '`reportBy` and `submissionMode` — the registro joined a reporting batch instead of going to AEAT ' +
-      'right away (see list_reporting_batches). ' +
+      'carries `siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate) and ' +
+      'its own held/actionOwner when applicable — never the AEAT CSV, which only exists once P2 ' +
+      'gets a real AEAT answer (see get_invoice\'s own siiDetail). ' +
+      'The issuing company on a sale is this entity and is never supplied by the caller: omit `supplier` entirely and its name, tax ID, address and contact come from the Business Profile (on a purchase the entity is the customer and `supplier` is the vendor you pass). ' +
+      'If the profile is incomplete the document is stored NEEDS_INFO (HTTP 200) with error MISSING_SUPPLIER_DATA and a fixUrl — ask the user to complete the Business Profile; do not invent or copy an address. ' +
+      'A response outcome of CLEARED means accepted for dispatch to the authority, not final authority clearance: always follow with poll_status, which carries the authority\'s own answer. PROCESSING is not an answer: keep the `id` and poll. `ok` is false for REJECTED, NEEDS_INFO, SETUP_NEEDED and HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. NEEDS_ACTION (UNROUTABLE) is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is HELD. ' +
       'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
       'resolved country is applied automatically (an entity can hold registrations in more than ' +
       'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
       'country). If supplied, it must match that registered tax ID exactly (a country prefix ' +
-      'is stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH ' +
-      '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). A Spain SII/VeriFactu invoice for ' +
-      'an entity with no current Spanish registration is held NEEDS_INFO (errorCode ' +
-      'MISSING_SUPPLIER_REGISTRATION, fixUrl) — add the registration, then resubmit. ' +
+      'is stripped before comparing) or it is stored REJECTED (HTTP 200) with error SUPPLIER_TAX_ID_MISMATCH ' +
+      '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). ' +
+      'A Spain SII/VeriFactu invoice for an entity with no current Spanish registration is stored NEEDS_INFO (errorCode ' +
+      'MISSING_SUPPLIER_REGISTRATION, fixUrl): add the registration, then resubmit. A Spain SII submission also carries `reportBy` ' +
+      '(the AEAT deadline); when the entity\'s es_sii submissionMode is batch_auto or batch_review the response is 200 ACCUMULATED ' +
+      'with `batchId`, `reportBy` and `submissionMode`: the registro joined a reporting batch instead of going to AEAT right away (see list_reporting_batches). ' +
       'Spain VeriFactu covers the Canary Islands: Clearvo registers Canary Islands (IGIC) invoices with the AEAT under ' +
       'the same Spanish tax number (it does not file IGIC returns or the Canary SII, and does not support IPSI). Set ' +
-      'es_tax_territory (mainland | canary_islands | both) on the Spanish registration first (update_registration) — an ' +
-      'IGIC line without it fails VERIFACTU_TAX_TERRITORY_REQUIRED. An original invoice with no customer.taxId and a ' +
+      'es_tax_territory (mainland | canary_islands | both) on the Spanish registration first (update_registration): an ' +
+      'IGIC line without it is stored with the error VERIFACTU_TAX_TERRITORY_REQUIRED. An original invoice with no customer.taxId and a ' +
       'total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); above EUR 3,000 it needs ' +
       'countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion. A buyer with ' +
       'a passport or residence document needs countrySpecific.es.customerIdType. VeriFactu applies from 2027-01-01 ' +
       '(corporate-tax payers) and 2027-07-01 (everyone else); sandbox invoices must be dated on or after 2027-01-01. ' +
       'Set countrySpecific.peppol.selfBilling=true for a self-billed invoice (you, the customer, ' +
-      'issuing on the real seller\'s behalf) — supplier then identifies that real seller (required; ' +
+      'issuing on the real seller\'s behalf): supplier then identifies that real seller (required; ' +
       'supplierRef resolves a saved one) and customer becomes your OWN entity\'s identity instead ' +
       '(auto-derived, tax-ID-checked). See supplier/customer/countrySpecific.peppol.selfBilling below ' +
       'for the full behavior. ' +
-      'Germany over Peppol: set countrySpecific.de.invoiceFormat=PEPPOL (or store PEPPOL as the customer\'s or ' +
-      'entity\'s default de invoice format) to send a Peppol BIS Billing 3.0 invoice to the buyer over the Peppol network. ' +
-      'It needs the seller\'s confirmed Peppol ID (else 422 MISSING_SELLER_PEPPOL_ID), an EXPLICIT Peppol address for the ' +
-      'customer (customer.electronicAddress with schemeId + value, or a confirmed Peppol participant ID reference on the stored ' +
-      'customer — a German buyer\'s address is never derived from a VAT number), and a buyerReference or orderReference. ' +
-      'The response carries documentFormat UBL_PEPPOL_BIS and delivery { channel: NETWORK, receiver, evidence }; status is ' +
-      'PENDING (never ACCEPTED at generation) and becomes DELIVERED once the receiving access point confirms. ' +
-      'An unreachable buyer fails 422 PEPPOL_CUSTOMER_UNREACHABLE (reason NO_CUSTOMER_PEPPOL_ID or NOT_REGISTERED_ON_PEPPOL): ' +
-      'the invoice is stored NEEDS_INFO, there is no silent fallback, and error.alternatives[] lists the formats to re-send as ' +
-      '(each with a resend fragment that includes correctsInvoiceId) plus error.evidence. Other codes: ' +
-      'PEPPOL_SCHEMATRON_VALIDATION_FAILED / XRECHNUNG_SCHEMATRON_VALIDATION_FAILED (the generated document failed its own ' +
-      'rule check), VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes ' +
-      'cannot yet go over Peppol for Singapore, Japan or the UAE; Germany and the other Peppol countries support them, and a ' +
-      'credit note must reverse a previously accepted invoice in full — partial credit notes over Peppol are not supported yet). Self-billed German invoices cannot use PEPPOL: ' +
-      '400 DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a ' +
-      'stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). dryRun=true on a German PEPPOL invoice runs the real content ' +
-      'rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
-      'For German XRechnung and Peppol invoices the customer\'s stored references fill in only when the request has no ' +
-      'explicit value: a stored confirmed Peppol participant ID supplies the customer Peppol address (when customer.electronicAddress ' +
-      'is not sent) and a stored LEITWEG_ID supplies the Leitweg-ID (when neither countrySpecific.de.leitwegId nor ' +
-      'buyerReference is sent). Both customer and seller need an electronic address (BT-49 / BT-34); without one the call fails ' +
-      'before any XML is generated with MISSING_CUSTOMER_ELECTRONIC_ADDRESS or MISSING_SUPPLIER_ELECTRONIC_ADDRESS (ERROR severity). ' +
-      'Hungary (NAV) requires a valid Hungarian tax number and street address for the supplier, ' +
-      'and — for any customer that is not a private individual — a customer street address plus (only ' +
-      'if a Hungarian tax number is given at all) a validly-formatted one. As of 2026-09-14 any of ' +
-      'these being missing or malformed fails with 422 (MISSING_HU_SUPPLIER_TAX_NUMBER, ' +
-      'MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_CUSTOMER_TAX_NUMBER, MISSING_HU_CUSTOMER_ADDRESS) rather ' +
-      'than a silent 200 NEEDS_INFO hold — the same behavior change applies to Germany\'s three ' +
-      'XRechnung mandatory-field gates (MISSING_LEITWEG_ID, MISSING_DE_XRECHNUNG_SELLER_CONTACT, ' +
-      'DE_XRECHNUNG_BIC_FORBIDDEN). An explicit customerType: \'B2C\' always maps this HU customer to NAV\'s ' +
-      'PRIVATE_PERSON classification regardless of the customer\'s own country, exempting it from the ' +
-      'customer-address requirement above. ' +
-      'A request that still carries any of the retired `buyer`, `buyerType`, `lines[].buyerType`, ' +
-      '`notifyBuyer`, or `countrySpecific.*.buyer*` keys (e.g. `countrySpecific.pl.buyerNip`) is rejected ' +
-      'with 422 `{ ok: false, error: { code, message }, errors: [{ path, errorCode, message }] }` — each entry carries ' +
-      '`code: "UNKNOWN_FIELD_BUYER_RENAMED"` and a `message` naming the exact `customer`-named ' +
-      'replacement — there is no silent alias. ' +
-      'Line items carry `taxRate` and `taxAmount` (the platform is global — no tax-type-specific field names). A request ' +
-      'that still uses the retired `lines[].vatRate` or `lines[].vatAmount` keys is rejected with 422 ' +
-      '`{ error, details: [{ field, code: "UNKNOWN_FIELD_VAT_RENAMED", message }] }` naming the `tax`-named replacement — ' +
-      'there is no silent alias. The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), ' +
-      '`unitOfMeasure` and `sellerItemId` — the retired `discount`/`unit`/`itemCode`/`exemption` line keys are rejected with 422 ' +
-      '`code: "UNKNOWN_FIELD_LINE_RENAMED"` the same way. ' +
+      'Hungary (NAV) additionally requires a valid Hungarian tax number (adószám) and street ' +
+      'address for the supplier, and — for any customer that is not a private individual — a ' +
+      'customer street address plus (only if a Hungarian tax number is given at all) a validly-' +
+      'formatted one; any of these being missing or malformed is stored with the error ' +
+      '(MISSING_HU_SUPPLIER_TAX_NUMBER, MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_CUSTOMER_TAX_NUMBER, ' +
+      'MISSING_HU_CUSTOMER_ADDRESS) rather than a silent NEEDS_INFO hold. A non-HUF Hungarian ' +
+      'invoice additionally requires countrySpecific.hu.exchangeRate (error ' +
+      'MISSING_HU_EXCHANGE_RATE if omitted, INVALID_HU_EXCHANGE_RATE if not a positive number); ' +
+      'countrySpecific.hu.invoiceAppearance, if supplied, must be one of PAPER/ELECTRONIC/EDI/' +
+      'UNKNOWN (error INVALID_HU_INVOICE_APPEARANCE otherwise) and otherwise defaults to PAPER for ' +
+      'a private-individual customer, ELECTRONIC for every other customer. ' +
+      'Germany (DE) generates ZUGFeRD (a PDF/A-3 hybrid, platform default) or XRechnung (a bare ' +
+      'UBL XML) depending on this entity\'s own format setup — XRechnung additionally requires a ' +
+      'Leitweg-ID or customer reference (BT-10: buyerReference, or countrySpecific.de.leitwegId) plus ' +
+      'a seller contact name/phone/email, and forbids a BIC/SWIFT code; any of these being missing ' +
+      'or malformed for a resolved-XRechnung invoice is stored with the error (MISSING_LEITWEG_ID, ' +
+      'MISSING_DE_XRECHNUNG_SELLER_CONTACT, DE_XRECHNUNG_BIC_FORBIDDEN) rather than a silent NEEDS_INFO hold. ' +
+      'XRechnung and Peppol also need a customer electronic address (BT-49), taken from the first available of: ' +
+      'customer.electronicAddress (value + schemeId), the Leitweg-ID (only if it is a valid Leitweg-ID, not a free-text reference), customer.contact.email, the customer\'s German VAT ID ' +
+      '(none of these: error MISSING_CUSTOMER_ELECTRONIC_ADDRESS). ' +
+      'The seller needs one too (BT-34): a confirmed Peppol ID, else the business contact email, else its German VAT ID (none: error MISSING_SUPPLIER_ELECTRONIC_ADDRESS). ' +
+      'Germany can also send the invoice over the Peppol network (countrySpecific.de.invoiceFormat PEPPOL): ' +
+      'the result is PENDING (then DELIVERED), it needs the seller\'s confirmed Peppol ID (else error ' +
+      'MISSING_SELLER_PEPPOL_ID), a buyerReference, seller contact, and seller/customer city and post code ' +
+      '(errors MISSING_LEITWEG_ID / MISSING_DE_XRECHNUNG_SELLER_CONTACT / MISSING_DE_PEPPOL_* otherwise), and an explicit Peppol address for the customer — a German customer ' +
+      'is never derived from a VAT number, so without one the document is stored NEEDS_INFO (HTTP 200) with an unreachable-customer code and ' +
+      'lists the ZUGFERD / XRECHNUNG formats to re-send as. Use dryRun to check all of this first. ' +
+      'Germany over Peppol: set countrySpecific.de.invoiceFormat=PEPPOL (or store PEPPOL as the customer\'s or entity\'s default de invoice format) ' +
+      'to send a Peppol BIS Billing 3.0 invoice to the buyer over the Peppol network; the response carries documentFormat UBL_PEPPOL_BIS and ' +
+      'delivery { channel: NETWORK, receiver, evidence }, and the status is PENDING (never ACCEPTED at generation), becoming DELIVERED once the receiving access point confirms. ' +
+      'A customer that cannot be reached is stored NEEDS_INFO (HTTP 200) with error PEPPOL_CUSTOMER_UNREACHABLE (reason NO_CUSTOMER_PEPPOL_ID or NOT_REGISTERED_ON_PEPPOL): ' +
+      'there is no silent fallback, and error.alternatives[] lists the formats to re-send as (each with a resend fragment that includes correctsInvoiceId) plus error.evidence. ' +
+      'A German buyer\'s Peppol address is never derived from a VAT number: send customer.electronicAddress (schemeId + value) or reference a stored confirmed Peppol participant ID. ' +
+      'For German XRechnung and Peppol invoices the customer\'s stored references fill in only when the request has no explicit value: a stored confirmed Peppol participant ID ' +
+      'supplies the customer Peppol address, and a stored LEITWEG_ID supplies the Leitweg-ID (when neither countrySpecific.de.leitwegId nor buyerReference is sent). ' +
+      'Other codes: PEPPOL_SCHEMATRON_VALIDATION_FAILED / XRECHNUNG_SCHEMATRON_VALIDATION_FAILED (the generated document failed its own rule check), ' +
+      'VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes cannot go over Peppol for Singapore, Japan or the UAE; ' +
+      'Germany and the other Peppol countries support them, and a credit note must reverse a previously accepted invoice in full). ' +
+      'Self-billed German invoices cannot use PEPPOL: DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). ' +
+      'dryRun=true on a German PEPPOL invoice runs the real content rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
       'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
-      'a failure returns 422 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
+      'a failure is answered HTTP 200 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
       'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
-      'Correct it and resend the same invoiceNumber. If the validation rules cannot be loaded the call returns 503 VALIDATION_RULES_UNAVAILABLE ' +
-      'with nothing stored: retry with the same idempotency key. GET /v1/validations lists every code. ' +
-      'Call get_requirements first if unsure what fields are needed for a country. ' +
+      'Correct it and resend the same invoiceNumber. GET /v1/validations lists every code. ' +
+      'Romania also needs a payment due date (dueDate) or payment terms (payment.terms.text) on an invoice with an amount to pay (ANAF rule BR-CO-25); without one the document is stored with the error MISSING_PAYMENT_DUE_DATE_OR_TERMS. A fully prepaid invoice (prepaidAmount covering the total) needs neither. ' +
+      'Call get_requirements first if unsure what fields are needed for a country.' +
       'There is no taxCode field on a line — the EN16931 category is always a resolved OUTPUT, never ' +
       'caller-supplied. Instead: pass clientTaxCode (RECOMMENDED — your own ERP code, mapped in advance via ' +
       'create_client_tax_code / list_tax_codes), or an AUTHORITATIVE taxTreatment (exempt/out_of_scope/zero_rated/' +
       'reverse_charge) for a line with no configured code — a stated taxTreatment is mapped as-is, never overridden ' +
       'by country inference. A positive taxRate with neither is reported as a domestic taxable supply at that rate ' +
-      '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is rejected ' +
-      'with 400 ZERO_RATE_NEEDS_TAX_TREATMENT — state exempt/zero_rated/reverse_charge or a clientTaxCode. An unrecognised ' +
+      '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held NEEDS_INFO ' +
+      'asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode. An unrecognised ' +
       'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
       'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
       'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
@@ -535,10 +547,10 @@ const TOOLS = [
       properties: {
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 destination country (e.g. "IT", "PL", "DE")' },
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
-        companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a code not valid on the transaction\'s own invoice/tax-point date (outside its validFrom/validTo window) fails with 422 company_code_not_valid_on_date (an entity default outside its window is not applied: source "none" plus a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
+        companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
-        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the call fails with 422 TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the invoice is stored with the error TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
         exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReporting — supply one or the other, never both.' },
         taxReporting: {
           type: 'object',
@@ -552,10 +564,10 @@ const TOOLS = [
         },
         supplier: {
           type: 'object',
-          description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef fails with 422 MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
+          description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef is stored with the error MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
           properties: {
             name: { type: 'string' },
-            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the call fails with 422 SUPPLIER_TAX_ID_MISMATCH. Does not apply on a self-billed invoice, where this is the real seller\'s own tax ID, taken as supplied.' },
+            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the invoice is stored with the error SUPPLIER_TAX_ID_MISMATCH. Does not apply on a self-billed invoice, where this is the real seller\'s own tax ID, taken as supplied.' },
             address: {
               type: 'object',
               properties: {
@@ -575,7 +587,7 @@ const TOOLS = [
         },
         customer: {
           type: 'object',
-          description: 'The customer receiving the invoice. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this is instead your OWN entity\'s identity (the buyer being self-billed for) — auto-derived when omitted, tax-ID-compared against your own registration the same way supplier normally is (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch), and its Peppol endpoint identity backfilled from your entity\'s own confirmed Peppol Participant ID when omitted.',
+          description: 'The customer receiving the invoice. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this is instead your OWN entity\'s identity (the buyer being self-billed for) — auto-derived when omitted, tax-ID-compared against your own registration the same way supplier normally is (stored with the error CUSTOMER_TAX_ID_MISMATCH on a mismatch), and its Peppol endpoint identity backfilled from your entity\'s own confirmed Peppol Participant ID when omitted.',
           properties: {
             name: { type: 'string', description: 'Customer name. Required everywhere except a Spain VeriFactu simplified invoice (F2/R5, no customer identification), where it is optional.' },
             taxId: { type: 'string', description: 'Customer VAT number — strongly recommended for B2B to enable reverse charge treatment. Spain VeriFactu: a full invoice (F1) must identify the customer here (Spanish NIF, EU VAT number, or a passport/residence document together with countrySpecific.es.customerIdType and customer.establishmentCountry); with none, an original invoice up to EUR 400 to a non-business customer is issued as a simplified invoice (F2).' },
@@ -621,8 +633,8 @@ const TOOLS = [
               description: { type: 'string' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number', description: 'Unit price excluding tax' },
-              taxRate: { type: 'number', description: 'REQUIRED. Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales tax alike. Always required, even when clientTaxCode is supplied — missing or out of range is a 400 naming this field. Replaces the retired vatRate (rejected with 422 UNKNOWN_FIELD_VAT_RENAMED). A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT — state exempt/zero_rated/reverse_charge or a clientTaxCode; it is never guessed.' },
-              taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (rejected with 422 UNKNOWN_FIELD_VAT_RENAMED).' },
+              taxRate: { type: 'number', description: 'REQUIRED. Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales tax alike. Always required, even when clientTaxCode is supplied — missing or out of range is a 400 naming this field. Replaces the retired vatRate (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED). A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is held NEEDS_INFO asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode; it is never guessed.' },
+              taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED).' },
               clientTaxCode: {
                 type: 'string',
                 description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
@@ -630,22 +642,22 @@ const TOOLS = [
               taxTreatment: {
                 type: 'string',
                 enum: ['exempt', 'out_of_scope', 'zero_rated', 'reverse_charge'],
-                description: 'Explicit, AUTHORITATIVE tax treatment for this line, used when clientTaxCode is omitted — it is mapped as-is, never overridden by country inference. REQUIRED whenever the line is 0% and has no clientTaxCode (a bare 0% is rejected with 400 ZERO_RATE_NEEDS_TAX_TREATMENT); a positive rate with no treatment maps to a domestic taxable supply at that rate. Cross-border/exempt/reverse-charge must be stated here, never inferred. Mutually exclusive with clientTaxCode.',
+                description: 'Explicit, AUTHORITATIVE tax treatment for this line, used when clientTaxCode is omitted — it is mapped as-is, never overridden by country inference. REQUIRED whenever the line is 0% and has no clientTaxCode (a bare 0% is held NEEDS_INFO asking why it is zero); a positive rate with no treatment maps to a domestic taxable supply at that rate. Cross-border/exempt/reverse-charge must be stated here, never inferred. Mutually exclusive with clientTaxCode.',
               },
               customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Per-line override of the invoice-level customerType, consulted only when this line has no clientTaxCode.' },
               supplyType: { type: 'string', enum: ['goods', 'digital_service', 'general_service'], description: 'Consulted only when this line has no clientTaxCode — affects reverse-charge/place-of-supply treatment for cross-border B2B services. Defaults to "goods".' },
               lineNumber: { type: 'number', description: 'Optional 1-based position of this line on the invoice. Defaults to its index in lines[].' },
-              discountPercent: { type: 'number', description: 'Line discount as a percentage (0–100). Mutually exclusive with discountAmount — set at most one. Replaces the retired `discount` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
+              discountPercent: { type: 'number', description: 'Line discount as a percentage (0–100). Mutually exclusive with discountAmount — set at most one. Replaces the retired `discount` (stored REJECTED with UNKNOWN_FIELD_LINE_RENAMED).' },
               discountAmount: { type: 'number', description: 'Line discount as an absolute amount in the invoice currency, always positive. Mutually exclusive with discountPercent — set at most one.' },
-              unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
-              sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (rejected with 422 UNKNOWN_FIELD_LINE_RENAMED).' },
+              unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit` (stored REJECTED with UNKNOWN_FIELD_LINE_RENAMED).' },
+              sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (stored REJECTED with UNKNOWN_FIELD_LINE_RENAMED).' },
             },
             required: ['description', 'quantity', 'unitPrice', 'taxRate'],
           },
         },
         totalAmount: { type: 'number', description: 'Net total excluding tax' },
         taxAmount: { type: 'number', description: 'Total tax amount' },
-        documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note". Over Peppol a credit note reverses a previously accepted invoice in full (no partial credit notes yet) and a debit note is sent as an invoice marked as a debit note; not yet available for Singapore, Japan or the UAE (422 CREDIT_NOTE_PEPPOL_UNSUPPORTED).' },
+        documentType: { type: 'string', enum: ['invoice', 'credit_note', 'debit_note'], description: 'Optional: "invoice" (default), "credit_note", or "debit_note". Over Peppol a credit note reverses a previously accepted invoice in full (no partial credit notes yet) and a debit note is sent as an invoice marked as a debit note; not yet available for Singapore, Japan or the UAE (stored with the error CREDIT_NOTE_PEPPOL_UNSUPPORTED).' },
         clientTaxCode: {
           type: 'string',
           description: 'RECOMMENDED. Header-level counterpart to lines[].clientTaxCode — applied to every line that supplies neither its own taxTreatment/taxRate nor its own lines[].clientTaxCode; a line\'s own value always wins.',
@@ -653,7 +665,7 @@ const TOOLS = [
         customerType: { type: 'string', enum: ['B2B', 'B2C'], description: 'Optional customer classification for the whole invoice — business vs. consumer. Can be overridden per line. Hungary (NAV): an explicit \'B2C\' always resolves to NAV\'s PRIVATE_PERSON customer classification regardless of the customer\'s own country, which also exempts the customer from HU\'s mandatory street-address requirement.' },
         buyerReference: {
           type: 'string',
-          description: 'Buyer reference (EN16931 BT-10). Required by German XRechnung (the Leitweg-ID for public-sector buyers) and by Peppol BIS Billing 3.0 unless orderReference is set — Germany over Peppol (DE-NRS) 422s without payment instructions and a buyer reference.',
+          description: 'Buyer reference (EN16931 BT-10). Required by German XRechnung (the Leitweg-ID for public-sector buyers) and by Peppol BIS Billing 3.0 unless orderReference is set — Germany over Peppol (DE-NRS) is stored with an error without payment instructions and a buyer reference.',
         },
         orderReference: { type: 'string', description: 'Purchase order number from the customer (EN16931 BT-13). For Peppol, either this or buyerReference must be present.' },
         payment: {
@@ -668,11 +680,11 @@ const TOOLS = [
                 properties: {
                   method: { type: 'string', enum: ['bank_transfer', 'direct_debit', 'credit_card', 'cash', 'check', 'other'], description: '"direct_debit" renders SEPA payment means (UBL/CII PaymentMeansCode 59) and REQUIRES mandateReference (BT-89) — Germany also requires creditorId and debitedIban (BT-90/91). Omit for a plain credit-transfer invoice (bank_transfer, the default).' },
                   iban: { type: 'string', description: 'Seller\'s IBAN for a bank_transfer invoice.' },
-                  bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the call fails with 422 DE_XRECHNUNG_BIC_FORBIDDEN.' },
+                  bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the invoice is stored with the error DE_XRECHNUNG_BIC_FORBIDDEN.' },
                   reference: { type: 'string', description: 'Payment reference/remittance information.' },
-                  mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the call fails 422 MANDATE_REFERENCE_TOO_LONG.' },
+                  mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the invoice is stored with the error MANDATE_REFERENCE_TOO_LONG.' },
                   creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
-                  debitedIban: { type: 'string', description: 'The CUSTOMER\'s own IBAN the SEPA direct debit draws from (BT-91). Must be a real IBAN (checksum-validated) — malformed input fails 422 INVALID_DEBITED_IBAN. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-31). Distinct from `iban` above, which is the seller\'s own account for a bank_transfer payment.' },
+                  debitedIban: { type: 'string', description: 'The CUSTOMER\'s own IBAN the SEPA direct debit draws from (BT-91). Must be a real IBAN (checksum-validated) — malformed input is stored with the error INVALID_DEBITED_IBAN. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-31). Distinct from `iban` above, which is the seller\'s own account for a bank_transfer payment.' },
                 },
               },
             },
@@ -774,11 +786,11 @@ const TOOLS = [
               properties: {
                 supplierTaxRegistered: {
                   type: 'boolean',
-                  description: 'Whether the supplier genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF). Omit to default to whether the taxId you sent carried the "RO" prefix; an unresolved supplier fails with 422 RO_SUPPLIER_TAX_REGISTRATION_STATUS_UNKNOWN.',
+                  description: 'Whether the supplier genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF). Omit to default to whether the taxId you sent carried the "RO" prefix; an unresolved supplier is stored with the error RO_SUPPLIER_TAX_REGISTRATION_STATUS_UNKNOWN.',
                 },
                 customerTaxRegistered: {
                   type: 'boolean',
-                  description: 'Whether the customer genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF, no registration) — decides whether RO emits cac:PartyTaxScheme or cac:PartyLegalEntity only. Omit to default to whether taxId carried the "RO" prefix; a bare id with no override on a B2B (or untyped) customer fails with 422 RO_CUSTOMER_TAX_REGISTRATION_STATUS_UNKNOWN. A customerType "B2C" customer safely defaults to unregistered instead.',
+                  description: 'Whether the customer genuinely holds an active VAT registration (a CUI, "RO" prefix) rather than a bare fiscal identifier (CIF, no registration) — decides whether RO emits cac:PartyTaxScheme or cac:PartyLegalEntity only. Omit to default to whether taxId carried the "RO" prefix; a bare id with no override on a B2B (or untyped) customer is stored with the error RO_CUSTOMER_TAX_REGISTRATION_STATUS_UNKNOWN. A customerType "B2C" customer safely defaults to unregistered instead.',
                 },
               },
             },
@@ -797,13 +809,13 @@ const TOOLS = [
               description: 'Germany ZUGFeRD/XRechnung fields, plus per-invoice overrides of the invoice-content-field-registry company-law facts (each falls back to the matching de_* extra_fields value on the entity\'s own DE tax registration when omitted — see update_registration).',
               properties: {
                 invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Highest-precedence override of which DE format this invoice generates (falls back to a stored per-customer default, then per-entity default, then platform default ZUGFERD). PEPPOL delivers a Peppol BIS Billing 3.0 invoice over the Peppol network (DE-NRS).' },
-                leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference, then to the customer\'s stored LEITWEG_ID reference (see create_customer references), when omitted. Missing all three on a resolved-XRechnung invoice fails 422 MISSING_LEITWEG_ID. The Leitweg-ID is only used as the customer electronic address if it passes check-digit validation.' },
+                leitwegId: { type: 'string', description: 'BT-10 German public-sector routing ID. XRECHNUNG only — falls back to the top-level buyerReference, then to the customer\'s stored LEITWEG_ID reference (see create_customer references), when omitted. Missing all three on a resolved-XRechnung invoice is stored with the error MISSING_LEITWEG_ID. The Leitweg-ID is only used as the customer electronic address if it passes check-digit validation.' },
                 legalForm: { type: 'string', description: 'DE legal-form select vocabulary (e.g. GMBH, UG, AG, SE, KGAA, EG, GMBH_CO_KG, AG_CO_KG, OHG, KG, EK, GBR, FREIBERUFLER, SOLE_TRADER, FOREIGN_BRANCH, OTHER) — case-sensitive. Gates whether the register-identity and managing-directors disclosure tiers below apply at all.' },
                 handelsregisternummer: { type: 'string', description: 'BT-30. HGB § 37a commercial-register number (e.g. "HRB 12345"). Required once legalForm is a Handelsregister-registered form — missing this, registergericht, or registeredSeat never blocks the send, it returns a non-terminal errorCode MISSING_DE_COMPANY_REGISTER_DETAILS (WARNING severity).' },
                 registergericht: { type: 'string', description: 'HGB § 37a register court (e.g. "Amtsgericht München") — see handelsregisternummer above for the shared MISSING_DE_COMPANY_REGISTER_DETAILS gate.' },
                 registeredSeat: { type: 'string', description: 'HGB § 37a Sitz (registered seat city) — may differ from the invoice/delivery address. See handelsregisternummer above for the shared gate.' },
                 geschaeftsfuehrer: { type: 'string', description: 'GmbHG § 35a / AktG § 80 managing-director or board-member names, one per line, for a legal form owing the "names tier" disclosure. Missing this never blocks the send — errorCode MISSING_DE_MANAGING_DIRECTORS, WARNING severity.' },
-                kleinunternehmer: { type: 'boolean', description: '§ 19 UStG small-business exemption flag. When true, no invoice line may carry a positive tax rate — a line that does fails 422 DE_KLEINUNTERNEHMER_CHARGES_VAT (a real VAT-invoice defect, unlike the company-law WARNINGs above).' },
+                kleinunternehmer: { type: 'boolean', description: '§ 19 UStG small-business exemption flag. When true, no invoice line may carry a positive tax rate — a line that does is stored with the error DE_KLEINUNTERNEHMER_CHARGES_VAT (a real VAT-invoice defect, unlike the company-law WARNINGs above).' },
               },
             },
           },
@@ -882,15 +894,17 @@ const TOOLS = [
   {
     name: 'poll_status',
     description:
-      'Check the clearance or submission status of an invoice previously submitted via submit_invoice. ' +
-      'Returns clearanceStatus: PENDING, ACCEPTED, REJECTED, DUPLICATE, UNROUTABLE, DELIVERED, UNDELIVERED, ' +
-      'NEEDS_INFO, SETUP_NEEDED, or HELD_UNMAPPED_TAX_CODE (a line\'s clientTaxCode/taxTreatment isn\'t configured ' +
-      'yet — see errorCode/message/reason on the original submit_invoice response, configure the code, then ' +
-      'resubmit under a new idempotency key). ' +
-      'NEEDS_INFO and SETUP_NEEDED are not dead ends: call submit_invoice again with correctsInvoiceId set to ' +
-      'this invoice\'s id (under a different invoiceNumber) once the underlying data or setup gap is fixed. ' +
+      'Check the status of a document previously submitted via submit_invoice. Reads the stored status only: it never calls the authority, so it is safe to repeat. ' +
+      'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns clearanceStatus, and `statusClass` which says who the document is waiting for: ' +
+      'IN_FLIGHT (RECEIVED = stored and still processing, PENDING, ACCUMULATED: wait, do nothing), ' +
+      'WAIT_MERCHANT (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
+      'WAIT_PLATFORM (HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
+      'DONE_OK (ACCEPTED, DELIVERED, CANCELLED), DONE_REJECTED (REJECTED: see errors and nextStep) and DONE_NA (NO_MANDATE, EXCLUDED, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
+      'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
+      'or resend the corrected document to POST /v1/send with the same invoice number. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
-      'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate.',
+      'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate. ' +
+      'To be told instead of polling, subscribe with create_webhook to invoice.status_changed.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1623,7 +1637,7 @@ const TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices (including ingestedAt) plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt), plus `statusClass` (IN_FLIGHT: wait; WAIT_MERCHANT: you can fix it; WAIT_PLATFORM: Clearvo resolves it; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
@@ -1720,7 +1734,7 @@ const TOOLS = [
     name: 'list_webhooks',
     description:
       'List registered webhook endpoints for this account. ' +
-      'Shows URLs, subscribed event types, and entity scope for each webhook.',
+      'Shows URLs, subscribed event types, entity scope and, for a webhook subscribed to invoice.status_changed, its `statuses` filter (empty or missing means every status change) for each webhook.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1737,6 +1751,7 @@ const TOOLS = [
       'payload authenticity via HMAC-SHA256. ' +
       'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
       'invoice.pending, product.classification_changed, ' +
+      'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, statusClass, terminal, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
       'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
       'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
@@ -1749,10 +1764,15 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         url: { type: 'string', description: 'HTTPS endpoint URL to deliver events to. Must be a public address: no credentials in the URL, no internal or private addresses, and redirects are not followed.' },
+        statuses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["NEEDS_INFO","REJECTED","ACCEPTED"]), matched on the new status. Omit or leave empty for every status change. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
+        },
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events. Options: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
+          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
         },
       },
       required: ['url'],
@@ -1775,12 +1795,14 @@ const TOOLS = [
       'Send a signed test event to one of your webhook endpoints, to check it is reachable, verifies the signature and returns 2xx. ' +
       'The request is built and signed exactly like a real delivery (x-taxually-signature, x-taxually-timestamp) and carries "test": true. ' +
       'It is sent once with no retries; the response says whether your endpoint accepted it (delivered, status, durationMs, any error) and includes the exact payload sent. ' +
-      'Nothing is stored and no real invoice changes. Pass invoiceId to build the payload from one of your own invoices instead of sample values.',
+      'Nothing is stored and no real invoice changes. Pass invoiceId to build the payload from one of your own invoices instead of sample values. ' +
+      'To rehearse a status change, use event invoice.status_changed and set `to` to the status you want to see (for example NEEDS_INFO).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         webhookId: { type: 'string', description: 'The webhook ID to test (from list_webhooks or create_webhook)' },
-        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending or invoice.business_status_changed' },
+        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.business_status_changed or invoice.status_changed' },
+        to: { type: 'string', description: 'Only with event invoice.status_changed: the new status the sample reports, e.g. NEEDS_INFO, SETUP_NEEDED, ACCEPTED. Default: the invoice\'s own status, else ACCEPTED. Any other event with `to` is a 400.' },
         invoiceId: { type: 'string', description: 'Optional: the ID of one of your invoices (from list_invoices) to build the test payload from' },
       },
       required: ['webhookId'],
@@ -4869,6 +4891,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
   }
 }
 
+/** True when submit_invoice answered 200 with a stored outcome that means the document was NOT sent (REJECTED / NEEDS_INFO). */
+function isUnsentSendOutcome(toolName: string, result: unknown): boolean {
+  if (toolName !== 'submit_invoice') return false;
+  if (!result || typeof result !== 'object') return false;
+  const outcome = (result as { outcome?: unknown }).outcome;
+  return outcome === 'REJECTED' || outcome === 'NEEDS_INFO';
+}
+
 const server = new Server(
   { name: 'clearvo', version: '0.1.0' },
   { capabilities: { tools: {} } }
@@ -4894,6 +4924,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await handleTool(name, (args ?? {}) as Record<string, unknown>);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      // A stored REJECTED or NEEDS_INFO document is HTTP 200 but was not sent: flag it so an agent does not treat it as
+      // delivered. The full body stays in the text so the fix (errors[], nextStep) is still readable.
+      ...(isUnsentSendOutcome(name, result) ? { isError: true } : {}),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

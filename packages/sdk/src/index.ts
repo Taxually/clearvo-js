@@ -1,5 +1,5 @@
 export { ClearvoClient } from './client.js';
-export { ClearvoError } from './types.js';
+export { ClearvoError, isRejected } from './types.js';
 export type {
   CompanyCode,
   ListCompanyCodesParams,
@@ -21,6 +21,9 @@ export type {
   CreateEntityResponse,
   UpdateEntityInput,
   InvoiceSubmitResponse,
+  SendResult,
+  SubmitInvoiceOptions,
+  RetryInvoiceRejectedResponse,
   InvoiceStatusResponse,
   ListInvoicesParams,
   ListInvoicesResponse,
@@ -73,6 +76,10 @@ export type {
   CertificateHint,
   HeldCertificateRecovery,
   ApDecisionWebhookPayload,
+  StatusChangedWebhookPayload,
+  WebhookEventName,
+  StatusClass,
+  NextStep,
   TaxCalcVendorChargeStory,
   TaxCalcPartyInput,
   TaxCalcParty,
