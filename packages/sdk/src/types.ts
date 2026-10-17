@@ -106,8 +106,10 @@ export interface PeppolCustomerUnreachableResponse {
 export interface InvoiceSubmitResponse {
   referenceId: string;
   /**
-   * clearanceStatus, e.g. PENDING/ACCEPTED/REJECTED/DELIVERED/UNROUTABLE/
-   * UNDELIVERED/DUPLICATE, or HELD_UNMAPPED_TAX_CODE — a line/shipping/
+   * clearanceStatus, e.g. RECEIVED/PENDING/ACCEPTED/REJECTED/DELIVERED/UNROUTABLE/
+   * UNDELIVERED/DUPLICATE, or HELD_AWAITING_AUTHORIZATION (errorCode MANDATE_SUPPORT_NOT_OPERATIONAL: live Portugal sends
+   * while the AT certificate is pending, and the closed-gate countries GR, MY, IL, EG, JO; answered 200, released
+   * automatically), NOT_SUPPORTED (dated before the mandate's support start, errorCode MANDATE_NOT_SUPPORTED, terminal), or HELD_UNMAPPED_TAX_CODE — a line/shipping/
    * allowance-charge's clientTaxCode or taxTreatment isn't configured for
    * this entity yet. Never a malformed request: the invoice is accepted
    * and held with a machine-readable reason (see errorCode/message/reason
@@ -120,8 +122,20 @@ export interface InvoiceSubmitResponse {
    * succeeded: read `outcome`, `status`, `statusClass` and `terminal`.
    */
   statusClass?: StatusClass;
-  /** What has to happen next, who does it and where. Null when nothing is outstanding. */
+  /** What has to happen next, who does it and where. Null when nothing is outstanding. Act on it for a hold. */
   nextStep?: NextStep | null;
+  /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
+  id?: string;
+  /** CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION or HELD. Read this, not the HTTP status. */
+  outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD';
+  /** True when the status is final. A 200 with `terminal: false` means stored and still moving: poll getInvoiceStatus or subscribe to `invoice.status_changed`. */
+  terminal?: boolean;
+  /**
+   * Machine-readable warnings. Includes `IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS` (your x-idempotency-key was already used for a
+   * different document: the send is processed as its own document, no longer a 409) and `NO_IDENTITY_NO_DEDUP` (the document lacks
+   * the fields that identify it, so a re-send cannot be recognised as a duplicate).
+   */
+  warnings?: Array<{ code: string; message?: string; [k: string]: unknown }>;
   message?: string;
   /** Present only when status is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
   errorCode?: string;
@@ -1804,8 +1818,11 @@ export interface Webhook {
 
 export interface CreateWebhookInput {
   url: string;
-  /** Include `invoice.status_changed` to be told about every status change; the specific events keep working. */
-  events?: string[];
+  /**
+   * Include `invoice.status_changed` to be told about every status change; the specific events keep working (subscribing to both
+   * gives two deliveries). `*` does NOT include `invoice.status_changed`: list it by name.
+   */
+  events?: WebhookEventName[] | string[];
   /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
   statuses?: ClearanceStatus[];
 }
@@ -1821,8 +1838,10 @@ export interface ListWebhooksResponse {
 
 export interface TestWebhookInput {
   webhookId: string;
-  /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending or .business_status_changed. */
+  /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending, .business_status_changed or .status_changed. */
   event?: string;
+  /** Only with event `invoice.status_changed`: the new status the sample reports (default: the invoice's own status, else ACCEPTED). */
+  to?: ClearanceStatus;
   /** Build the payload from one of your own invoices instead of sample values. */
   invoiceId?: string;
 }
@@ -4184,6 +4203,54 @@ export interface HeldCertificateRecovery {
   path: 'VENDOR_CREDIT_OR_REFUND';
   amount: number;
   certificateId: string;
+}
+
+/** Event names a webhook can subscribe to (`*` means every event except `invoice.status_changed`, which must be listed by name). */
+export type WebhookEventName =
+  | 'invoice.status_changed'
+  | 'invoice.accepted'
+  | 'invoice.rejected'
+  | 'invoice.duplicate'
+  | 'invoice.undelivered'
+  | 'invoice.pending'
+  | 'ap.decision'
+  | '*'
+  | (string & {});
+
+/**
+ * Payload of the `invoice.status_changed` webhook: fired on EVERY status transition of an e-invoice record. Lean: a pointer to
+ * GET /v1/invoices/{id}, not the document. The older terminal events (`invoice.accepted` and so on) are frozen and keep working.
+ */
+export interface StatusChangedWebhookPayload {
+  event: 'invoice.status_changed';
+  /** The e-invoice record id; same as `submissionId`. */
+  id: string;
+  submissionId: string;
+  referenceId: string | null;
+  country: string;
+  documentType: string;
+  /** Same as `to`. */
+  clearanceStatus: ClearanceStatus;
+  /** The previous status; null for the first status of a record. */
+  from: ClearanceStatus | null;
+  to: ClearanceStatus;
+  statusClass: StatusClass;
+  terminal: boolean;
+  reason: {
+    code: string | null;
+    message: string | null;
+    actor: 'authority' | 'rule' | 'system' | 'merchant' | 'platform';
+    fixUrl?: string;
+  };
+  /** What has to happen next; null when nothing is outstanding. */
+  nextStep: NextStep | null;
+  /** ISO 8601 time of the transition. */
+  at: string;
+  updatedAt: string;
+  entityId: string | null;
+  organisationId?: string;
+  /** True only for a test event (POST /v1/webhooks/test). */
+  test?: true;
 }
 
 /** Payload of the `ap.decision` webhook. */

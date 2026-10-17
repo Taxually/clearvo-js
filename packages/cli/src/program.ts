@@ -164,7 +164,8 @@ export function createProgram(): Command {
       if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
       // x-idempotency-key is optional: the API generates its own identity key from the invoice
       // (type, country, invoice number) and answers 409 IDEMPOTENT_BODY_MISMATCH if the same invoice
-      // is re-sent with changed content.
+      // is re-sent with changed content. A 200 means the document is STORED: read outcome, clearanceStatus,
+      // statusClass, terminal and nextStep in the output, not the exit status alone.
       const result = await api('POST', '/send', body);
       print(result, !!opts.pretty);
     });
@@ -953,11 +954,14 @@ export function createProgram(): Command {
     .command('create')
     .description('Register a new webhook endpoint')
     .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
-    .option('--events <events>', 'Comma-separated event types (default: *). Options: invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending', '*')
+    .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending', '*')
+    .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example NEEDS_INFO,REJECTED,ACCEPTED). Omit for every status change')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { url: string; events: string; pretty?: boolean }) => {
+    .action(async (opts: { url: string; events: string; statuses?: string; pretty?: boolean }) => {
       const events = opts.events.split(',').map(e => e.trim()).filter(Boolean);
-      const result = await api('POST', '/webhooks', { url: opts.url, events });
+      const body: Record<string, unknown> = { url: opts.url, events };
+      if (opts.statuses) body.statuses = opts.statuses.split(',').map(x => x.trim()).filter(Boolean);
+      const result = await api('POST', '/webhooks', body);
       print(result, !!opts.pretty);
       const r = result as Record<string, unknown>;
       if (r.secret) {
@@ -978,12 +982,14 @@ export function createProgram(): Command {
   webhooks
     .command('test <id>')
     .description('Send a signed test event to a webhook endpoint and show what it answered (sent once, nothing is stored)')
-    .option('--event <event>', 'Event to simulate: invoice.received (default), accepted, rejected, duplicate, undelivered, pending or business_status_changed (prefix invoice.)')
+    .option('--event <event>', 'Event to simulate: invoice.received (default), accepted, rejected, duplicate, undelivered, pending, business_status_changed or status_changed (prefix invoice.)')
+    .option('--to <status>', 'Only with --event invoice.status_changed: the new status the sample reports (for example NEEDS_INFO). Default: the invoice\'s own status, else ACCEPTED')
     .option('--invoice <invoiceId>', 'Build the payload from one of your own invoices instead of sample values')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (id: string, opts: { event?: string; invoice?: string; pretty?: boolean }) => {
+    .action(async (id: string, opts: { event?: string; to?: string; invoice?: string; pretty?: boolean }) => {
       const body: Record<string, string> = { webhookId: id };
       if (opts.event) body.event = opts.event;
+      if (opts.to) body.to = opts.to;
       if (opts.invoice) body.invoiceId = opts.invoice;
       const result = await api('POST', '/webhooks/test', body);
       print(result, !!opts.pretty);
