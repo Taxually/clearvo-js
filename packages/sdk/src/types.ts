@@ -1,6 +1,19 @@
 export interface ClearvoClientOptions {
   apiKey: string;
   baseUrl?: string;
+  /**
+   * POST /v1/send answers HTTP 200 for every stored document, with the outcome in the body. When true (the default for
+   * this SDK major) `submitInvoice` throws a {@link ClearvoError} when the stored outcome is REJECTED or NEEDS_INFO,
+   * as it did when those came back as 422. Set false to receive the body and branch on `outcome` yourself.
+   * The default flips to false in the next major. 4xx and 5xx responses always throw.
+   */
+  throwOnRejected?: boolean;
+}
+
+/** Per-call options for `submitInvoice`. */
+export interface SubmitInvoiceOptions {
+  /** Overrides the client's `throwOnRejected` for this call. */
+  throwOnRejected?: boolean;
 }
 
 export interface Entity {
@@ -75,7 +88,7 @@ export interface UpdateEntityInput {
 export type DeInvoiceFormat = 'ZUGFERD' | 'XRECHNUNG' | 'PEPPOL';
 
 /**
- * The 422 body of POST /v1/send for a German invoice resolved to PEPPOL whose
+ * The body of POST /v1/send (HTTP 200) for a German invoice resolved to PEPPOL whose
  * buyer cannot be reached over Peppol. There is no silent fallback: the invoice
  * is stored NEEDS_INFO (absent on a dryRun) and `error.alternatives[]` lists
  * the formats to re-send as.
@@ -103,10 +116,26 @@ export interface PeppolCustomerUnreachableResponse {
   };
 }
 
-export interface InvoiceSubmitResponse {
+/**
+ * The body of POST /v1/send, which answers HTTP 200 for every document it stores. Branch on `outcome` (or
+ * `clearanceStatus`), never on the HTTP status or on `ok` alone: `ok` is false for a rejection or a document that needs
+ * action and true for an accepted, in-flight or held one.
+ */
+export interface SendResult {
   referenceId: string;
+  /** False for a rejection (REJECTED / NEEDS_INFO) or a dry run that would be one; true for an accepted, in-flight, held or accumulated document. */
+  ok?: boolean;
+  /** The stored record's status: REJECTED, NEEDS_INFO, SETUP_NEEDED, HELD_*, NOT_SUPPORTED, ACCUMULATED, PENDING, RECEIVED, ... Same value as `status`. */
+  clearanceStatus?: ClearanceStatus;
   /**
-   * clearanceStatus, e.g. RECEIVED/PENDING/ACCEPTED/REJECTED/DELIVERED/UNROUTABLE/
+   * On a rejection: `{ code, message, fixUrl, isMerchantResolvable, retryable }`, plus per-code extras (`field`, `details[]`,
+   * `alternatives[]`). Absent on an accepted document.
+   */
+  error?: { code: string; message: string; fixUrl?: string | null; isMerchantResolvable?: boolean; retryable?: boolean; field?: string; [k: string]: unknown };
+  /** On a rejection: one entry per failed check (JSON-pointer `path`, stable `errorCode`). */
+  errors?: SendRejectionEntry[];
+  /**
+   * Same value as `clearanceStatus`: RECEIVED/PENDING/ACCEPTED/REJECTED/DELIVERED/UNROUTABLE/
    * UNDELIVERED/DUPLICATE, or HELD_AWAITING_AUTHORIZATION (errorCode MANDATE_SUPPORT_NOT_OPERATIONAL: live Portugal sends
    * while the AT certificate is pending, and the closed-gate countries GR, MY, IL, EG, JO; answered 200, released
    * automatically), NOT_SUPPORTED (dated before the mandate's support start, errorCode MANDATE_NOT_SUPPORTED, terminal), or HELD_UNMAPPED_TAX_CODE — a line/shipping/
@@ -119,19 +148,21 @@ export interface InvoiceSubmitResponse {
   status: ClearanceStatus;
   /**
    * Who the document is waiting for, derived from `status`. A 200 response means the document is stored, not that it
-   * succeeded: read `outcome`, `status`, `statusClass` and `terminal`.
+   * succeeded: read `outcome`, `clearanceStatus`, `statusClass` and `terminal`.
    */
   statusClass?: StatusClass;
   /** What has to happen next, who does it and where. Null when nothing is outstanding. Act on it for a hold. */
   nextStep?: NextStep | null;
   /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
   id?: string;
-  /** CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION or HELD. Read this, not the HTTP status. */
+  /** CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION or HELD. Read this, not the HTTP status (200 for every stored document, including ACCUMULATED, which used to be 202). */
   outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD';
   /** True when the status is final. A 200 with `terminal: false` means stored and still moving: poll getInvoiceStatus or subscribe to `invoice.status_changed`. */
   terminal?: boolean;
   /**
-   * Machine-readable warnings. Includes `IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS` (your x-idempotency-key was already used for a
+   * Machine-readable warnings. A `RECEIVED` result with a `PROCESSING_DELAYED` warning means a temporary problem interrupted
+   * processing after the document was stored: do not resend, poll getInvoiceStatus or subscribe to `invoice.status_changed`; Clearvo
+   * re-runs it. Also includes `IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS` (your x-idempotency-key was already used for a
    * different document: the send is processed as its own document, no longer a 409) and `NO_IDENTITY_NO_DEDUP` (the document lacks
    * the fields that identify it, so a re-send cannot be recognised as a duplicate).
    */
@@ -177,6 +208,30 @@ export interface InvoiceSubmitResponse {
     reason?: 'NOT_APPLICABLE' | 'NOT_OPTED_IN' | 'MISSING_CUSTOMER_EMAIL' | 'NOTIFICATIONS_NOT_CONFIGURED';
     error?: string;
   };
+}
+
+/** @deprecated Renamed {@link SendResult}; the shape is identical. */
+export type InvoiceSubmitResponse = SendResult;
+
+/** True when the stored outcome is REJECTED or NEEDS_INFO, the two outcomes `throwOnRejected` turns into a thrown error. Reads `outcome`, falling back to `clearanceStatus`. */
+export function isRejected(result: Pick<SendResult, 'outcome' | 'clearanceStatus' | 'status'>): boolean {
+  const outcome = result.outcome ?? result.clearanceStatus ?? result.status;
+  return outcome === 'REJECTED' || outcome === 'NEEDS_INFO';
+}
+
+/**
+ * The 200 body of `POST /v1/invoices/{id}/retry` when the authority rejects the retried document (IT SDI, RO ANAF).
+ * A command refused with nothing changed (not retryable, no XML, credentials missing, unsupported country) is still a 422,
+ * authority unavailable a 502 and too soon a 429.
+ */
+export interface RetryInvoiceRejectedResponse {
+  ok: false;
+  clearanceStatus: 'REJECTED';
+  outcome: 'REJECTED';
+  terminal: true;
+  id?: string;
+  error?: SendResult['error'];
+  errors?: SendRejectionEntry[];
 }
 
 // ── Submit invoice (POST /v1/send) input ────────────────────────────────────
@@ -398,6 +453,13 @@ export interface EsCountrySpecific {
   [key: string]: unknown;
 }
 
+/**
+ * Input of POST /v1/send. Wherever a field below says a value is rejected, "fails" or "422", that is a stored outcome:
+ * the call answers HTTP 200 with `ok: false`, `clearanceStatus` REJECTED or NEEDS_INFO, the code in `error.code` and one
+ * `errors[]` entry per failed check. `submitInvoice` throws it as a ClearvoError with status 422 while `throwOnRejected`
+ * is true (the default for this SDK major). Only a malformed request (400), a caller-supplied `channel`/`source` (400),
+ * auth/plan (401/403) and an edited resend (409) are real HTTP errors.
+ */
 export interface SubmitInvoiceInput {
   documentType?: 'invoice' | 'credit_note' | 'debit_note';
   invoiceNumber: string;
@@ -2215,7 +2277,7 @@ export interface ObligationHasPendingBatchError {
 }
 
 /**
- * 422 body from POST /send when a caller-supplied supplier.taxId differs from the entity's
+ * Body of POST /send (HTTP 200, stored REJECTED) when a caller-supplied supplier.taxId differs from the entity's
  * own registration for the resolved mandate's country (every regime). Omit supplier.taxId to
  * have the registered value applied automatically.
  */
@@ -4073,7 +4135,8 @@ export interface SendRejectionEntry {
 }
 
 /**
- * The `POST /v1/send` 422 body. A malformed or incomplete invoice is accepted, normalised, enriched and then
+ * The `POST /v1/send` body of a stored rejection (HTTP 200, `ok: false`; the SDK throws it as a ClearvoError unless
+ * `throwOnRejected` is false). A malformed or incomplete invoice is accepted, normalised, enriched and then
  * checked by the platform's rules: `error` is an object (never a string), `errors[]` carries every failure, and
  * the document is stored (NEEDS_INFO or REJECTED) unless it cannot be identified. The old `details[]` is gone.
  * A 503 with code `VALIDATION_RULES_UNAVAILABLE` means the rules could not be loaded — nothing was checked or stored;
@@ -4088,7 +4151,12 @@ export interface SendRejectionBody {
   warnings?: SendRejectionEntry[];
   code?: string;
   clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  outcome?: 'REJECTED' | 'NEEDS_INFO';
+  statusClass?: StatusClass;
+  nextStep?: NextStep | null;
   terminal?: boolean;
+  /** The stored record's id. */
+  id?: string;
   /** Present only when a record was stored. */
   referenceId?: string;
 }

@@ -118,6 +118,22 @@ export function createProgram(): Command {
     return res;
   }
 
+  /** Human-readable summary of a stored REJECTED / NEEDS_INFO send: the error, one line per failed check, and the next step. */
+  function describeStoredRejection(r: Record<string, unknown>, outcome: string): string {
+    const err = r.error !== null && typeof r.error === 'object' ? r.error as Record<string, unknown> : null;
+    const parts = [`${outcome}${r.id ? ` (${r.id})` : ''}: ${err ? (err.message ?? err.code ?? 'rejected') : (r.message ?? 'rejected')}`];
+    if (err?.code) parts.push(`Code: ${err.code}`);
+    if (Array.isArray(r.errors) && r.errors.length > 0) {
+      parts.push('Errors:');
+      for (const e of (r.errors as Array<Record<string, unknown>>).slice(0, 25)) {
+        parts.push(`  - ${e.path ?? '/'} ${e.errorCode ?? e.code ?? ''}: ${e.message ?? ''}`);
+      }
+    }
+    const next = r.nextStep !== null && typeof r.nextStep === 'object' ? r.nextStep as Record<string, unknown> : null;
+    if (next) parts.push(`Next step (${next.actor ?? 'merchant'}): ${next.message ?? ''}${next.fixUrl ? ` ${next.fixUrl}` : ''}`);
+    return parts.join('\n');
+  }
+
   function print(data: unknown, pretty: boolean) {
     console.log(pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data));
   }
@@ -144,20 +160,21 @@ export function createProgram(): Command {
   // response instead.
   // Line items carry `taxRate`/`taxAmount` — the platform is global, so field
   // names are never tax-type-specific. A file still using the retired
-  // `vatRate`/`vatAmount` keys is rejected by the API with 422
+  // `vatRate`/`vatAmount` keys is stored as REJECTED (HTTP 200, `ok: false`)
   // UNKNOWN_FIELD_VAT_RENAMED naming the `tax`-named replacement; there is no
   // silent alias. The remaining line fields are `lineNumber`,
   // `discountPercent` | `discountAmount` (mutually exclusive), `unitOfMeasure`
   // and `sellerItemId` — the retired `discount`/`unit`/`itemCode`/`exemption`
-  // line keys are rejected with 422 UNKNOWN_FIELD_LINE_RENAMED the same way.
+  // line keys are stored REJECTED with UNKNOWN_FIELD_LINE_RENAMED the same way.
   // Invoice responses carry `totalTax` (never `totalVat`).
   program
     .command('send <file>')
-    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are rejected with 422 UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with 422 UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: 422 PEPPOL_CUSTOMER_UNREACHABLE with re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything')
+    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the outcome is in the body. The command exits 1 when the outcome is REJECTED or NEEDS_INFO (errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on outcome yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
+    .option('--no-throw-on-rejected', 'Exit 0 when the stored outcome is REJECTED or NEEDS_INFO (default: exit 1)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string }) => {
+    .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string; throwOnRejected?: boolean }) => {
       const raw = readFileSync(file, 'utf8');
       const body = JSON.parse(raw) as Record<string, unknown>;
       if (opts.dryRun) body.dryRun = true;
@@ -166,8 +183,13 @@ export function createProgram(): Command {
       // (type, country, invoice number) and answers 409 IDEMPOTENT_BODY_MISMATCH if the same invoice
       // is re-sent with changed content. A 200 means the document is STORED: read outcome, clearanceStatus,
       // statusClass, terminal and nextStep in the output, not the exit status alone.
-      const result = await api('POST', '/send', body);
+      const result = await api('POST', '/send', body) as Record<string, unknown>;
       print(result, !!opts.pretty);
+      const outcome = result.outcome ?? result.clearanceStatus ?? result.status;
+      if (opts.throwOnRejected !== false && (outcome === 'REJECTED' || outcome === 'NEEDS_INFO')) {
+        console.error(describeStoredRejection(result, String(outcome)));
+        process.exit(1);
+      }
     });
 
   // ── clearvo send-bulk / send-bulk-async <file> ───────────────────────────────
