@@ -1261,27 +1261,30 @@ export interface TaxCalculateResponse {
       [key: string]: unknown;
     };
     /**
-     * US only: this line's tax broken out per taxing authority (state / county
-     * / district / city / local), summing to this line's `taxAmount`. Surfaces
-     * the same per-authority split the engine persists and reports at the
-     * transaction level, so a filing/reconciliation integrator can see and
-     * file each authority's share. Present only when this line was taxed at
-     * exactly the resolved combined rate — absent for non-US lines, lines with
-     * a rate override, a partial taxable basis, or a home-rule city-component
-     * split (where the components would not reconcile to the charged tax), and
-     * on the engine-error fallback path.
+     * This line's tax broken out by component, on every taxed line in every jurisdiction. The component `rate`s add
+     * up to this line's `rate` and the `taxAmount`s to this line's `taxAmount`, to the cent (negative on a credit
+     * note). Outside the US one component for most jurisdictions (VAT 20% in FR, HST 13% in ON, GST 5% in AB) and
+     * several where a real split exists (QC: GST 5% + QST 9.975%; BC: GST + PST; MB: GST + RST; SK: GST + PST); in
+     * the US one per taxing authority (state / county / district / city / local). Absent on a line with no tax
+     * (exempt, zero-rated, reverse charge, out of scope). A rule that replaced the rate marks the components
+     * `overridden`.
      */
     jurisdictionBreakdown?: Array<{
-      /** STATE, COUNTY, DISTRICT (county district), CITY, or LOCAL (city district). */
+      /** Outside the US COUNTRY, FEDERAL, PROVINCIAL, STATE, REGIONAL, COUNTY, CITY or DISTRICT; US: STATE, COUNTY, DISTRICT (county district), CITY, or LOCAL (city district). */
       level: string;
-      /** Taxing-authority name as reported by the rate source, e.g. "CALIFORNIA". */
+      /** Label to show: the tax name outside the US (VAT, GST, HST, QST, PST, RST), the taxing-authority name in the US (e.g. "CALIFORNIA"). */
       name: string;
-      /** Rate-source tax_type code: 01 state, 02 county, 03 county district, 04 city, 05 city district. */
+      /** Stable code: the tax code outside the US (VAT, GST, HST, QST, PST, RST, IGIC); the US tax_type code (01 state, 02 county, 03 county district, 04 city, 05 city district). */
       taxType: string;
-      /** This authority's own rate as a fraction, e.g. 0.0725 for 7.25%. */
+      /** This component's own rate as a fraction, e.g. 0.09975 for QST 9.975%. */
       rate: number;
-      /** This authority's share of the line's tax. */
+      /** This component's share of the line's tax. */
       taxAmount: number;
+      /** `true` only when a rule replaced the rate. */
+      overridden?: boolean;
+      overrideRuleCode?: string;
+      /** The component's rate before the rule replaced it. */
+      previousRate?: number;
     }>;
     /**
      * Present only when this line's exemption came from an inline

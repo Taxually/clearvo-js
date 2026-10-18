@@ -908,6 +908,7 @@ const TOOLS = [
       'and EN16931 tax code for each line item. Handles EU B2B reverse charge, OSS/IOSS schemes, ' +
       'US state-level sales tax, Canadian GST/HST/PST, and more. ' +
       'The clientTaxCode returned (when a matching one exists for this entity) maps directly to lines[].clientTaxCode in submit_invoice — no conversion needed; there is no taxCode field on submit_invoice. ' +
+      'Every taxed line carries lineItems[].jurisdictionBreakdown, the line tax split into components {level, name, taxType, rate, taxAmount}: one component for most jurisdictions (VAT 20% in FR, HST 13% in ON, GST 5% in AB) and several where a real split exists (QC: GST 5% + QST 9.975%; BC: GST + PST; MB: GST + RST; SK: GST + PST; US: state, county, city, district). The component rates add up to the line rate and the component taxAmounts to the line taxAmount to the cent; a line with no tax has none. ' +
       'Calculations are recorded in the audit trail and count toward compliance thresholds by default (commit defaults to true) — set commit=false explicitly for a preview/quote that should not be recorded or billed. ' +
       'If the response\'s sellerRegistration.canCollectTax is false (e.g. $0 tax charged unexpectedly) and a ' +
       'reason string is present, surface it to the user verbatim — it explains why, e.g. a registration exists ' +
