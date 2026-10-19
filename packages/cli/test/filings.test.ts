@@ -102,6 +102,29 @@ describe('returns lifecycle', () => {
     expect(JSON.parse(last(m).init.body as string)).toEqual({ snapshotVersion: 4 });
   });
 
+  it('pause and resume of a live return need no snapshot version; pause takes --end-date', async () => {
+    let m = mockFetch();
+    await run(['pause', 'ret_1', '--end-date', '2026-10-12']);
+    expect(last(m).url).toBe('http://x/v1/filings/ret_1/pause');
+    expect(JSON.parse(last(m).init.body as string)).toEqual({ endDate: '2026-10-12' });
+    m = mockFetch();
+    await run(['pause', 'ret_1']);
+    expect(JSON.parse(last(m).init.body as string)).toEqual({});
+    m = mockFetch();
+    await run(['resume', 'ret_1']);
+    expect(last(m).url).toBe('http://x/v1/filings/ret_1/resume');
+    expect(JSON.parse(last(m).init.body as string)).toEqual({});
+  });
+
+  it('pause and resume of a stored return still need the snapshot version; a bad end date is refused', async () => {
+    const m = mockFetch();
+    exitThrows();
+    await expect(run(['pause', 'fil_1'])).rejects.toThrow('process.exit called');
+    await expect(run(['resume', 'fil_1'])).rejects.toThrow('process.exit called');
+    await expect(run(['pause', 'ret_1', '--end-date', '12/10/2026'])).rejects.toThrow('process.exit called');
+    expect(m).not.toHaveBeenCalled();
+  });
+
   it('approve needs the snapshot version and rejects a bad one', async () => {
     const m = mockFetch();
     exitThrows();
