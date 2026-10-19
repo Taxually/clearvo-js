@@ -2263,21 +2263,50 @@ export function createProgram(): Command {
       writeOut(opts.out, new Uint8Array(await res.arrayBuffer()), 'the document');
     });
 
-  for (const [name, path, text] of [
-    ['undo', 'undo', 'Take an approval back to PENDING_APPROVAL (only before submission)'],
-    ['pause', 'pause', 'Pause a return so it is not approved automatically (limited per year; the on-time filing commitment is lost while paused)'],
-    ['resume', 'resume', 'Resume a paused return'],
-  ] as const) {
-    filings
-      .command(`${name} <id>`)
-      .description(text)
-      .requiredOption('--snapshot-version <n>', 'The return\'s current snapshotVersion (from `filings get`); a mismatch is 409 FILING_STALE')
-      .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
-      .option('--pretty', 'Pretty-print JSON output')
-      .action(async (id: string, opts: { snapshotVersion: string; entity?: string; pretty?: boolean }) => {
-        print(await api('POST', `/filings/${encodeURIComponent(id)}/${path}`, { snapshotVersion: parseVersion(opts.snapshotVersion) }, entityHdr(opts.entity)), !!opts.pretty);
-      });
-  }
+  filings
+    .command('undo <id>')
+    .description('Take an approval back to PENDING_APPROVAL (only before submission)')
+    .requiredOption('--snapshot-version <n>', 'The return\'s current snapshotVersion (from `filings get`); a mismatch is 409 FILING_STALE')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion: string; entity?: string; pretty?: boolean }) => {
+      print(await api('POST', `/filings/${encodeURIComponent(id)}/undo`, { snapshotVersion: parseVersion(opts.snapshotVersion) }, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filings
+    .command('pause <id>')
+    .description('Pause a return so we do not finalise it before the pause ends (limited per year; the on-time filing commitment is lost while paused). A live return (ret_) can be paused once, for up to 10 days')
+    .option('--snapshot-version <n>', 'The return\'s current snapshotVersion (from `filings get`); a mismatch is 409 FILING_STALE. Not needed for a ret_ id')
+    .option('--end-date <yyyy-mm-dd>', 'Live return only: the last day of the pause, within pause.allowedEnd in `filings get`. Omit for the latest allowed day')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion?: string; endDate?: string; entity?: string; pretty?: boolean }) => {
+      if (opts.snapshotVersion === undefined && !id.startsWith('ret_')) {
+        console.error('Error: --snapshot-version is required for a stored return (a whole number from `clearvo filings get`); only a live ret_ return needs none');
+        process.exit(1);
+      }
+      if (opts.endDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(opts.endDate)) {
+        console.error('Error: --end-date must be a date in the form yyyy-mm-dd');
+        process.exit(1);
+      }
+      const body = { ...(opts.snapshotVersion === undefined ? {} : { snapshotVersion: parseVersion(opts.snapshotVersion) }), ...(opts.endDate === undefined ? {} : { endDate: opts.endDate }) };
+      print(await api('POST', `/filings/${encodeURIComponent(id)}/pause`, body, entityHdr(opts.entity)), !!opts.pretty);
+    });
+
+  filings
+    .command('resume <id>')
+    .description('Resume a paused return. A live return (ret_) has its pause ended early and needs no version')
+    .option('--snapshot-version <n>', 'The return\'s current snapshotVersion (from `filings get`); a mismatch is 409 FILING_STALE. Not needed for a ret_ id')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion?: string; entity?: string; pretty?: boolean }) => {
+      if (opts.snapshotVersion === undefined && !id.startsWith('ret_')) {
+        console.error('Error: --snapshot-version is required for a stored return (a whole number from `clearvo filings get`); only a live ret_ return needs none');
+        process.exit(1);
+      }
+      const body = opts.snapshotVersion === undefined ? {} : { snapshotVersion: parseVersion(opts.snapshotVersion) };
+      print(await api('POST', `/filings/${encodeURIComponent(id)}/resume`, body, entityHdr(opts.entity)), !!opts.pretty);
+    });
 
   filings
     .command('skip <id>')

@@ -1331,14 +1331,22 @@ export class ClearvoClient {
     return this.request('POST', `/filings/${encodeURIComponent(filingId)}/undo`, { snapshotVersion }, entityHeaders(entityId));
   }
 
-  /** POST /filings/{id}/pause: stop automatic approval. Limited per year; the on-time filing commitment is lost while paused. */
-  pauseFiling(filingId: string, snapshotVersion: number, entityId?: string): Promise<FilingActionResponse> {
-    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/pause`, { snapshotVersion }, entityHeaders(entityId));
+  /**
+   * POST /filings/{id}/pause: hold back our finalising of a return that is waiting for approval. Limited per year; the on-time filing commitment is lost while paused.
+   * For a stored filing `snapshotVersion` is required. For a live return (id `ret_...`) it is ignored and may be omitted; `endDate` (yyyy-mm-dd) is the last day of the
+   * pause, within `pause.allowedEnd` on the return (omit it for the latest allowed day). Offer it only when `pause.canPause` is true.
+   */
+  pauseFiling(filingId: string, snapshotVersion?: number, entityId?: string, endDate?: string): Promise<FilingActionResponse> {
+    const body = { ...(snapshotVersion === undefined ? {} : { snapshotVersion }), ...(endDate === undefined ? {} : { endDate }) };
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/pause`, body, entityHeaders(entityId));
   }
 
-  /** POST /filings/{id}/resume: a PAUSED filing returns to PENDING_APPROVAL. */
-  resumeFiling(filingId: string, snapshotVersion: number, entityId?: string): Promise<FilingActionResponse> {
-    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/resume`, { snapshotVersion }, entityHeaders(entityId));
+  /**
+   * POST /filings/{id}/resume: a PAUSED filing returns to PENDING_APPROVAL; a live return (id `ret_...`) has its open pause ended early and needs no `snapshotVersion`.
+   * Offer it only when `pause.canResume` is true.
+   */
+  resumeFiling(filingId: string, snapshotVersion?: number, entityId?: string): Promise<FilingActionResponse> {
+    return this.request('POST', `/filings/${encodeURIComponent(filingId)}/resume`, snapshotVersion === undefined ? {} : { snapshotVersion }, entityHeaders(entityId));
   }
 
   /** POST /filings/{id}/skip: the filing becomes NOT_FILED and is not filed. Only before submission. `reason` is required (up to 500 characters). */

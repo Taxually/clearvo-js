@@ -60,6 +60,23 @@ describe('returns lifecycle', () => {
     expect(call(m2).url).toBe('http://x/v1/filings');
   });
 
+  it('pauses a live return with an optional endDate and no snapshotVersion', async () => {
+    let m = mock();
+    await client().pauseFiling('ret_1');
+    expect(call(m).url).toBe('http://x/v1/filings/ret_1/pause');
+    expect(JSON.parse(call(m).init.body as string)).toEqual({});
+    m = mock();
+    await client().pauseFiling('ret_1', undefined, undefined, '2026-10-12');
+    expect(JSON.parse(call(m).init.body as string)).toEqual({ endDate: '2026-10-12' });
+  });
+
+  it('resumes a live return without a snapshotVersion', async () => {
+    const m = mock();
+    await client().resumeFiling('ret_1');
+    expect(call(m).url).toBe('http://x/v1/filings/ret_1/resume');
+    expect(JSON.parse(call(m).init.body as string)).toEqual({});
+  });
+
   it('gets a filing', async () => {
     const m = mock();
     await client().getFiling('fil_1');

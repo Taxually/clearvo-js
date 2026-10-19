@@ -2017,8 +2017,9 @@ const TOOLS = [
       'anything that needs action and which actions are currently allowed. view=open shows every return not yet filed (backdated ' +
       'ones included, soonest due date first), view=filed shows filed ones (live: backdated or not; stored: go-forward only), view=upcoming shows open go-forward returns, ' +
       'view=backdated shows catch-up returns; backdated=true|false filters on whether a return is backdated and is ANDed with view. Live rows carry a backdated boolean, and a live list carries emptyState {title} wording for an empty result. A live filing has an id starting ret_ and live=true and is read ' +
-      'live on each call. The only action on it is approve_filing: allowedActions.approve is true only while it is READY_FOR_APPROVAL, ' +
-      'the key can write and any bank account the tax authority debits is on file (a list row may offer it more loosely: get_filing decides). 503 FILING_DATA_UNAVAILABLE means filing data is temporarily unavailable: try again shortly.',
+      'live on each call. Its actions are approve_filing, pause_filing and resume_filing: allowedActions.approve is true only while it is READY_FOR_APPROVAL, ' +
+      'the key can write and any bank account the tax authority debits is on file (a list row may offer it more loosely: get_filing decides); allowedActions.pause and .resume ' +
+      'mirror pause.canPause and pause.canResume. A live row carries reviewLabel (one plain sentence on what happens next, show it as is) and a pause object. 503 FILING_DATA_UNAVAILABLE means filing data is temporarily unavailable: try again shortly.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -2040,8 +2041,9 @@ const TOOLS = [
       'Use the returned snapshotVersion when approving, pausing, resuming, skipping or setting a prepayment. A live filing (id starting ret_) ' +
       'returns its status (IN_PREPARATION, READY_FOR_APPROVAL, APPROVED, FILED or NEEDS_ATTENTION), period, deadlines, amount and a documents list ' +
       '(id, name, label, downloadPath; download with GET /v1/filings/{id}/documents/{docId} in the API) instead of totals, lines and timeline, and an ' +
-      'approveConfirmation to show before approving when allowedActions.approve is true. A live filing can only be approved (approve_filing): ' +
-      'no undo, pause, resume, skip, prepayment or change request.',
+      'approveConfirmation to show before approving when allowedActions.approve is true. It also carries reviewLabel (what happens next, show it as is) and ' +
+      'a pause object (canPause, canPauseReason, canResume, isPaused, pausedUntilLabel, pausesRemaining, allowedEnd and confirmation wording): use pause_filing and resume_filing ' +
+      'only when it says they are allowed. A live filing has no undo, skip, prepayment or change request.',
     inputSchema: {
       type: 'object' as const,
       properties: { filingId: { type: 'string', description: 'The filing ID (starts with fil_, or ret_ for a live filing), from list_filings.' } },
@@ -2081,27 +2083,35 @@ const TOOLS = [
   {
     name: 'pause_filing',
     description:
-      'Pause a go-forward filing that is PENDING_APPROVAL so it is not approved automatically. Limited per year by policy ' +
-      '(PAUSE_LIMIT_REACHED), only up to the policy cut-off day (PAUSE_PAST_CUTOFF), and a pause ends on its own after the ' +
-      'policy maximum. Pausing stops automatic approval at the end of the review day (23:59 UTC) and loses the on-time filing ' +
-      'commitment, which is best efforts per the Terms of Service. Requires a write key.',
+      'Pause a go-forward filing that is waiting for approval, so we do not finalise it for the customer before the pause ends. Limited per year ' +
+      '(PAUSE_LIMIT_REACHED), only up to a cut-off day of the month (PAUSE_PAST_CUTOFF), and a pause ends on its own after the ' +
+      'maximum length. The customer can still approve at any time. A paused filing can lose the on-time filing ' +
+      'commitment, which is best efforts per the Terms of Service. Requires a write key. ' +
+      'Live return (filingId starting ret_): a return can be paused once; send endDate (yyyy-mm-dd) within the range the return reports in pause.allowedEnd, ' +
+      'or omit it for the latest allowed day. Only offer it when the return reports pause.canPause true (it also says why not, in pause.canPauseReason); ' +
+      'it fails with PAUSE_NOT_ALLOWED (backdated returns are never finalised for the customer, so they cannot be paused), NOT_AWAITING_APPROVAL, ' +
+      'PAUSE_LIMIT_REACHED, PAUSE_PAST_CUTOFF or INVALID_PAUSE_END. snapshotVersion can be any number for a live return.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         filingId: { type: 'string', description: 'The filing ID.' },
-        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE). Ignored for a live return (ret_ id): send any number.' },
+        endDate: { type: 'string', description: 'Live return only: the last day of the pause, yyyy-mm-dd, within pause.allowedEnd. Omit for the latest allowed day.' },
       },
       required: ['filingId', 'snapshotVersion'],
     },
   },
   {
     name: 'resume_filing',
-    description: 'Resume a PAUSED filing so it returns to PENDING_APPROVAL. Requires a write key.',
+    description:
+      'Resume a paused filing so it goes back to waiting for approval. Requires a write key. ' +
+      'Live return (filingId starting ret_): ends the pause early; only offer it when the return reports pause.canResume true. It fails with NOT_PAUSED when the return is not paused. ' +
+      'snapshotVersion can be any number for a live return.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         filingId: { type: 'string', description: 'The filing ID.' },
-        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE).' },
+        snapshotVersion: { type: 'number', description: 'The filing\'s current snapshotVersion from get_filing or list_filings. A mismatch means the filing changed since you looked (error FILING_STALE). Ignored for a live return (ret_ id): send any number.' },
       },
       required: ['filingId', 'snapshotVersion'],
     },
@@ -4359,8 +4369,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', `/filings/${encodeURIComponent(filingId)}/undo`, { snapshotVersion });
     }
     case 'pause_filing': {
-      const { filingId, snapshotVersion } = args as { filingId: string; snapshotVersion: number };
-      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/pause`, { snapshotVersion });
+      const { filingId, snapshotVersion, endDate } = args as { filingId: string; snapshotVersion: number; endDate?: string };
+      return callApi('POST', `/filings/${encodeURIComponent(filingId)}/pause`, { snapshotVersion, ...(endDate ? { endDate } : {}) });
     }
     case 'resume_filing': {
       const { filingId, snapshotVersion } = args as { filingId: string; snapshotVersion: number };

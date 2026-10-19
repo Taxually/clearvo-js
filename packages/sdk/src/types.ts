@@ -4856,11 +4856,39 @@ export interface FilingAllowedActions {
   editPrepayment: boolean;
 }
 
+/** Why `pause.canPause` is false. */
+export type FilingPauseCode =
+  | 'NOT_AWAITING_APPROVAL' | 'PAUSE_NOT_ALLOWED' | 'ALREADY_PAUSED' | 'PAUSE_PAST_CUTOFF' | 'PAUSE_LIMIT_REACHED' | 'FORBIDDEN' | 'PLAN_REQUIRED';
+
+/** `pause` on a live return: show the sentences as they are; offer pause and resume only when `canPause` and `canResume` say so. */
+export interface FilingPauseInfo {
+  canPause: boolean;
+  canPauseCode: FilingPauseCode | null;
+  canPauseReason: string | null;
+  canResume: boolean;
+  canResumeReason: string | null;
+  isPaused: boolean;
+  /** The last day of the open pause (yyyy-mm-dd). */
+  pausedUntil: string | null;
+  pausedUntilLabel: string | null;
+  /** Pauses the organisation has left in the last 12 months; null when the return is not waiting for approval. */
+  pausesRemaining: number | null;
+  pausesPerYear: number | null;
+  /** Present only while `canPause`: the dates the last day of a pause may be chosen from (yyyy-mm-dd). */
+  allowedEnd?: { earliest: string; latest: string; earliestLabel: string; latestLabel: string; maxDays: number } | null;
+  /** Present only while `canPause`: the wording to show before pausing. */
+  confirmation?: { title: string; body: string; confirmLabel: string } | null;
+}
+
 export interface FilingSummary {
   /** `fil_...`, or `ret_<number>` for a return read live. */
   id: string;
-  /** True for a return read live (id `ret_...`): it can only be approved; every other action answers 404. */
+  /** True for a return read live (id `ret_...`): it can be approved, paused and resumed; every other action answers 404. */
   live?: boolean;
+  /** Live returns only: one plain sentence on what happens next while the return waits for approval (the review date, a pause, ...). Null when nothing is pending. Show as is. */
+  reviewLabel?: string | null;
+  /** Live returns only, absent when it could not be read: what the customer may do about pausing. Every sentence is display text. */
+  pause?: FilingPauseInfo;
   /** A country code (`GB`, `DE`), a state (`US_CA`) or an EU scheme: `EU` (EU sales), `EN` (sellers outside the EU), `XM` (imports). Show `jurisdictionLabel`. */
   jurisdictionId: string;
   returnType: string;
@@ -4899,7 +4927,7 @@ export interface FilingSummary {
   pauseEndsAt?: string | null;
   /** For a live return, `label` says what to do and by when ("Approve before 5 Oct 2026"). */
   actionNeeded: Array<{ code: string; label: string }>;
-  /** A live return only ever has `approve`; the other actions are absent. */
+  /** A live return only has `approve`, `pause` and `resume`; the other actions are absent. */
   allowedActions: Partial<FilingAllowedActions>;
 }
 
@@ -4969,13 +4997,13 @@ export interface GetFilingResponse {
   filing: FilingDetail;
 }
 
-/** Response of approve, undo, pause, resume, skip and prepayment. `alreadyApplied` is true when the filing already held that state. */
+/** Response of approve, undo, pause, resume, skip and prepayment (approve, pause and resume of a live return carry `message` and the refreshed return). `alreadyApplied` is true when the filing already held that state. */
 export interface FilingActionResponse {
   ok: boolean;
   alreadyApplied?: boolean;
-  /** Approving a live return only: display text for the result. Show it as is. */
+  /** Approving, pausing or resuming a live return: display text for the result. Show it as is. */
   message?: string;
-  /** Approving a live return answers with the full refreshed detail (including `documents`). */
+  /** A live return answers with the full refreshed detail (including `documents`). */
   filing: FilingSummary & Partial<FilingDetail>;
 }
 
