@@ -12,7 +12,7 @@ A live return (id `ret_...`) that is waiting for approval can be paused for up t
 - MCP: `pause_filing` gains `endDate`; `pause_filing` and `resume_filing` descriptions match the backend for live returns; `list_filings` and `get_filing` describe `reviewLabel`, `pause` and the new pause and resume actions.
 - CLI: `clearvo filings pause <id> [--end-date yyyy-mm-dd]` and `clearvo filings resume <id>`; `--snapshot-version` is only needed for a stored return.
 
-## Unreleased — DRAFT: POST /v1/send HTTP 200 flip (ingest-first stage 9). Do not merge or publish until the backend stage 9 release is live
+## Unreleased — POST /v1/send HTTP 200 flip (ingest-first stage 9); backend is deployed (release 168427); ready to publish
 
 `POST /v1/send` answers HTTP 200 for every document it stores; the outcome is in the body (Taxually-Einvoicing `docs/features/ingest-first/stage9.md`). This ships with the backend stage 9 release, not before: against today's production a rejection is still a 422 and `ACCUMULATED` a 202, both of which the SDK also handles. Stacks on the stage 7 block below. Nothing here is released; the product owner publishes.
 
@@ -25,7 +25,7 @@ A live return (id `ret_...`) that is waiting for approval can be paused for up t
 - MCP: `submit_invoice` and `poll_status` descriptions synced with hosted `lib/mcp/tools.ts` (PROCESSING is not an answer, UNROUTABLE is NEEDS_INFO, `ok` semantics). `isError` stays limited to `REJECTED` / `NEEDS_INFO`, as on the hosted MCP.
 - Backend follow-up (not in this repo): hosted `lib/mcp/tools.ts` `submit_invoice` does not yet mention `PROCESSING_DELAYED` or the `ACCUMULATED` 200.
 
-## Unreleased — DRAFT: e-invoice lifecycle (ingest-first). Do not merge or publish until backend stage 7 is released
+## Unreleased — e-invoice lifecycle (ingest-first); backend is deployed; ready to publish
 
 Descriptions and types for the e-invoice lifecycle as designed (Taxually-Einvoicing PR 17863, stage 7): a well-formed document is stored and answered 200, the result is in the body, one status model, a general `invoice.status_changed` webhook with subscriber-selected statuses. Pairs with clearvo-marketing PRs 81 and 82.
 
