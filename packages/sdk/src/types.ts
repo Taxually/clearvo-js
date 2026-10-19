@@ -124,8 +124,8 @@ export interface PeppolCustomerUnreachableResponse {
 export interface SendResult {
   referenceId: string;
   /**
-   * Derived from the status alone: false for REJECTED, NEEDS_INFO, SETUP_NEEDED and HELD_PLATFORM_FAULT (or a dry run that would be
-   * one), true for everything else (accepted, in flight, other holds, accumulated, PROCESSING, NEEDS_ACTION). A replay of the same
+   * Derived from the status alone: false for REJECTED, NEEDS_INFO (including UNROUTABLE), SETUP_NEEDED and HELD_PLATFORM_FAULT (or a dry run that would be
+   * one), true for everything else (accepted, in flight, other holds, accumulated, PROCESSING). A replay of the same
    * document carries the same `ok`, `error`, `errors[]`, `fixUrl` and `nextStep`. Branch on `outcome`, not `ok`.
    */
   ok?: boolean;
@@ -160,13 +160,13 @@ export interface SendResult {
   /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
   id?: string;
   /**
-   * CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD, PROCESSING or NEEDS_ACTION. Read this, not the HTTP status (200 for
+   * CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD or PROCESSING. Read this, not the HTTP status (200 for
    * every stored document, including ACCUMULATED, which used to be 202).
    * PROCESSING: stored (status RECEIVED) but not processed yet, so not an answer: keep `id` and poll getInvoiceStatus or wait for
-   * `invoice.status_changed`. NEEDS_ACTION: stored and only the sender can move it (UNROUTABLE: fix the recipient's address). UNDELIVERED is HELD
-   * (it was CLEARED); RECEIVED and UNROUTABLE are no longer CLEARED.
+   * `invoice.status_changed`. NEEDS_INFO: stored and only the sender can move it: a required fact is missing, or (UNROUTABLE) the recipient was not found, so fix the
+   * recipient's address and follow `nextStep`. UNDELIVERED is HELD (it was CLEARED); RECEIVED and UNROUTABLE are no longer CLEARED.
    */
-  outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING' | 'NEEDS_ACTION';
+  outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING';
   /** True when the status is final. A 200 with `terminal: false` means stored and still moving: poll getInvoiceStatus or subscribe to `invoice.status_changed`. */
   terminal?: boolean;
   /**
@@ -223,7 +223,7 @@ export interface SendResult {
 /** @deprecated Renamed {@link SendResult}; the shape is identical. */
 export type InvoiceSubmitResponse = SendResult;
 
-/** True when the stored outcome is REJECTED or NEEDS_INFO, the two outcomes `throwOnRejected` turns into a thrown error (NEEDS_ACTION and PROCESSING never throw). Reads `outcome`, falling back to `clearanceStatus`. */
+/** True when the stored outcome is REJECTED or NEEDS_INFO, the two outcomes `throwOnRejected` turns into a thrown error (PROCESSING never throws; UNROUTABLE is a NEEDS_INFO outcome and throws). Reads `outcome`, falling back to `clearanceStatus`. */
 export function isRejected(result: Pick<SendResult, 'outcome' | 'clearanceStatus' | 'status'>): boolean {
   const outcome = result.outcome ?? result.clearanceStatus ?? result.status;
   return outcome === 'REJECTED' || outcome === 'NEEDS_INFO';

@@ -118,7 +118,7 @@ export function createProgram(): Command {
     return res;
   }
 
-  /** Human-readable summary of a stored REJECTED / NEEDS_INFO / NEEDS_ACTION send: the error, one line per failed check, and the next step. */
+  /** Human-readable summary of a stored REJECTED / NEEDS_INFO send (UNROUTABLE is a NEEDS_INFO outcome): the error, one line per failed check, and the next step. */
   function describeStoredRejection(r: Record<string, unknown>, outcome: string): string {
     const err = r.error !== null && typeof r.error === 'object' ? r.error as Record<string, unknown> : null;
     const parts = [`${outcome}${r.id ? ` (${r.id})` : ''}: ${err ? (err.message ?? err.code ?? 'rejected') : (r.message ?? 'rejected')}`];
@@ -169,10 +169,10 @@ export function createProgram(): Command {
   // Invoice responses carry `totalTax` (never `totalVat`).
   program
     .command('send <file>')
-    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the outcome is in the body. PROCESSING means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the outcome is REJECTED, NEEDS_INFO or NEEDS_ACTION (unroutable recipient; errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on outcome yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
+    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the outcome is in the body. PROCESSING means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the outcome is REJECTED or NEEDS_INFO (which includes an unroutable recipient; errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on outcome yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
-    .option('--no-throw-on-rejected', 'Exit 0 when the stored outcome is REJECTED, NEEDS_INFO or NEEDS_ACTION (default: exit 1)')
+    .option('--no-throw-on-rejected', 'Exit 0 when the stored outcome is REJECTED or NEEDS_INFO (default: exit 1)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string; throwOnRejected?: boolean }) => {
       const raw = readFileSync(file, 'utf8');
@@ -190,12 +190,9 @@ export function createProgram(): Command {
         // Stored, not processed yet: not an answer. Exit 0 (nothing failed) but say how to follow it.
         console.error(`PROCESSING${result.id ? ` (${result.id})` : ''}: stored, not processed yet. Poll \`clearvo status ${result.id ?? '<id>'}\` (GET /v1/status) or wait for the invoice.status_changed webhook; do not resend.`);
       }
-      if (opts.throwOnRejected !== false && outcome === 'NEEDS_ACTION') {
-        console.error(describeStoredRejection(result, 'NEEDS_ACTION') + '\nOnly you can move this one: fix the recipient (address or Peppol ID) and resend the corrected document with the same invoice number.');
-        process.exit(1);
-      }
-      if (opts.throwOnRejected !== false && (outcome === 'REJECTED' || outcome === 'NEEDS_INFO')) {
+      if (opts.throwOnRejected !== false && (outcome === 'REJECTED' || outcome === 'NEEDS_INFO' || outcome === 'UNROUTABLE')) {
         console.error(describeStoredRejection(result, String(outcome)));
+        if (result.clearanceStatus === 'UNROUTABLE') console.error('Only you can move this one: fix the recipient (address or Peppol ID) and resend the corrected document with the same invoice number.');
         process.exit(1);
       }
     });

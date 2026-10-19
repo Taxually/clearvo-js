@@ -1,7 +1,7 @@
 import type { SendResult, StatusChangedWebhookPayload } from '../src/types.js';
 
 declare const r: SendResult;
-const outcome: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING' | 'NEEDS_ACTION' | undefined = r.outcome;
+const outcome: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING' | undefined = r.outcome;
 void outcome;
 
 declare const w: StatusChangedWebhookPayload;

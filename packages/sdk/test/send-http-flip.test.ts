@@ -32,15 +32,26 @@ const rejected = {
 const needsInfo = { ...rejected, clearanceStatus: 'NEEDS_INFO', outcome: 'NEEDS_INFO', statusClass: 'WAIT_MERCHANT', terminal: false };
 const cleared = { ok: true, id: 'EI-IT-2', referenceId: 'EI-IT-2', status: 'PENDING', clearanceStatus: 'PENDING', outcome: 'CLEARED', statusClass: 'IN_FLIGHT', terminal: false, nextStep: null };
 
-describe('submitInvoice PROCESSING / NEEDS_ACTION / HELD', () => {
-  it('returns PROCESSING, NEEDS_ACTION and UNDELIVERED (HELD) bodies without throwing', async () => {
+describe('submitInvoice PROCESSING / HELD / UNROUTABLE (NEEDS_INFO)', () => {
+  it('returns PROCESSING and UNDELIVERED (HELD) bodies without throwing', async () => {
     const client = new ClearvoClient({ apiKey: 'k', baseUrl: 'http://x/v1' });
-    for (const [clearanceStatus, outcome] of [['RECEIVED', 'PROCESSING'], ['UNROUTABLE', 'NEEDS_ACTION'], ['UNDELIVERED', 'HELD']] as const) {
+    for (const [clearanceStatus, outcome] of [['RECEIVED', 'PROCESSING'], ['UNDELIVERED', 'HELD']] as const) {
       reply(200, { ok: true, id: 'EI-1', referenceId: 'EI-1', status: clearanceStatus, clearanceStatus, outcome, terminal: false });
       const out = await client.submitInvoice(input);
       expect(out.outcome).toBe(outcome);
       expect(isRejected(out)).toBe(false);
     }
+  });
+
+  it('UNROUTABLE answers outcome NEEDS_INFO (one outcome for needs-info and unroutable) and throws like any NEEDS_INFO unless throwOnRejected is off', async () => {
+    const client = new ClearvoClient({ apiKey: 'k', baseUrl: 'http://x/v1' });
+    const body = { ok: false, id: 'EI-U', referenceId: 'EI-U', status: 'UNROUTABLE', clearanceStatus: 'UNROUTABLE', outcome: 'NEEDS_INFO', statusClass: 'WAIT_MERCHANT', terminal: false, error: { code: 'PEPPOL_CUSTOMER_UNREACHABLE', message: 'Recipient not reachable' } };
+    reply(200, body);
+    await expect(client.submitInvoice(input)).rejects.toBeInstanceOf(ClearvoError);
+    reply(200, body);
+    const out = await client.submitInvoice(input, undefined, { throwOnRejected: false });
+    expect(out.outcome).toBe('NEEDS_INFO');
+    expect(isRejected(out)).toBe(true);
   });
 
   it('does not throw for ok:false SETUP_NEEDED or HELD_PLATFORM_FAULT (outcome HELD); only REJECTED / NEEDS_INFO throw', async () => {
