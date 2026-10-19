@@ -122,6 +122,8 @@ api.listen(0, '127.0.0.1', async () => {
     assert(r.method === 'POST' && r.url === `/v1/filings/fil_1/${p}`, `${tool}: ${r.method} ${r.url}`);
     assert(JSON.parse(r.body).snapshotVersion === 3, `${tool} sends snapshotVersion`);
   }
+  await callTool('pause_filing', { filingId: 'ret_1', snapshotVersion: 0, endDate: '2026-10-12' }); r = only();
+  assert(r.url === '/v1/filings/ret_1/pause' && JSON.parse(r.body).endDate === '2026-10-12', 'pause_filing sends endDate');
   await callTool('skip_filing', { filingId: 'fil_1', snapshotVersion: 3, reason: 'Closed' }); r = only();
   assert(r.url === '/v1/filings/fil_1/skip' && JSON.parse(r.body).reason === 'Closed', 'skip_filing');
   await callTool('set_filing_prepayment', { filingId: 'fil_1', snapshotVersion: 3, amount: 5 }); r = only();

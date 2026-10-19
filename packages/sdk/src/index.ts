@@ -309,6 +309,8 @@ export type {
   ListCalculationRequestsResponse,
   FilingStatus,
   FilingAllowedActions,
+  FilingPauseCode,
+  FilingPauseInfo,
   FilingSummary,
   FilingDetail,
   FilingDocument,

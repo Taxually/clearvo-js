@@ -40,6 +40,12 @@ async function _use() {
   const _v: number | undefined = f.filing.snapshotVersion;
   await client.approveFiling('fil_1', f.filing.snapshotVersion);
   await client.approveFiling('ret_1');
+  await client.pauseFiling('ret_1');
+  await client.pauseFiling('ret_1', undefined, undefined, '2026-10-12');
+  await client.resumeFiling('ret_1');
+  const _canPause: boolean | undefined = f.filing.pause?.canPause;
+  const _review: string | null | undefined = f.filing.reviewLabel;
+  void [_canPause, _review];
   const _live: FilingStatus = 'READY_FOR_APPROVAL';
   const doc = await client.downloadFilingDocument('ret_1', '11111111-2222-4333-8444-555555555555');
   void [_live, doc.contentType];
