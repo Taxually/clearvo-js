@@ -1151,6 +1151,39 @@ export interface TaxCalcParty {
   taxIdValidationStatus?: string;
 }
 
+/**
+ * The treatment POST /v1/tax/calculate reports for the representative line.
+ * `UNSUPPORTED_JURISDICTION` (taxCode `O`, 0 tax) means the destination is a
+ * well-formed country we do not calculate tax for: the response is a 200, not
+ * an error, and carries `unsupportedJurisdiction` and a `country_not_supported`
+ * warning. The `(string & {})` arm keeps the type open to treatments added
+ * later.
+ */
+export type TaxCalculateTreatment =
+  | 'STANDARD'
+  | 'REVERSE_CHARGE'
+  | 'ZERO_RATED'
+  | 'EXEMPT'
+  | 'OUT_OF_SCOPE'
+  | 'SELLER_NOT_REGISTERED'
+  | 'IOSS'
+  | 'SIMPLIFIED'
+  | 'UNSUPPORTED_JURISDICTION'
+  | (string & {});
+
+/** A warning on a calculation. `country`, `party` and `hint` are set on `country_not_supported` only. */
+export interface TaxCalculateWarning {
+  ruleCode: string;
+  scopeLevel: string;
+  message?: string;
+  /** `country_not_supported` only: the unsupported country (ISO 3166-1 alpha-2). */
+  country?: string;
+  /** `country_not_supported` only: whose country it is. */
+  party?: 'customer' | 'seller';
+  /** `country_not_supported` only: points to GET /v1/tax/jurisdictions. */
+  hint?: string;
+}
+
 export interface TaxCalculateResponse {
   calculationId: string;
   /** The company code this calculation was recorded under (the casing configured on the entity). Present only when a code resolved or the entity uses company codes. */
@@ -1167,8 +1200,17 @@ export interface TaxCalculateResponse {
   degraded: boolean;
   degradedReason?: string;
   currency: string;
-  taxTreatment: string;
+  taxTreatment: TaxCalculateTreatment;
   taxCode: string;
+  /**
+   * Present only when a line resolved to a country we do not calculate tax for
+   * (`taxTreatment: 'UNSUPPORTED_JURISDICTION'`, 0 tax, HTTP 200). Test for its
+   * presence: 0 tax means "not covered", not "no tax due". Each affected line
+   * has outcome `UNKNOWN_TREATMENT` / `unsupported_jurisdiction`. A country
+   * code that is not valid ISO 3166-1 alpha-2 is instead a 422 `invalid_country`
+   * naming the field. Supported countries: GET /v1/tax/jurisdictions.
+   */
+  unsupportedJurisdiction?: { country: string; party: 'customer' | 'seller' };
   jurisdiction: {
     country: string;
     region: string | null;
@@ -1407,9 +1449,11 @@ export interface TaxCalculateResponse {
   };
   /**
    * Every matched WARNING-kind rules-engine rule (pre- or post-calculation)
-   * — absent entirely (never an empty array) when none fired.
+   * — absent entirely (never an empty array) when none fired. An unsupported
+   * country adds a `country_not_supported` warning (with `country`, `party`,
+   * `hint`).
    */
-  warnings?: Array<{ ruleCode: string; scopeLevel: string }>;
+  warnings?: TaxCalculateWarning[];
   /**
    * Present only on a calculation replayed by a CONFIRMED FORCED_INPUT
    * manual adjustment (proposeManualAdjustment) — names the id of the

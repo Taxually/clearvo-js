@@ -71,3 +71,13 @@ void _exemptionReasonEcho;
 
 void _withAmount;
 void _withUnitPrice;
+
+// An unsupported country is a 200 with an explicit treatment, a top-level
+// `unsupportedJurisdiction` and a `country_not_supported` warning that carries
+// country/party/hint. If these fields are dropped the assignments stop compiling.
+const _unsupportedTreatment: TaxCalculateResponse['taxTreatment'] = 'UNSUPPORTED_JURISDICTION';
+const _unsupported: { country: string; party: 'customer' | 'seller' } | undefined = _resp.unsupportedJurisdiction;
+const _warn = _resp.warnings?.[0];
+const _warnCountry: string | undefined = _warn?.country;
+const _warnParty: 'customer' | 'seller' | undefined = _warn?.party;
+const _warnHint: string | undefined = _warn?.hint;

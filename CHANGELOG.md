@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below; all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — unsupported country is a 200 zero-tax result (HOLD: depends on the backend release; do not publish before it deploys)
+
+`POST /v1/tax/calculate` no longer returns 422 `country_not_supported` for a well-formed country we do not support (for example JE, GG, IM, QA). It returns 200 with `totalTax` 0, `taxTreatment: 'UNSUPPORTED_JURISDICTION'`, an `unsupportedJurisdiction` field and a `country_not_supported` warning. A country code that is not valid ISO 3166-1 alpha-2 is a 422 `invalid_country` naming the field. The calculation ledger gains outcome `unsupported_country`.
+
+- SDK: new `TaxCalculateTreatment` (includes `UNSUPPORTED_JURISDICTION`, still open to other strings) used for `TaxCalculateResponse.taxTreatment`; `TaxCalculateResponse.unsupportedJurisdiction?: { country; party: 'customer' | 'seller' }`; new `TaxCalculateWarning` (`message?`, `country?`, `party?`, `hint?`) used for `warnings`. Additive. Callers that caught a 422 `country_not_supported` now get a 200 and should test `unsupportedJurisdiction`.
+- MCP: `calculate_tax` description names the 200 / `UNSUPPORTED_JURISDICTION` behaviour and the 422 `invalid_country` case.
+- CLI: no change (`clearvo calculate` prints the response).
+
 ## Unreleased — live Filings (backend is deployed); ready to publish
 
 Returns read live (id `ret_...`) can be listed, read, approved and have their documents downloaded. A live return has only one action, approve, which cannot be undone or withdrawn.

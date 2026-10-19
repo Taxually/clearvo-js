@@ -26,6 +26,8 @@ export type {
   ListInvoicesResponse,
   TaxCalculateRequest,
   TaxCalculateResponse,
+  TaxCalculateTreatment,
+  TaxCalculateWarning,
   QuoteDutiesInput,
   DutiesResult,
   EstimateDutiesInput,
