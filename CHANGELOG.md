@@ -44,6 +44,8 @@ NOT FOR RELEASE until the ingest-first backend (stage 7) ships. Nothing below wo
 - MCP: `calculate_tax` description names the 200 / `UNSUPPORTED_JURISDICTION` behaviour and the 422 `invalid_country` case.
 - CLI: no change (`clearvo calculate` prints the response).
 
+Also on `POST /v1/tax/calculate` (HOLD: depends on its own backend release): a supported non-US country or region with no tax rate on file now returns `taxTreatment: 'RATE_UNAVAILABLE'` (`taxCode` `O`, 0 tax) instead of `STANDARD` / `S` at 0. It stays HTTP 200 with `degraded: true`, `degradedReason: 'RATE_NOT_FOUND'` and a `rate_not_found` warning; each affected line has outcome `UNKNOWN_TREATMENT` / `rate_not_found`. SDK: `TaxCalculateTreatment` gains `RATE_UNAVAILABLE`. MCP: `calculate_tax` description names it.
+
 ## Unreleased — live Filings (backend is deployed); ready to publish
 
 Returns read live (id `ret_...`) can be listed, read, approved and have their documents downloaded. A live return has only one action, approve, which cannot be undone or withdrawn.

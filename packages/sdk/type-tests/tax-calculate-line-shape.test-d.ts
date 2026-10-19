@@ -81,3 +81,7 @@ const _warn = _resp.warnings?.[0];
 const _warnCountry: string | undefined = _warn?.country;
 const _warnParty: 'customer' | 'seller' | undefined = _warn?.party;
 const _warnHint: string | undefined = _warn?.hint;
+
+// A supported region with no rate on file answers RATE_UNAVAILABLE (degraded, taxCode O), never STANDARD at 0.
+const _rateUnavailable: TaxCalculateResponse['taxTreatment'] = 'RATE_UNAVAILABLE';
+void _rateUnavailable;
