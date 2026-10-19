@@ -56,7 +56,9 @@ Then ask Claude: *"Submit a test invoice for €1,000 to Acme SpA (IT12345678901
 
 `submit_invoice` line items have no `taxCode` field — the EN16931 category is always a resolved output. Pass `clientTaxCode` (RECOMMENDED) or a `taxTreatment` hint (`exempt`/`out_of_scope`/`zero_rated`/`reverse_charge`) instead, and set `dryRun: true` to preview the resolution without submitting for real.
 
-Line items carry `taxRate` (always required, 0–100 — even with a `clientTaxCode`; a 0% line with no `clientTaxCode`/`taxTreatment` is rejected with `400 ZERO_RATE_NEEDS_TAX_TREATMENT`) and `taxAmount` — field names are never tax-type-specific (the platform covers VAT, GST and sales tax). The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), `unitOfMeasure` and `sellerItemId`. The retired `vatRate`/`vatAmount` names are rejected by the API with `422 UNKNOWN_FIELD_VAT_RENAMED` and the retired `discount`/`unit`/`itemCode`/`exemption` line keys with `422 UNKNOWN_FIELD_LINE_RENAMED`; invoice responses carry `totalTax` (was `totalVat`); upgrade to `@clearvo/sdk` ≥ 0.2.0, `@clearvo/mcp` ≥ 0.3.0 or `@clearvo/cli` ≥ 0.2.0 (see [CHANGELOG](./CHANGELOG.md)).
+Line items carry `taxRate` (always required, 0–100 — even with a `clientTaxCode`; a 0% line with no `clientTaxCode`/`taxTreatment` is held `NEEDS_INFO` asking why it is zero) and `taxAmount` — field names are never tax-type-specific (the platform covers VAT, GST and sales tax). The other line fields are `lineNumber`, `discountPercent` | `discountAmount` (mutually exclusive), `unitOfMeasure` and `sellerItemId`. The retired `vatRate`/`vatAmount` names are stored `REJECTED` with `UNKNOWN_FIELD_VAT_RENAMED` and the retired `discount`/`unit`/`itemCode`/`exemption` line keys with `UNKNOWN_FIELD_LINE_RENAMED`; invoice responses carry `totalTax` (was `totalVat`); upgrade to `@clearvo/sdk` ≥ 0.2.0, `@clearvo/mcp` ≥ 0.3.0 or `@clearvo/cli` ≥ 0.2.0 (see [CHANGELOG](./CHANGELOG.md)).
+
+`POST /v1/send` answers HTTP 200 for every document it stores; the outcome is in the body (`outcome`, `clearanceStatus`, `statusClass`, `nextStep`, and on a rejection `error` and `errors[]`). `submit_invoice` returns that body as its result. A 4xx is only a malformed request, auth or plan, a rate limit or a 409 edited resend, and a 503 `INGEST_UNAVAILABLE` means nothing was stored (retry with the same body). `outcome` is one of `CLEARED`, `ACCUMULATED`, `NEEDS_INFO`, `HELD`, `REJECTED`, `NO_OBLIGATION`, `PROCESSING` (stored, not processed yet: keep the `id` and poll `GET /v1/status` or wait for `invoice.status_changed`; not an answer). `NEEDS_INFO` also covers an undeliverable recipient (`UNROUTABLE`): follow `nextStep`. `ok` is false only for `REJECTED`, `NEEDS_INFO`, `SETUP_NEEDED` and `HELD_PLATFORM_FAULT`. `invoice.status_changed` webhooks carry `eventId` (dedupe on it) and `seq` (order by it; ignore an event lower than the one you applied).
 
 ## TypeScript SDK
 
@@ -96,6 +98,17 @@ const entity = await client.createEntity({
   vatNumber: 'DE123456789',
 });
 // entity.apiKey — save this, shown once only
+```
+
+
+### Stored rejections: `throwOnRejected`
+
+`submitInvoice` resolves with the body of `POST /v1/send`, which answers 200 for every stored document. By default (`throwOnRejected: true`, for this SDK major only) it throws a `ClearvoError` (status 422, `code`, `errors`, whole body on `body`) when `outcome` is `REJECTED` or `NEEDS_INFO`, as it did when those were HTTP 422. Pass `throwOnRejected: false` to the client or per call to get the body and branch on `outcome` yourself; `isRejected(result)` tells you which it was. 4xx and 5xx always throw. The default flips to `false` in the next major.
+
+```typescript
+const client = new ClearvoClient({ apiKey, throwOnRejected: false });
+const result = await client.submitInvoice(invoice);
+if (isRejected(result)) console.log(result.errors, result.nextStep);
 ```
 
 ## CLI
