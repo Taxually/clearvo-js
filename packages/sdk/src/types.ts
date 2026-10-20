@@ -483,7 +483,14 @@ export interface SubmitInvoiceInput {
   issueDate: string;
   dueDate?: string;
   currency: string;
-  country: string;
+  /**
+   * Optional. The reporting country (ISO 3166-1 alpha-2). Omit it: the API derives it from the entity-side party's
+   * `taxId` matched to the entity's registrations, then `establishmentCountry` / `address.country`, else the entity's
+   * only registration or establishment country. 422 `JURISDICTION_AMBIGUOUS` (with `candidates`) when the entity is
+   * registered in several countries and the document names none; 422 `JURISDICTION_UNKNOWN` with no evidence at all.
+   * A value you send is used as given. The customer's own country is `customer.address.country`.
+   */
+  country?: string;
   /**
    * ISO 4217 currency code this invoice must be VAT-reported in, when it
    * differs from `currency` (EN16931 BT-6 — e.g. a EUR invoice for a
