@@ -3,7 +3,7 @@
 // POST /v1/tax/calculate accepts a line total either as `amount` directly, OR
 // as `unitPrice` with `quantity` (the engine derives amount = round2(unitPrice
 // * quantity)). Both forms must type-check on TaxCalculateRequest.lineItems,
-// and each US line result may carry a per-authority `jurisdictionBreakdown`.
+// and each taxed line result may carry a `jurisdictionBreakdown` (per authority in the US, per tax component elsewhere).
 //
 // Not run — only type-checked (see packages/sdk/type-tests/tsconfig.json). If a
 // future change makes `amount` unconditionally required again, drops
