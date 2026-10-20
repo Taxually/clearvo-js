@@ -3135,38 +3135,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'list_check_families',
-    description:
-      'List the optional (BUSINESS_POLICY) validation check families this entity can turn on or off — e.g. ' +
-      'a business-policy-only tax-ID format warning outside the countries where it is a legal mandate. Each ' +
-      'family carries its member rule codes (split into legalMandateRuleCodes/businessPolicyRuleCodes) and this ' +
-      "entity's current toggleState (ENABLED, DISABLED, or PARTIAL). A family made entirely of LEGAL_MANDATE " +
-      'rules is never listed here — those can never be disabled for a single entity; see the mandate list instead.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: { entityId: { type: 'string', description: 'Entity ID to query. Required for account-scoped keys; omit for entity-scoped keys.' } },
-    },
-  },
-  {
-    name: 'toggle_check_family',
-    description:
-      'Enable or disable an entire optional check family (see list_check_families) for this entity in one call, ' +
-      'instead of suppressing one rule code at a time. Only the BUSINESS_POLICY rule codes in the family are ever ' +
-      'touched — any LEGAL_MANDATE rows in a mixed family are always left enforced, and the response always lists ' +
-      'skippedLegalMandateRuleCodes (even when empty) so the caller can see that. Rejected with NOT_TOGGLEABLE if ' +
-      'the family is 100% LEGAL_MANDATE.',
-    inputSchema: {
-      type: 'object' as const,
-      properties: {
-        checkFamily: { type: 'string', description: 'The check family to toggle (from list_check_families)' },
-        enabled: { type: 'boolean', description: 'true to enable (re-activate) the family, false to disable it' },
-        reason: { type: 'string', description: 'Optional free-text reason recorded in the override audit trail' },
-        entityId: { type: 'string', description: 'Entity to toggle the family for. Required for account-scoped keys; omit for entity-scoped keys.' },
-      },
-      required: ['checkFamily', 'enabled'],
-    },
-  },
-  {
     name: 'list_client_tax_codes',
     description:
       'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
@@ -4613,16 +4581,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'delete_bank_account': {
       const { bankAccountId, entityId } = args as { bankAccountId: string; entityId?: string };
       return callApi('DELETE', `/bank-accounts/${encodeURIComponent(bankAccountId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
-    }
-
-    case 'list_check_families': {
-      const { entityId } = args as { entityId?: string };
-      return callApi('GET', '/rules/families', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
-    }
-
-    case 'toggle_check_family': {
-      const { checkFamily, entityId, ...rest } = args as { checkFamily: string; entityId?: string } & Record<string, unknown>;
-      return callApi('PATCH', `/rules/families/${encodeURIComponent(checkFamily)}`, rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'list_client_tax_codes': {
