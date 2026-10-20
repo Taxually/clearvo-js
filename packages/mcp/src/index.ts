@@ -1827,14 +1827,14 @@ const TOOLS = [
       'realistic e-invoice (Factur-X for France, ZUGFeRD for Germany) from a clearly fictional supplier, received through the same ' +
       'pipeline as a real received document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
       'intakeChannel SANDBOX_SIMULATION, and no email is sent. With no arguments it creates one invoice for the entity\'s own country. ' +
-      'country (DE or FR) defaults to the entity\'s country and a different value is 400 COUNTRY_MISMATCH. count creates 1-20 documents ' +
+      'The documents are received under one of the entity\'s tax registrations: country (DE or FR) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ' +
       '(each call adds new ones). businessStatus (e.g. APPROVED, DISPUTED, REFUSED) moves each document along its lifecycle after it arrives, ' +
       'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. French samples are EUR only. ' +
       'Returns the created invoices, any duplicates, how many of your webhook endpoints are subscribed to invoice.received, and notes.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        country: { type: 'string', enum: ['DE', 'FR'], description: 'Optional. Defaults to the entity\'s own country; a different value is rejected with 400 COUNTRY_MISMATCH.' },
+        country: { type: 'string', enum: ['DE', 'FR'], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
         type: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Document type. Default invoice.' },
         count: { type: 'integer', minimum: 1, maximum: 20, description: 'How many documents to create (1-20). Default 1.' },
         supplier: {

@@ -877,7 +877,7 @@ export interface InvoiceRecordTimestamps {
 }
 
 export interface SimulateReceivedInvoicesInput {
-  /** DE or FR. Defaults to the entity's own country; a different value is rejected with 400 COUNTRY_MISMATCH. */
+  /** DE or FR: the registration the documents are received under (any country the entity is established or VAT-registered in; else 409 COUNTRY_NOT_REGISTERED). Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
   country?: 'DE' | 'FR';
   /** Default invoice. A credit note references an invoice from the same call. */
   type?: 'invoice' | 'credit_note';
