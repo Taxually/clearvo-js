@@ -995,7 +995,7 @@ export function createProgram(): Command {
   receive
     .command('simulate')
     .description('Sandbox only: create sample received invoices or credit notes from a fictional supplier (needs a csk_test_ key)')
-    .option('--country <code>', 'DE or FR (default: the entity\'s own country)')
+    .option('--country <code>', 'DE or FR: the tax registration the invoices are received under (default: the establishment country, else the single supported registration)')
     .option('--type <type>', 'invoice (default) or credit_note')
     .option('--count <n>', 'How many documents, 1-20 (default 1)')
     .option('--total <amount>', 'Gross total of each document (default 1200)')

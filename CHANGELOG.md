@@ -2,9 +2,9 @@
 
 Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
 
-## Unreleased — publish only AFTER the backend sandbox inbound simulator PR (Taxually-einvoicing 17701) is deployed
+## Unreleased — publish only AFTER the backend sandbox inbound simulator PR (Taxually-einvoicing 17701) and the registration-based country fix are deployed
 
-New endpoint `POST /v1/receive/simulate` (sandbox keys only): create sample received invoices and credit notes from a fictional supplier, through the same pipeline as a real received document (stored, archived, `invoice.received` webhook, no email). Needs the docs PR in clearvo-marketing (`public/openapi.json`, docs page, `llms.txt`) to ship with it.
+New endpoint `POST /v1/receive/simulate` (sandbox keys only): create sample received invoices and credit notes from a fictional supplier, through the same pipeline as a real received document (stored, archived, `invoice.received` webhook, no email). The documents are received under one of the entity's tax registrations (`country`: DE or FR, any country the entity is established or VAT-registered in). Needs the docs PR in clearvo-marketing (`public/openapi.json`, docs page, `llms.txt`) to ship with it.
 
 - SDK: `client.simulateReceivedInvoices({ country?, type?, count?, supplier?, totalAmount?, currency?, lines?, issueDate?, businessStatus?, entityId? })`, with `SimulateReceivedInvoicesInput` and `SimulateReceivedInvoicesResponse` types. `ReceivedInvoiceFields.intakeChannel` lists the France and `SANDBOX_SIMULATION` values.
 - MCP: `simulate_received_invoices` tool.
