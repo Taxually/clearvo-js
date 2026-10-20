@@ -929,6 +929,7 @@ const TOOLS = [
       'but has no collection start date set yet. Call set_registration_collection to fix it rather than guessing. ' +
       'A line item can carry classificationCodes (e.g. [{system:"stripe",code:"txcd_..."}, {system:"shopify",code:"aa-1-13"}]) ' +
       'to classify it from an external catalogue instead of by name; the response reports classificationSource "CODE_MAP". ' +
+      'A valid country code we do not calculate tax for is not an error: the response is 200 with totalTax 0, taxTreatment UNSUPPORTED_JURISDICTION, an unsupportedJurisdiction field and a country_not_supported warning (supported countries: GET /v1/tax/jurisdictions); an invalid code is 422 invalid_country naming the field. ' +
       'Each line item can also carry taxTreatmentOverride (force a rate band) or commodityCode (tariff-driven ' +
       'lookup) — most-specific wins, above taxCategory. See those fields\' own descriptions for the precedence chain. ' +
       'Duties (estimated import duty, import VAT/GST and customs fees for a cross-border consignment) are opt-in: pass duties.include true (or enable the account setting dutiesEnabled via update_tax_settings), and send commodityCode, countryOfOrigin and weight per line to tighten the estimate. ' +
