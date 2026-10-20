@@ -1260,7 +1260,11 @@ export interface TaxCalcParty {
  * `UNSUPPORTED_JURISDICTION` (taxCode `O`, 0 tax) means the destination is a
  * well-formed country we do not calculate tax for: the response is a 200, not
  * an error, and carries `unsupportedJurisdiction` and a `country_not_supported`
- * warning. The `(string & {})` arm keeps the type open to treatments added
+ * warning. `RATE_UNAVAILABLE` (taxCode `O`, 0 tax) means a supported non-US
+ * country or region has no tax rate on file: also HTTP 200, with `degraded: true`,
+ * `degradedReason: 'RATE_NOT_FOUND'`, a `rate_not_found` warning and line outcome
+ * `UNKNOWN_TREATMENT` / `rate_not_found`; it is not a real zero-rated sale, do not
+ * rely on the amount. The `(string & {})` arm keeps the type open to treatments added
  * later.
  */
 export type TaxCalculateTreatment =
@@ -1273,6 +1277,7 @@ export type TaxCalculateTreatment =
   | 'IOSS'
   | 'SIMPLIFIED'
   | 'UNSUPPORTED_JURISDICTION'
+  | 'RATE_UNAVAILABLE'
   | (string & {});
 
 /** A warning on a calculation. `country`, `party` and `hint` are set on `country_not_supported` only. */
