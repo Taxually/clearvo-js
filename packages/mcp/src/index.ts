@@ -2528,6 +2528,7 @@ const TOOLS = [
           description: 'Purchase-side (AP) vendor-charged-tax verification tolerance. Set to { absoluteAmount, percent } (both non-negative), or null to clear it back to the platform default (zero tolerance).',
           properties: { absoluteAmount: { type: 'number' }, percent: { type: 'number' } },
         },
+        validateTaxNumbersOnSend: { type: 'boolean', description: "Whether the supplier and customer tax numbers on each submit_invoice are also checked live against the issuing authority (VIES, national registers). Default false. A number reported invalid, or an authority that cannot be reached, only adds a warning to the invoice (returned as `warnings`): it never rejects the invoice or blocks submission. Does not affect calculate_tax." },
         defaultCompanyCode: { type: ['string', 'null'], description: "Entity-level default company code: the company code a calculation or send that names none is recorded under. Must be an active code from list_company_codes; null clears it. Enterprise only (403 \"company_codes_not_included\" otherwise)." },
         apPoDisposition: { type: ['string', 'null'], enum: ['warn', 'hold', 'ignore', null], description: "How a purchase-order fact mismatch (poComparison) affects the AP decision outcome — 'warn' (default) surfaces it without blocking, 'hold' forces outcome HELD, 'ignore' skips PO comparison for outcome purposes. null clears it back to the platform default ('warn')." },
         confirmed: { type: 'boolean', description: 'Set true once the user has reviewed these settings — marks the onboarding step complete, independent of whether any value changed.' },
@@ -4464,8 +4465,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/tax/settings');
 
     case 'update_tax_settings': {
-      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, defaultCompanyCode, confirmed } = args;
-      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, defaultCompanyCode, confirmed });
+      const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, validateTaxNumbersOnSend, apTolerance, apPoDisposition, defaultCompanyCode, confirmed } = args;
+      return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, validateTaxNumbersOnSend, apTolerance, apPoDisposition, defaultCompanyCode, confirmed });
     }
 
     case 'get_reporting_obligations':
