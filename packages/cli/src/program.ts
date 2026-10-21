@@ -1033,12 +1033,31 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo obligations ─────────────────────────────────────────────────────
+  program
+    .command('obligations')
+    .description('List tax obligations: threshold monitoring by country and state, including the EU-wide consumer-sales row (country EU)')
+    .option('--country <code>', 'ISO country code; EU selects the EU-wide consumer-sales row')
+    .option('--status <status>', 'Obligation status: BREACH | APPROACHING | MONITORING | COMPLIANT')
+    .option('--include-preview', 'Sandbox keys only: also return the EU consumer-sales row built from sandbox test data (previewObligations)')
+    .option('--entity <entityId>', 'Entity (organisation keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; status?: string; includePreview?: boolean; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.country) qs.set('country', opts.country);
+      if (opts.status) qs.set('status', opts.status);
+      if (opts.includePreview) qs.set('includePreview', 'true');
+      const q = qs.toString();
+      const result = await api('GET', `/tax/obligations${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo registrations ───────────────────────────────────────────────────
   const registrations = program.command('registrations').description('Manage tax registrations');
   
   registrations
     .command('list')
-    .description('List tax registrations and obligations for an entity')
+    .description('List tax registrations for an entity (see `clearvo obligations` for threshold monitoring)')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { entity?: string; pretty?: boolean }) => {

@@ -2022,6 +2022,52 @@ export interface TaxRegistration {
   secondaryIdentifiers: RegistrationSecondaryIdentifier[];
 }
 
+// ── Tax obligations (Compliance Radar) ───────────────────────────────────────
+
+export interface ListObligationsParams {
+  /** ISO 3166-1 alpha-2 filter; "EU" selects the EU-wide consumer-sales row. */
+  country?: string;
+  /** Filter by obligation status, e.g. BREACH, APPROACHING, MONITORING, COMPLIANT. */
+  status?: string;
+  /** Sandbox keys only: also return the EU consumer-sales row built from sandbox test data in `previewObligations`. A live key ignores it. */
+  includePreview?: boolean;
+}
+
+export interface Obligation {
+  id: string;
+  country: string;
+  region: string | null;
+  /** "EU_DISTANCE_SALES" marks the EU-wide row for consumer sales to other EU countries (id "eu-distance-sales"). */
+  scheme?: string;
+  registrationStatus: string;
+  obligationStatus: string;
+  thresholdAmount: number | null;
+  thresholdCurrency: string | null;
+  currentPeriodAmount: number | null;
+  actionRequired: boolean;
+  statusLabel: string;
+  severity: 'registered' | 'pending' | 'critical' | 'warning' | 'neutral';
+  commentary: string | null;
+  jurisdictionName?: string;
+  lookbackLabel?: string;
+  thresholdPercent?: number | null;
+  /** True for a row built from sandbox test data; such rows appear only in `previewObligations`. */
+  isPreview?: boolean;
+  previewLabel?: string | null;
+  requestSupportAllowed?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ListObligationsResponse {
+  obligations: Obligation[];
+  total: number;
+  mandateObligations?: Array<Record<string, unknown>>;
+  mandateTotal?: number;
+  /** Sandbox keys with `includePreview`: the EU consumer-sales row from sandbox data. Never counted in `total`. */
+  previewObligations?: Obligation[];
+  previewTotal?: number;
+}
+
 export interface ListRegistrationsResponse {
   ok: boolean;
   entityId: string;

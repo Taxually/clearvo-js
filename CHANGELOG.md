@@ -159,6 +159,12 @@ Additive: US consumer's use tax on purchases. `POST /v1/tax/calculate` with `tra
 
 Additive: Purchases (AP) is now an Enterprise-only sub-solution of Tax Calculations (backend `tax_calculations_purchases`). Purchase-direction and `purchase_order` calculations, the Coupa Call Out, and the AP-only supplier and settings fields return HTTP 403 `ap_not_included` (plan) or `ap_not_enabled` (switch it on under Settings > Solutions) without it. Sales are unaffected. SDK `listTaxCalculations({ direction })`, CLI `calculations list --direction`, MCP `list_tax_calculations` `direction`; doc comments on `transactionDirection` and `documentStage` (SDK) and the `calculate_tax` `transactionDirection` description (MCP) name the Enterprise requirement and the two codes. Until the backend is live the `direction` filter is ignored.
 
+## Unreleased — Compliance Radar EU consumer-sales row: SDK `listObligations()`, MCP `list_obligations`, CLI `clearvo obligations`
+
+- SDK: `listObligations({ country?, status?, includePreview? })` (GET /tax/obligations) with `Obligation`, `ListObligationsParams` and `ListObligationsResponse`. A live key's list includes the EU-wide consumer-sales row (`id` `eu-distance-sales`, `scheme` `EU_DISTANCE_SALES`); a sandbox key gets it in `previewObligations` when `includePreview` is true.
+- MCP: new read-only tool `list_obligations`; `list_registrations` now points to it for threshold monitoring.
+- CLI: `clearvo obligations [--country] [--status] [--include-preview] [--entity]`.
+
 ## Unreleased — Canonical Invoice v1 pass 2 S3 (payment) and S4 (totals): backend PRs 17021 and 17034 are deployed to production, so this block can be published; it is NOT published yet
 
 **BREAKING**, no aliases: the send `payment` object is now `payment.means[]` (SDK `PaymentInput`, MCP `submit_invoice`). The old names return 422 `UNKNOWN_FIELD_RENAMED` naming the replacement.
