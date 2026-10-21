@@ -121,3 +121,25 @@ describe('clearvo send outcome', () => {
     expect(stderr()).toContain('HTTP 401');
   });
 });
+
+describe('clearvo send --country', () => {
+  const jurisdiction = {
+    ok: false, id: 'EI-ZZ-1', clearanceStatus: 'REJECTED', outcome: 'REJECTED', terminal: true, candidates: ['DE', 'FR'],
+    error: { code: 'JURISDICTION_AMBIGUOUS', message: 'Add supplier.taxId or country' },
+    errors: [{ errorCode: 'JURISDICTION_AMBIGUOUS', severity: 'ERROR', path: '', message: 'Add supplier.taxId or country' }],
+  };
+
+  it('prints a JURISDICTION_AMBIGUOUS rejection and exits 1', async () => {
+    reply(jurisdiction);
+    exitThrows();
+    await expect(run()).rejects.toThrow('exit 1');
+    expect(stderr()).toContain('JURISDICTION_AMBIGUOUS');
+  });
+
+  it('sends the country it is given over the one in the file', async () => {
+    reply({ ok: true, clearanceStatus: 'ACCEPTED', outcome: 'CLEARED' });
+    await run(['--country', 'DE']);
+    const sent = JSON.parse(((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { body: string }).body);
+    expect(sent.country).toBe('DE');
+  });
+});

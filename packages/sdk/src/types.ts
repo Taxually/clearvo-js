@@ -484,6 +484,14 @@ export interface SubmitInvoiceInput {
   dueDate?: string;
   currency: string;
   /**
+   * ISO 3166-1 alpha-2 reporting country (e.g. "IT", "DE"). Required when no `supplier.taxId` is sent and the business is
+   * registered in more than one country; otherwise omit it, Clearvo derives it from the entity's registrations. The
+   * supplier name and address never need re-sending. Without `country` or a `supplier.taxId` equal to one registration,
+   * a multi-country business's document is stored REJECTED with error `JURISDICTION_AMBIGUOUS` (HTTP 200, `candidates[]`):
+   * resend it with `country` or `supplier.taxId`. A country you send is used as given.
+   */
+  country?: string;
+  /**
    * ISO 4217 currency code this invoice must be VAT-reported in, when it
    * differs from `currency` (EN16931 BT-6 — e.g. a EUR invoice for a
    * transaction whose jurisdiction reports in RON). Omit to let it resolve
