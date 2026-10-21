@@ -1328,13 +1328,17 @@ const TOOLS = [
       'recording their own decision on it. For an invoice you issued, the other side\'s response syncs ' +
       'automatically once they act on their own side — there is nothing to call here for that direction. ' +
       'FR/DE: approve, partially approve, dispute, suspend, refuse, or mark paid — rejectionDetail.reason is ' +
-      'required when status is DISPUTED, REFUSED, or SUSPENDED. Brazil: acknowledge receipt (CIENCIA), confirm ' +
-      'the operation occurred (CONFIRMACAO), or reject it — either the operation didn\'t occur ' +
-      '(OPERACAO_NAO_REALIZADA, rejectionDetail.message required, 15–255 characters) or you don\'t recognize the ' +
-      'transaction (DESCONHECIMENTO, rejectionDetail forbidden). PRESUMIDA (Brazil\'s day-90 deemed-acceptance ' +
-      'presumption) is never a valid target here — SEFAZ\'s own statutory silence writes it, not a customer ' +
-      'request. Only the status values belonging to the invoice\'s own country/regime are a valid transition for ' +
-      'it — check get_invoice\'s businessStatusActions first rather than guessing from this enum alone. Fails ' +
+      'required when status is DISPUTED, REFUSED, or SUSPENDED. Brazil NF-e (goods, documentFamily "nfe"): ' +
+      'acknowledge receipt (CIENCIA), confirm the operation occurred (CONFIRMACAO), or reject it — either the ' +
+      'operation didn\'t occur (OPERACAO_NAO_REALIZADA, rejectionDetail.message required, 15–255 characters) or ' +
+      'you don\'t recognize the transaction (DESCONHECIMENTO, rejectionDetail forbidden). Brazil NFS-e ' +
+      '(services, documentFamily "nfse" — genuinely distinct vocabulary): confirm the service was received ' +
+      '(CONFIRMACAO_TOMADOR) or reject it (REJEICAO_TOMADOR, rejectionDetail.reason required — a closed ' +
+      'six-code cMotivo). PRESUMIDA (Brazil NF-e\'s day-90 deemed-acceptance presumption) and ' +
+      'CONFIRMACAO_TACITA/REJEICAO_ANULADA (Brazil NFS-e\'s own municipality/ADN-authored facts) are never a ' +
+      'valid target here — they are written by the authority\'s own statutory silence or event stream, never a ' +
+      'customer request. Only the status values belonging to the invoice\'s own country/regime/family are a ' +
+      'valid transition for it — check get_invoice\'s businessStatusActions first rather than guessing from this enum alone. Fails ' +
       '409 if the transition isn\'t valid from the invoice\'s current status (also Brazil-specific: no ' +
       'certificate on file, an expired certificate, homologação not yet complete, or SEFAZ itself rejected the ' +
       'event), 422 (FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s ' +
@@ -1346,15 +1350,19 @@ const TOOLS = [
         id: { type: 'string', description: 'Invoice id or referenceId of a received (inbound) invoice — as returned by get_invoice or list_invoices.' },
         status: {
           type: 'string',
-          enum: ['IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED', 'CIENCIA', 'CONFIRMACAO', 'OPERACAO_NAO_REALIZADA', 'DESCONHECIMENTO'],
-          description: 'The new business-lifecycle status. FR/DE: the first nine values. Brazil: CIENCIA/CONFIRMACAO/OPERACAO_NAO_REALIZADA/DESCONHECIMENTO only.',
+          enum: [
+            'IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED',
+            'CIENCIA', 'CONFIRMACAO', 'OPERACAO_NAO_REALIZADA', 'DESCONHECIMENTO',
+            'CONFIRMACAO_TOMADOR', 'REJEICAO_TOMADOR',
+          ],
+          description: 'The new business-lifecycle status. FR/DE: the first nine values. Brazil NF-e (documentFamily "nfe"): CIENCIA/CONFIRMACAO/OPERACAO_NAO_REALIZADA/DESCONHECIMENTO. Brazil NFS-e (documentFamily "nfse"): CONFIRMACAO_TOMADOR/REJEICAO_TOMADOR only — CONFIRMACAO_TACITA/REJEICAO_ANULADA are real, readable values but never a valid target here (municipality/ADN-authored facts only).',
         },
         rejectionDetail: {
           type: 'object' as const,
-          description: 'Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), or OPERACAO_NAO_REALIZADA (Brazil — message required, 15–255 characters). Forbidden for Brazil\'s DESCONHECIMENTO.',
+          description: 'Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), OPERACAO_NAO_REALIZADA (Brazil NF-e — message required, 15–255 characters), or REJEICAO_TOMADOR (Brazil NFS-e — reason required, a closed six-code cMotivo enum: \'1\'..\'5\',\'9\'; message optional for \'1\'-\'5\', required 15–255 characters for \'9\' "Other"). Forbidden for Brazil NF-e\'s DESCONHECIMENTO.',
           properties: {
-            reason: { type: 'string', description: 'Short machine-usable reason code (FR/DE).' },
-            message: { type: 'string', description: 'Human-readable detail — optional for FR/DE, required for Brazil\'s OPERACAO_NAO_REALIZADA.' },
+            reason: { type: 'string', description: 'Short machine-usable reason code (FR/DE), or Brazil NFS-e\'s closed cMotivo code (\'1\'..\'5\',\'9\').' },
+            message: { type: 'string', description: 'Human-readable detail — optional for FR/DE, required for Brazil NF-e\'s OPERACAO_NAO_REALIZADA and Brazil NFS-e\'s cMotivo=\'9\'.' },
           },
         },
         entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.' },
@@ -1521,17 +1529,22 @@ const TOOLS = [
   {
     name: 'poll_br_inbound',
     description:
-      'Manually trigger a Distribuição DFe poll cycle for this entity — Clearvo\'s hourly automated sweep already ' +
-      'does this; use this only when you need it sooner. Rate-limited to once per 60 minutes per entity (a ' +
-      'second manual call inside that window gets 429). Independently of that per-entity cooldown, the shared ' +
-      'SEFAZ rate budget for the certificate\'s own CNPJ root (20 queries/hour, shared across every entity on ' +
-      'that root) may already be parked (a recent "no new documents" response) or held (three consecutive ' +
-      'rate-limit responses — an administrator must release the hold) — either case also answers 429, before any ' +
-      'real SEFAZ call is attempted.',
+      'Manually trigger a Brazil poll cycle for this entity — Clearvo\'s hourly automated sweep already does ' +
+      'this; use this only when you need it sooner. documentFamily picks which of Brazil\'s two receiving ' +
+      'surfaces to poll: "nfe" (goods, Distribuição DFe/SEFAZ — the default) or "nfse" (services, the national ' +
+      'NFS-e/ADN environment) — each has its own cooldown and rate budget, so polling one never counts against ' +
+      'the other. Rate-limited to once per 60 minutes per entity per family (a second manual call inside that ' +
+      'window gets 429). Independently of that per-entity cooldown, the shared rate budget for the ' +
+      'certificate\'s own CNPJ root (NF-e: 20 queries/hour, shared across every entity on that root; NFS-e: a ' +
+      'separate, more conservative Clearvo-chosen default — no official NFS-e rate limit is documented anywhere) ' +
+      'may already be parked (a recent "no new documents" response) or held (three consecutive rate-limit ' +
+      'responses — an administrator must release the hold) — either case also answers 429, before any real ' +
+      'network call is attempted.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+        documentFamily: { type: 'string', enum: ['nfe', 'nfse'], description: 'Which surface to poll — "nfe" (goods, default) or "nfse" (services, the national ADN).' },
       },
       required: [],
     },
@@ -1539,16 +1552,21 @@ const TOOLS = [
   {
     name: 'get_br_sync_status',
     description:
-      'Check the health of the Brazil Distribuição DFe poll job for an entity: when it last ran, when it last ' +
-      'succeeded, and any error. Pure DB read — never calls SEFAZ itself. status is "not_started" until a real ' +
+      'Check the health of the Brazil poll job for an entity: when it last ran, when it last succeeded, and any ' +
+      'error. Pure DB read — never calls the authority itself. status is "not_started" until a real ' +
       'homologação (test-environment) run has verified this entity\'s credential end-to-end — before that, no ' +
       'manifestation is registered and no document is collected, though the underlying statutory deadlines are ' +
-      'never paused by this state. A recent SEFAZ rate-limit park reads as "ok", never "stale"/"error" — it is a ' +
-      'normal, self-clearing condition, not a fault.',
+      'never paused by this state. A recent rate-limit park reads as "ok", never "stale"/"error" — it is a ' +
+      'normal, self-clearing condition, not a fault. documentFamily picks which of Brazil\'s two receiving ' +
+      'surfaces this checks: "nfe" (goods, Distribuição DFe/SEFAZ — the default) or "nfse" (services, the ' +
+      'national ADN) — both share the same certificate but poll and report independently. Omit documentFamily ' +
+      'entirely to get the pre-existing flat "nfe" response PLUS a `collection` array carrying both families\' ' +
+      'own status lines in one call.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         entityId: { type: 'string', description: 'Entity to check. Required for account-scoped keys; omit for entity-scoped keys.' },
+        documentFamily: { type: 'string', enum: ['nfe', 'nfse'], description: 'Which receiving surface to check — "nfe" (goods, default) or "nfse" (services, the national ADN). Omit to also receive `collection` (both families).' },
       },
       required: [],
     },
@@ -1556,19 +1574,22 @@ const TOOLS = [
   {
     name: 'update_br_settings',
     description:
-      'Flip Brazil auto-Ciência on or off for an entity that already has a certificate on file — never requires ' +
-      'the e-CNPJ certificate or password to be re-submitted (set_br_credentials\'s own autoCiencia field only ' +
-      'sets the STARTING value, at upload time). Turning auto-Ciência off never stops the day-7 Ciência-due ' +
-      'reminder or the day-90 conclusive-deadline reminder — both keep firing regardless of this setting, since ' +
-      'the statutory deadline itself is never paused by it. When off, the entity must register Ciência directly ' +
-      '(their ERP, the SEFAZ portal, or update_business_status).',
+      'Flip Brazil auto-Ciência (goods invoices only) on or off for an entity that already has a certificate on ' +
+      'file — never requires the e-CNPJ certificate or password to be re-submitted (set_br_credentials\'s own ' +
+      'autoCiencia field only sets the STARTING value, at upload time). Turning auto-Ciência off never stops the ' +
+      'day-7 Ciência-due reminder or the day-90 conclusive-deadline reminder — both keep firing regardless of ' +
+      'this setting, since the statutory deadline itself is never paused by it. When off, the entity must ' +
+      'register Ciência directly (their ERP, the SEFAZ portal, or update_business_status). ' +
+      'acknowledgeConsent: true records a fresh acknowledgement of the CURRENT consent statement (get_br_sync_status\'s ' +
+      'own consentUpdatePending flag says whether one is needed) — never requires re-uploading the certificate. ' +
+      'At least one of autoCiencia/acknowledgeConsent must be supplied.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         autoCiencia: { type: 'boolean' },
+        acknowledgeConsent: { type: 'boolean', description: 'Set to true to acknowledge the CURRENT consent statement without re-uploading the certificate.' },
         entityId: { type: 'string', description: 'Entity to configure. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
-      required: ['autoCiencia'],
     },
   },
   {
@@ -1631,6 +1652,7 @@ const TOOLS = [
         after_id:  { type: 'string', description: 'Return invoices submitted before this invoice ID (use nextCursor from a previous response)' },
         before_id: { type: 'string', description: 'Return invoices submitted after this invoice ID (use prevCursor from a previous response)' },
         receivedAfter: { type: 'string', description: 'ISO 8601 timestamp — only invoices whose Clearvo-side received/created timestamp is strictly after this. A monotonic "what\'s new since I last checked" cursor, distinct from issueDate — most relevant for Mexico CFDIs, where SAT can publish a document days after its own issue date.' },
+        documentFamily: { type: 'string', enum: ['nfe', 'nfse'], description: 'Brazil only — filter by the national document-family discriminator: "nfe" (goods, Distribuição DFe/SEFAZ) or "nfse" (services, the national NFS-e/ADN environment). Matches nothing for a non-Brazil invoice.' },
       },
     },
   },
@@ -4166,13 +4188,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'poll_br_inbound': {
-      const { entityId } = args as { entityId?: string };
-      return callApi('POST', '/br/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+      const { entityId, documentFamily } = args as { entityId?: string; documentFamily?: string };
+      const path = documentFamily === 'nfse' ? '/br/nfse/inbound/poll' : '/br/inbound/poll';
+      return callApi('POST', path, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'get_br_sync_status': {
-      const { entityId } = args as { entityId?: string };
-      return callApi('GET', '/br/sync-status', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+      const { entityId, documentFamily } = args as { entityId?: string; documentFamily?: string };
+      const qs = documentFamily ? `?documentFamily=${encodeURIComponent(documentFamily)}` : '';
+      return callApi('GET', `/br/sync-status${qs}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'update_br_settings': {
@@ -4229,6 +4253,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       if (args.after_id)  qs.set('after_id',  args.after_id  as string);
       if (args.before_id) qs.set('before_id', args.before_id as string);
       if (args.receivedAfter) qs.set('receivedAfter', args.receivedAfter as string);
+      if (args.documentFamily) qs.set('documentFamily', args.documentFamily as string);
       const q = qs.toString();
       return callApi('GET', `/invoices${q ? `?${q}` : ''}`);
     }

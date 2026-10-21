@@ -333,6 +333,7 @@ export class ClearvoClient {
     if (params.country)          qs.set('country',   params.country);
     if (params.status)           qs.set('status',    params.status);
     if (params.receivedAfter)    qs.set('receivedAfter', params.receivedAfter);
+    if (params.documentFamily)   qs.set('documentFamily', params.documentFamily);
     const q = qs.toString();
     return this.request('GET', `/invoices${q ? `?${q}` : ''}`);
   }
