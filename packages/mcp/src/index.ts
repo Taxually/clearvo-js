@@ -545,7 +545,6 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        country: { type: 'string', description: 'Optional. ISO 3166-1 alpha-2 reporting country (e.g. "IT", "PL", "DE"). Omit it: the API derives it from supplier.taxId, supplier.establishmentCountry or supplier.address.country matched against this entity\'s registrations, else the entity\'s establishment country. Send it only to choose between several registrations when the document does not identify one.' },
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
