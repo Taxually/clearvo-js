@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — POST /v1/send `country` is optional, conditionally required (backend deploys with the next release; publish after it)
+
+The reporting country is derived from the entity's registrations, so the supplier name and address never need re-sending. When the business is registered in more than one country and the document names none, it is stored `REJECTED` with `JURISDICTION_AMBIGUOUS` (or `JURISDICTION_UNKNOWN` with no registration), HTTP 200, with `candidates[]`; resend with `country` or the `supplier.taxId` of one registration.
+
+- SDK: `SubmitInvoiceInput.country` is optional again (`country?: string`), documented as required when no `supplier.taxId` is sent and the business is registered in more than one country.
+- MCP: `submit_invoice` carries an optional `country` (conditionally required, see its description) and tells agents to send `country` or `supplier.taxId`, that supplier name and address need not be re-sent, and how to correct a `JURISDICTION_*` rejection.
+- CLI: `clearvo send <file> --country <code>` sets the reporting country for the document.
+
 ## Unreleased — check-family toggles removed (backend change deploys with the next release)
 
 - MCP: `list_check_families` and `toggle_check_family` are removed. The backend routes behind them (`/v1/rules/families`) and the per-entity rule overrides they wrote are removed; to switch off a platform rule for one entity use `suppress_rule`.

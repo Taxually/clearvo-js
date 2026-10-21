@@ -92,6 +92,11 @@ api.listen(0, '127.0.0.1', async () => {
   for (const marker of ['PEPPOL_CUSTOMER_UNREACHABLE', 'selfBilling', 'Canary Islands', 'IGIC', 'F2', 'es_tax_territory', 'VERIFACTU_TAX_TERRITORY_REQUIRED', 'error.alternatives', 'ZUGFERD', 'XRECHNUNG', 'DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED']) {
     if (!d.includes(marker)) return fail(`submit_invoice description lost guidance: ${marker}`);
   }
+  for (const phrase of ['JURISDICTION_AMBIGUOUS', 'JURISDICTION_UNKNOWN', 'supplier name and address never need re-sending']) {
+    if (!d.includes(phrase)) return fail(`submit_invoice description lost the reporting-country guidance: ${phrase}`);
+  }
+  if (!/Required when no supplier\.taxId is sent and the business is registered in more than one country/.test(tool.inputSchema?.properties?.country?.description ?? '')) return fail('submit_invoice inputSchema.country lost its conditional-required wording');
+  if ((tool.inputSchema?.required ?? []).includes('country')) return fail('submit_invoice must not require country');
   for (const forbidden of ['AT certificate', 'until Clearvo', 'PT_SOFTWARE_CERTIFICATION_PENDING', 'closed-gate', 'has not opened']) {
     if (d.includes(forbidden)) return fail(`submit_invoice description has internal status wording: ${forbidden}`);
   }

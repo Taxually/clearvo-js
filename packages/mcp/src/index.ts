@@ -463,6 +463,7 @@ const TOOLS = [
       'The issuing company on a sale is this entity and is never supplied by the caller: omit `supplier` entirely and its name, tax ID, address and contact come from the Business Profile (on a purchase the entity is the customer and `supplier` is the vendor you pass). ' +
       'If the profile is incomplete the document is stored NEEDS_INFO (HTTP 200) with error MISSING_SUPPLIER_DATA and a fixUrl — ask the user to complete the Business Profile; do not invent or copy an address. ' +
       'A response outcome of CLEARED means accepted for dispatch to the authority, not final authority clearance: always follow with poll_status, which carries the authority\'s own answer. PROCESSING is not an answer: keep the `id` and poll. `ok` is false for REJECTED, NEEDS_INFO, SETUP_NEEDED and HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. An UNROUTABLE document answers outcome NEEDS_INFO: it is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is HELD. ' +
+      'The reporting country is derived from the entity\'s registrations, so the supplier name and address never need re-sending. When the entity is registered in more than one country and the document does not say which, send `country` (ISO alpha-2, e.g. "DE") or the `supplier.taxId` of one registration; without either the document is stored REJECTED (HTTP 200) with error JURISDICTION_AMBIGUOUS (or JURISDICTION_UNKNOWN when the entity has no registration), `candidates` and a fixUrl: ask the user which registration applies, then resend with `country` or `supplier.taxId` (set `correctsInvoiceId` to the rejected id to correct it). ' +
       'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
       'resolved country is applied automatically (an entity can hold registrations in more than ' +
       'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
@@ -545,7 +546,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        country: { type: 'string', description: 'ISO 3166-1 alpha-2 destination country (e.g. "IT", "PL", "DE")' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 reporting country (e.g. "IT", "PL", "DE"). Required when no supplier.taxId is sent and the business is registered in more than one country; otherwise omit it, it is derived from the entity\'s registrations. A supplier name or address is never needed to choose.' },
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
@@ -567,7 +568,7 @@ const TOOLS = [
           description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef is stored with the error MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
           properties: {
             name: { type: 'string' },
-            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the invoice is stored with the error SUPPLIER_TAX_ID_MISMATCH. Does not apply on a self-billed invoice, where this is the real seller\'s own tax ID, taken as supplied.' },
+            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the invoice is stored with the error SUPPLIER_TAX_ID_MISMATCH. When the business is registered in several countries and no country is sent, a tax ID equal to one registration also chooses the reporting country. Does not apply on a self-billed invoice, where this is the real seller\'s own tax ID, taken as supplied.' },
             address: {
               type: 'object',
               properties: {
@@ -708,7 +709,7 @@ const TOOLS = [
         },
         correctsInvoiceId: {
           type: 'string',
-          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
+          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country (except a document rejected JURISDICTION_AMBIGUOUS or JURISDICTION_UNKNOWN, which has no country yet and can be corrected with any `country`); use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
         },
         dryRun: {
           type: 'boolean',
@@ -821,7 +822,7 @@ const TOOLS = [
           },
         },
       },
-      required: ['country', 'invoiceNumber', 'issueDate', 'currency', 'supplier', 'customer', 'lines', 'totalAmount', 'taxAmount'],
+      required: ['invoiceNumber', 'issueDate', 'currency', 'supplier', 'customer', 'lines', 'totalAmount', 'taxAmount'],
     },
   },
   {

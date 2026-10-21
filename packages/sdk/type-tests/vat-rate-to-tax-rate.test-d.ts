@@ -82,7 +82,6 @@ const _rejectsVatRateOnSubmit: SubmitInvoiceInput = {
   invoiceNumber: 'INV-001',
   issueDate: '2026-09-22',
   currency: 'EUR',
-  country: 'IT',
   customer: { name: 'Acme SpA', address: { city: 'Milan', country: 'IT' } },
   lines: [
     // @ts-expect-error — `vatRate` was renamed to `taxRate`.
