@@ -18,7 +18,6 @@ const _valid: SubmitInvoiceInput = {
   invoiceNumber: 'INV-001',
   issueDate: '2026-09-21',
   currency: 'EUR',
-  country: 'DE',
   customer: {
     name: 'Acme GmbH',
     address: { city: 'Berlin', country: 'DE' },
@@ -36,7 +35,6 @@ const _rejectsBuyer: SubmitInvoiceInput = {
   invoiceNumber: 'INV-002',
   issueDate: '2026-09-21',
   currency: 'EUR',
-  country: 'DE',
   customer: { name: 'Acme GmbH', address: { city: 'Berlin', country: 'DE' } },
   // @ts-expect-error — `buyer` was renamed to `customer` by the buyer->customer hard cut. Use `customer` instead.
   buyer: { name: 'Acme GmbH', address: { city: 'Berlin', country: 'DE' } },
@@ -49,7 +47,6 @@ const _rejectsBuyerType: SubmitInvoiceInput = {
   invoiceNumber: 'INV-003',
   issueDate: '2026-09-21',
   currency: 'EUR',
-  country: 'DE',
   customer: { name: 'Acme GmbH', address: { city: 'Berlin', country: 'DE' } },
   // @ts-expect-error — `buyerType` was renamed to `customerType`.
   buyerType: 'B2B',
@@ -72,7 +69,6 @@ const _rejectsNotifyBuyer: SubmitInvoiceInput = {
   invoiceNumber: 'INV-004',
   issueDate: '2026-09-21',
   currency: 'EUR',
-  country: 'DE',
   customer: { name: 'Acme GmbH', address: { city: 'Berlin', country: 'DE' } },
   // @ts-expect-error — `notifyBuyer` was renamed to `notifyCustomer`.
   notifyBuyer: true,
