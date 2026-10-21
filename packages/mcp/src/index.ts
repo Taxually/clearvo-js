@@ -213,7 +213,7 @@ const CUSTOMER_REFERENCES_SCHEMA = {
   },
 } as const;
 
-const RULE_CONDITION_LEAF_SCHEMA = { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {}, caseSensitive: { type: 'boolean', description: 'String comparisons only. Overrides the default case handling of the property: true = exact-case match, false = case-insensitive. Omit to use the property default.' } }, required: ['property', 'operator'] } as const
+const RULE_CONDITION_LEAF_SCHEMA = { type: 'object', properties: { property: { type: 'string' }, operator: { type: 'string' }, value: {}, caseSensitive: { type: 'boolean', description: 'String comparisons only. Overrides the default case handling of the property: true = exact-case match, false = case-insensitive. Omit to use the property default.' }, quantifier: { type: 'string', enum: ['any', 'all', 'none'], description: 'Only on a list property whose schema entry has `elements`: apply the operator to the `elementPath` field of any / all / no entry.' }, elementPath: { type: 'string', description: 'With quantifier: one of the property\'s `elements[].path`.' } }, required: ['property', 'operator'] } as const
 // Groups nest at most 2 deep (the server enforces the cap); a JSON schema can't express a depth limit, so the second level is spelled out.
 const RULE_CONDITION_GROUP_LEAF_ITEMS = { anyOf: [RULE_CONDITION_LEAF_SCHEMA] } as const
 const RULE_CONDITION_INNER_GROUP_SCHEMA = {
