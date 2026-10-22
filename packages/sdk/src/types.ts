@@ -2977,7 +2977,7 @@ export interface ListMandateTransactionsParams {
 }
 
 export type MandateTransactionTerminalArtifact =
-  | { type: 'einvoice'; einvoicingRecordId: string; clearanceStatus: string; clearanceStatusLabel: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
+  | { type: 'einvoice'; einvoicingRecordId: string; status: InvoiceStatus; stage: InvoiceStage | null; reason: InvoiceReason; statusLabel: string; /** @deprecated Stored reason code; use `reason`. */ clearanceStatus?: string; /** @deprecated Use `statusLabel`. */ clearanceStatusLabel?: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
   | { type: 'period'; periodId: string; periodKey: string; periodStatus: string; closedAt: string | null; submittedAt: string | null; filedAt: string | null }
   | { type: 'recorded_only' }
   | null;

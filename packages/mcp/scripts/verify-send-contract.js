@@ -100,6 +100,15 @@ api.listen(0, '127.0.0.1', async () => {
     if (schemaText.includes(stale)) return fail(`submit_invoice inputSchema still says: ${stale}`);
   }
 
+  // list_invoices' reason enum must equal the SDK's generated public reason list exactly.
+  const sdkSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'sdk', 'src', 'generated', 'openapi-tax-code-contract.ts'), 'utf8');
+  const sdkReasons = (sdkSrc.match(/INVOICE_REASONS = \[([\s\S]*?)\]/)[1].match(/'[A-Z_]+'/g) || []).map(v => v.slice(1, -1));
+  const listTool = (list.result?.tools ?? []).find(t => t.name === 'list_invoices');
+  const mcpReasons = listTool?.inputSchema?.properties?.reason?.enum ?? [];
+  if (JSON.stringify([...mcpReasons].sort()) !== JSON.stringify([...sdkReasons].sort()) || mcpReasons.length !== 26) {
+    return fail(`list_invoices reason enum differs from the SDK INVOICE_REASONS: ${JSON.stringify(mcpReasons)} vs ${JSON.stringify(sdkReasons)}`);
+  }
+
   const stored = await call(3, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'INV-1' } });
   if (stored.result?.isError !== true) return fail(`a stored REJECTED must be flagged isError: ${JSON.stringify(stored.result)}`);
   const parsed = JSON.parse(stored.result.content[0].text);
