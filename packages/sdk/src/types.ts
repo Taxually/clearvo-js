@@ -571,11 +571,12 @@ export interface SubmitInvoiceInput {
    * (EN 16931 BR-CO-16) holds the invoice with `PAYABLE_AMOUNT_BR_CO_16`.
    */
   statedPayableAmount?: number;
-  originalInvoiceRef?: { invoiceNumber: string; issueDate: string };
+  /** For credit/debit notes: the original invoice's own number and issue date. `ksefNumber` is Poland only. */
+  originalInvoiceRef?: { invoiceNumber: string; issueDate: string; ksefNumber?: string };
   /**
-   * Id (from a prior submit response) of the invoice this submission corrects
-   * — either a fiscal credit/debit note reversing it, or a plain resubmission
-   * re-attempting it. A REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be
+   * Id (from a prior submit response) of the rejected invoice this submission
+   * re-attempts (a plain resubmission). For a credit/debit note use
+   * `originalInvoiceRef` instead. A REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be
    * corrected this way — a NEEDS_INFO record is no longer a dead end. To
    * resubmit, resend the corrected document to POST /v1/send with the same invoice number.
    */
