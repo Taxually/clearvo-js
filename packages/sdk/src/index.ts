@@ -16,6 +16,7 @@ export type {
   SendRejectionEntry,
   SendRejectionBody,
   InvoiceRecordTimestamps,
+  InvoiceSource,
   Entity,
   CreateEntityInput,
   CreateEntityResponse,

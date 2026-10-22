@@ -868,11 +868,21 @@ export interface ReceivedInvoiceFields {
   supersededBy?: { id: string; invoiceNumber?: string; status?: string; statusLabel?: string } | null;
 }
 
+/** How an invoice entered the platform (its ingestion channel). Set by the platform from how the request arrived; it cannot be supplied in a request. */
+export interface InvoiceSource {
+  /** Channel key, for example `api` (a direct API call), `mcp` (sent through an MCP tool), `dashboard`, `batch_upload` or the key of a connected integration. Null when no channel was recorded. */
+  value: string | null;
+  /** Ready-to-render label (for example API, MCP, Dashboard, Batch Upload); `Unknown` when no channel was recorded. */
+  label: string;
+}
+
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
 export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+  /** How the invoice entered the platform. Present on every row once the backend release that added it to the list is live; absent from older responses. */
+  source?: InvoiceSource;
 }
 
 export interface ListInvoicesResponse {

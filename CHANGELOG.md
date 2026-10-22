@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — invoice `source` on the list (backend is deployed, release 42befd1e); ready to publish
+
+Every `GET /v1/invoices` row now carries `source` ({ value, label }): how the invoice entered the platform (for example `api`, `mcp`, `dashboard`, `batch_upload`). Invoices sent through an MCP tool are now labelled `mcp` instead of `api`. `GET /v1/invoices/{id}` already returned it.
+
+- SDK: new `InvoiceSource` type; `InvoiceRecordTimestamps` gains optional `source`.
+- MCP: `list_invoices` and `get_invoice` describe `source`.
+- CLI: no change (it prints the API response as returned).
+
 ## Unreleased — check-family toggles removed (backend change deploys with the next release)
 
 - MCP: `list_check_families` and `toggle_check_family` are removed. The backend routes behind them (`/v1/rules/families`) and the per-entity rule overrides they wrote are removed; to switch off a platform rule for one entity use `suppress_rule`.
