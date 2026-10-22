@@ -137,3 +137,13 @@ Sandbox keys (`csk_test_...`) are available on the [sandbox](https://clearvo.io/
 - [API docs](https://clearvo.io/docs)
 - [Claude Code quickstart](https://clearvo.io/docs/claude-code)
 - [Supported countries](https://clearvo.io/countries)
+
+## Releasing
+
+`@clearvo/sdk`, `@clearvo/mcp` and `@clearvo/cli` publish to npm from GitHub Actions (`.github/workflows/publish.yml`) using npm Trusted Publishing: no npm token, no `npm login`, no 2FA prompt.
+
+1. Bump `version` in each `packages/*/package.json` you are releasing, update `CHANGELOG.md`, and open the PR.
+2. If the release needs a backend change, put `Depends-on-backend: <ADO PR id>` on its own line in the PR description and leave it a draft. When the backend release (Pipeline 282) succeeds, `backend-release-merge.yml` merges the PR and starts the publish. With no backend dependency, merging the PR is enough: a push to `main` that changes a `packages/*/package.json` starts the publish.
+3. The workflow builds, then publishes sdk, mcp and cli in that order. A package whose version is already on npm is skipped, so a re-run is safe. It can also be started by hand from the Actions tab.
+
+Each package has a trusted publisher set on npmjs.com (org `Taxually`, repo `clearvo-js`, workflow `publish.yml`, no environment). If the workflow file is ever renamed, update all three there.

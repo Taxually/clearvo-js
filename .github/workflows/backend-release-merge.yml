@@ -23,6 +23,7 @@ permissions:
   pull-requests: write
   checks: read
   statuses: read
+  actions: write
 
 concurrency:
   group: backend-release-merge
@@ -43,5 +44,13 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_AUTOFIX_WEBHOOK_URL }}
           LABEL: SDK, MCP and CLI
           DEPLOY_CHECK: none
-          EXTRA_NOTE: 'Merged only: publishing to npm is a separate step.'
+          EXTRA_NOTE: 'npm publish is started right after the merge (Publish to npm workflow).'
         run: bash .github/scripts/merge-dependents.sh
+
+      # Merges made with GITHUB_TOKEN do not trigger the push-based publish workflow, so start it here.
+      # It skips versions already on npm, so running it when nothing merged is harmless.
+      - name: Publish to npm
+        if: always() && github.event_name == 'repository_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish.yml --ref main

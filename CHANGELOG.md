@@ -1,6 +1,6 @@
 # Changelog
 
-Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm.
+Packages in this repo are versioned independently. Dates are release-prep dates; the product owner publishes to npm automatically (see "Releasing" in the README).
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
