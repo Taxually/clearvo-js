@@ -1,4 +1,4 @@
-// `clearvo send`: POST /v1/send answers 200 with the outcome in the body. REJECTED / NEEDS_INFO exit non-zero
+// `clearvo send`: POST /v1/send answers 200 with the status in the body. REJECTED / WAITING_FOR_YOU (NEEDS_INFO, UNROUTABLE) exit non-zero
 // (the old behaviour via the HTTP 422), print errors[] and nextStep, and still print the JSON body.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -38,7 +38,7 @@ const stderr = () => errSpy.mock.calls.map((c) => c.join(' ')).join('\n');
 const stdout = () => logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
 
 const rejected = {
-  ok: false, id: 'EI-IT-1', clearanceStatus: 'REJECTED', outcome: 'REJECTED', statusClass: 'DONE_REJECTED', terminal: true,
+  ok: false, id: 'EI-IT-1', status: 'REJECTED', stage: null, reason: 'REJECTED', terminal: true, issues: [], buyerResponse: null,
   nextStep: { actor: 'merchant', message: 'Fix the customer address', fixUrl: 'https://app.clearvo.io/x' },
   error: { code: 'MISSING_CUSTOMER_ADDRESS', message: 'Customer address is required' },
   errors: [{ errorCode: 'MISSING_CUSTOMER_ADDRESS', severity: 'ERROR', path: '/customer/address', message: 'Customer address is required' }],
@@ -49,7 +49,7 @@ describe('clearvo send outcome', () => {
     reply(rejected);
     exitThrows();
     await expect(run()).rejects.toThrow('exit 1');
-    expect(stdout()).toContain('"outcome":"REJECTED"');
+    expect(stdout()).toContain('"status":"REJECTED"');
     expect(stderr()).toContain('REJECTED');
     expect(stderr()).toContain('/customer/address MISSING_CUSTOMER_ADDRESS');
     expect(stderr()).toContain('Fix the customer address');
@@ -57,34 +57,34 @@ describe('clearvo send outcome', () => {
   });
 
   it('exits 1 on NEEDS_INFO', async () => {
-    reply({ ...rejected, clearanceStatus: 'NEEDS_INFO', outcome: 'NEEDS_INFO' });
+    reply({ ...rejected, status: 'WAITING_FOR_YOU', reason: 'NEEDS_INFO' });
     exitThrows();
     await expect(run()).rejects.toThrow('exit 1');
   });
 
-  it('exits 1 on an UNROUTABLE NEEDS_INFO and tells the sender to fix the recipient', async () => {
-    reply({ ok: false, id: 'EI-U', clearanceStatus: 'UNROUTABLE', outcome: 'NEEDS_INFO', nextStep: { actor: 'merchant', message: 'Recipient not reachable' } });
+  it('exits 1 on an UNROUTABLE send and tells the sender to fix the recipient', async () => {
+    reply({ ok: false, id: 'EI-U', status: 'WAITING_FOR_YOU', reason: 'UNROUTABLE', nextStep: { actor: 'merchant', message: 'Recipient not reachable' } });
     exitThrows();
     await expect(run()).rejects.toThrow('exit 1');
-    expect(stdout()).toContain('"outcome":"NEEDS_INFO"');
+    expect(stdout()).toContain('"reason":"UNROUTABLE"');
     expect(stderr()).toContain('fix the recipient');
   });
 
-  it('exits 0 on PROCESSING and prints how to poll', async () => {
-    reply({ ok: true, id: 'EI-P', clearanceStatus: 'RECEIVED', outcome: 'PROCESSING' });
+  it('exits 0 on RECEIVED and prints how to poll', async () => {
+    reply({ ok: true, id: 'EI-P', status: 'RECEIVED', reason: 'RECEIVED' });
     const exit = exitThrows();
     await run();
     expect(exit).not.toHaveBeenCalled();
-    expect(stderr()).toContain('PROCESSING (EI-P)');
+    expect(stderr()).toContain('RECEIVED (EI-P)');
     expect(stderr()).toContain('clearvo status EI-P');
     expect(stderr()).toContain('invoice.status_changed');
   });
 
-  it('exits 0 for UNDELIVERED (HELD) and for UNROUTABLE (NEEDS_INFO) with --no-throw-on-rejected', async () => {
-    reply({ ok: true, id: 'EI-D', clearanceStatus: 'UNDELIVERED', outcome: 'HELD' });
+  it('exits 0 for UNDELIVERED (WAITING_FOR_PLATFORM) and for UNROUTABLE with --no-throw-on-rejected', async () => {
+    reply({ ok: true, id: 'EI-D', status: 'WAITING_FOR_PLATFORM', reason: 'UNDELIVERED' });
     const exit = exitThrows();
     await run();
-    reply({ ok: false, id: 'EI-U', clearanceStatus: 'UNROUTABLE', outcome: 'NEEDS_INFO' });
+    reply({ ok: false, id: 'EI-U', status: 'WAITING_FOR_YOU', reason: 'UNROUTABLE' });
     await run(['--no-throw-on-rejected']);
     expect(exit).not.toHaveBeenCalled();
   });
@@ -94,15 +94,15 @@ describe('clearvo send outcome', () => {
     const exit = exitThrows();
     await run(['--no-throw-on-rejected']);
     expect(exit).not.toHaveBeenCalled();
-    expect(stdout()).toContain('"outcome":"REJECTED"');
+    expect(stdout()).toContain('"status":"REJECTED"');
   });
 
-  it('exits 0 for CLEARED, HELD, ACCUMULATED and RECEIVED', async () => {
+  it('exits 0 for PENDING, WAITING_FOR_PLATFORM, ACCUMULATED and RECEIVED', async () => {
     for (const body of [
-      { ok: true, id: 'a', clearanceStatus: 'PENDING', outcome: 'CLEARED' },
-      { ok: true, id: 'b', clearanceStatus: 'HELD_AWAITING_AUTHORIZATION', outcome: 'HELD', nextStep: { actor: 'platform', message: 'wait' } },
-      { ok: true, id: 'c', clearanceStatus: 'ACCUMULATED', outcome: 'ACCUMULATED' },
-      { ok: true, id: 'd', clearanceStatus: 'RECEIVED', warnings: [{ code: 'PROCESSING_DELAYED' }] },
+      { ok: true, id: 'a', status: 'PENDING', reason: 'PENDING' },
+      { ok: true, id: 'b', status: 'WAITING_FOR_PLATFORM', reason: 'HELD_AWAITING_AUTHORIZATION', nextStep: { actor: 'platform', message: 'wait' } },
+      { ok: true, id: 'c', status: 'ACCUMULATED', reason: 'ACCUMULATED' },
+      { ok: true, id: 'd', status: 'RECEIVED', reason: 'RECEIVED', warnings: [{ code: 'PROCESSING_DELAYED' }] },
     ]) {
       reply(body);
       const exit = exitThrows();
@@ -119,5 +119,20 @@ describe('clearvo send outcome', () => {
     exitThrows();
     await expect(run()).rejects.toThrow('exit 1');
     expect(stderr()).toContain('HTTP 401');
+  });
+});
+
+describe('clearvo invoices list', () => {
+  it('sends status, reason and the buyer-response filter as businessStatus', async () => {
+    reply({ invoices: [] });
+    const exit = exitThrows();
+    await createProgram().parseAsync(['invoices', 'list', '--status', 'WAITING_FOR_YOU', '--reason', 'NEEDS_INFO', '--buyer-response', 'refused', '--country', 'DE'], { from: 'user' });
+    expect(exit).not.toHaveBeenCalled();
+    const url = String((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(url).toContain('/invoices?');
+    expect(url).toContain('status=WAITING_FOR_YOU');
+    expect(url).toContain('reason=NEEDS_INFO');
+    expect(url).toContain('businessStatus=refused');
+    expect(url).toContain('country=DE');
   });
 });
