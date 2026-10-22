@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
-// POST /v1/send answers HTTP 200 for every stored document, with the outcome in the body (ingest-first stage 9).
-// Asserts (1) submit_invoice's description states that contract and no longer says a stored outcome is a 422 / 202,
-// and (2) the tool returns a stored REJECTED / NEEDS_INFO 200 body in full but flags the result isError so an agent
-// does not treat the document as sent; a CLEARED 200 is not an error, and a real HTTP error (409) still errors.
+// POST /v1/send answers HTTP 200 for every stored document, with the status in the body (ingest-first stage 9).
+// Asserts (1) submit_invoice's description states that contract and no longer says a stored status is a 422 / 202,
+// and (2) the tool returns a stored REJECTED / WAITING_FOR_YOU (NEEDS_INFO) 200 body in full but flags the result isError so an agent
+// does not treat the document as sent; a PENDING 200 is not an error, and a real HTTP error (409) still errors.
 // Also guards the description against internal engineering status and against losing the country guidance.
 //
 // Usage: npm run build && node scripts/verify-send-contract.js
@@ -22,17 +22,17 @@ if (!fs.existsSync(SERVER)) {
 }
 
 const REJECTED = {
-  ok: false, id: 'EI-IT-1', referenceId: 'EI-IT-1', clearanceStatus: 'REJECTED', outcome: 'REJECTED', statusClass: 'DONE_REJECTED', terminal: true,
+  ok: false, id: 'EI-IT-1', referenceId: 'EI-IT-1', status: 'REJECTED', stage: null, reason: 'REJECTED', terminal: true, issues: [], buyerResponse: null,
   nextStep: { actor: 'merchant', message: 'Fix the customer address' },
   error: { code: 'MISSING_CUSTOMER_ADDRESS', message: 'Customer address is required' },
   errors: [{ errorCode: 'MISSING_CUSTOMER_ADDRESS', severity: 'ERROR', path: '/customer/address', message: 'Customer address is required' }],
 };
 
-const NEEDS_INFO = { ...REJECTED, id: 'EI-IT-2', referenceId: 'EI-IT-2', clearanceStatus: 'NEEDS_INFO', outcome: 'NEEDS_INFO', statusClass: 'WAIT_MERCHANT', terminal: false };
-const CLEARED = { ok: true, id: 'EI-IT-3', referenceId: 'EI-IT-3', clearanceStatus: 'PENDING', outcome: 'CLEARED', statusClass: 'IN_FLIGHT', terminal: false };
+const NEEDS_INFO = { ...REJECTED, id: 'EI-IT-2', referenceId: 'EI-IT-2', status: 'WAITING_FOR_YOU', reason: 'NEEDS_INFO', terminal: false };
+const CLEARED = { ok: true, id: 'EI-IT-3', referenceId: 'EI-IT-3', status: 'PENDING', stage: 'awaiting_authority', reason: 'PENDING', terminal: false, issues: [], buyerResponse: null };
 
-const PROCESSING = { ok: true, id: 'EI-IT-4', referenceId: 'EI-IT-4', clearanceStatus: 'RECEIVED', outcome: 'PROCESSING', statusClass: 'IN_FLIGHT', terminal: false };
-const UNROUTABLE = { ok: false, id: 'EI-IT-5', referenceId: 'EI-IT-5', clearanceStatus: 'UNROUTABLE', outcome: 'NEEDS_INFO', statusClass: 'WAIT_MERCHANT', terminal: false };
+const PROCESSING = { ok: true, id: 'EI-IT-4', referenceId: 'EI-IT-4', status: 'RECEIVED', stage: null, reason: 'RECEIVED', terminal: false, issues: [], buyerResponse: null };
+const UNROUTABLE = { ok: false, id: 'EI-IT-5', referenceId: 'EI-IT-5', status: 'WAITING_FOR_YOU', stage: null, reason: 'UNROUTABLE', terminal: false, issues: [], buyerResponse: null };
 
 const api = http.createServer((req, res) => {
   let raw = '';
@@ -82,7 +82,7 @@ api.listen(0, '127.0.0.1', async () => {
   if (!tool) return fail('submit_invoice is missing from tools/list');
   const d = tool.description;
 
-  for (const phrase of ['A 200 means the document is STORED', '`outcome`', '`nextStep`', 'IDEMPOTENT_BODY_MISMATCH', 'INGEST_UNAVAILABLE', 'PROCESSING_DELAYED']) {
+  for (const phrase of ['A 200 means the document is STORED', '`status`', '`stage`', '`reason`', '`nextStep`', 'IDEMPOTENT_BODY_MISMATCH', 'INGEST_UNAVAILABLE', 'PROCESSING_DELAYED']) {
     if (!d.includes(phrase)) return fail(`submit_invoice description is missing: ${phrase}`);
   }
   for (const stale of ['202 ACCUMULATED', 'fails with 422', 'rejected with 422', 'fails 422', 'is a 422']) {
@@ -103,22 +103,22 @@ api.listen(0, '127.0.0.1', async () => {
   const stored = await call(3, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'INV-1' } });
   if (stored.result?.isError !== true) return fail(`a stored REJECTED must be flagged isError: ${JSON.stringify(stored.result)}`);
   const parsed = JSON.parse(stored.result.content[0].text);
-  if (parsed.outcome !== 'REJECTED' || parsed.errors?.[0]?.errorCode !== 'MISSING_CUSTOMER_ADDRESS') return fail('submit_invoice did not return the full 200 body');
+  if (parsed.status !== 'REJECTED' || parsed.errors?.[0]?.errorCode !== 'MISSING_CUSTOMER_ADDRESS') return fail('submit_invoice did not return the full 200 body');
 
   const needs = await call(5, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'NEEDS' } });
   if (needs.result?.isError !== true) return fail('a stored NEEDS_INFO must be flagged isError');
-  if (JSON.parse(needs.result.content[0].text).outcome !== 'NEEDS_INFO') return fail('NEEDS_INFO body must still be returned in full');
+  if (JSON.parse(needs.result.content[0].text).reason !== 'NEEDS_INFO') return fail('NEEDS_INFO body must still be returned in full');
 
   const ok = await call(6, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'OK' } });
-  if (ok.result?.isError) return fail('a CLEARED 200 must not be an error');
+  if (ok.result?.isError) return fail('a PENDING 200 must not be an error');
 
   const proc = await call(7, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'PROC' } });
   if (proc.result?.isError) return fail('PROC must not be flagged isError (matches hosted MCP)');
-  // UNROUTABLE answers outcome NEEDS_INFO (one outcome for needs-info and unroutable): flagged like every NEEDS_INFO.
+  // UNROUTABLE is WAITING_FOR_YOU: flagged like NEEDS_INFO.
   const unroutable = await call(8, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'ACT' } });
-  if (unroutable.result?.isError !== true) return fail('an UNROUTABLE (outcome NEEDS_INFO) must be flagged isError');
+  if (unroutable.result?.isError !== true) return fail('an UNROUTABLE (WAITING_FOR_YOU) must be flagged isError');
   const desc = tool.description;
-  for (const needle of ['PROCESSING', 'UNROUTABLE', 'SETUP_NEEDED and HELD_PLATFORM_FAULT']) {
+  for (const needle of ['WAITING_FOR_YOU', 'UNROUTABLE', 'SETUP_NEEDED', 'HELD_PLATFORM_FAULT', 'buyerResponse']) {
     if (!desc.includes(needle)) return fail(`submit_invoice description must mention ${needle}`);
   }
 
