@@ -706,9 +706,18 @@ const TOOLS = [
             },
           },
         },
+        originalInvoiceRef: {
+          type: 'object',
+          description: 'Required for documentType credit_note/debit_note: the invoice being corrected, by its own number and ISSUE DATE (the original invoice\'s date, not the credit note\'s). The credit or debit note keeps its own new invoiceNumber. If the original is not stored in Clearvo (for example it was issued before you started sending), a credit note is not refused: it is processed on its own, with its own lines and tax, and the response carries the warning CREDIT_NOTE_ORIGINAL_NOT_FOUND. A stored invoice with that number but another issue date is not linked (CREDIT_NOTE_ORIGINAL_DATE_MISMATCH warning).',
+          properties: {
+            invoiceNumber: { type: 'string', description: 'The original invoice\'s own number.' },
+            issueDate: { type: 'string', description: 'The original invoice\'s issue date, YYYY-MM-DD.' },
+            ksefNumber: { type: 'string', description: 'Poland only: the original\'s KSeF number (NrFaKorygowanej). Required for a Polish credit note whose original is not stored in Clearvo.' },
+          },
+        },
         correctsInvoiceId: {
           type: 'string',
-          description: 'Id (from a prior submit_invoice response) of the invoice this submission corrects — either a fiscal credit_note/debit_note reversing it, or a plain resubmission re-attempting it. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
+          description: 'Id (from a prior submit_invoice response) of a REJECTED, UNROUTABLE or NEEDS_INFO invoice this submission re-attempts (a plain resubmission). Do not use it for a credit_note/debit_note: reference the original with originalInvoiceRef. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
         },
         dryRun: {
           type: 'boolean',
