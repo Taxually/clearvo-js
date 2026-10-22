@@ -5355,3 +5355,131 @@ export interface FilingUploadTemplate {
 }
 
 export type FilingUploadTemplateFormat = 'csv' | 'xlsx' | 'json';
+
+// ── Integration tests (test runs and test cases, sandbox only) ──────────────────
+
+export type TestRunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'waiting' | 'cancelled';
+export type TestCaseScope = 'standard' | 'added_for_you' | 'your_organisation';
+export type TestCaseVerification = 'auto' | 'self_attested' | null;
+
+export interface StartTestRunInput {
+  name?: string;
+  /** Run only tests carrying one of these tags (default ["automatic"]). */
+  tags?: string[];
+  /** Run only these tests (ids from listTestCases). */
+  caseIds?: string[];
+  /** How long the run may wait for your integration to act, 1 to 1440 minutes (default 10). */
+  deadlineMinutes?: number;
+  /** Retrying with the same key returns the same run (`idempotent: true`). */
+  idempotencyKey?: string;
+}
+
+export interface StartTestRunResponse {
+  runId: string;
+  name: string;
+  status: TestRunStatus;
+  startedAt: string;
+  deadlineAt: string;
+  links: { self: string };
+  /** Present (true) when the same idempotency key already started this run. */
+  idempotent?: boolean;
+  disclaimer?: string;
+}
+
+export interface TestRunSummary {
+  passed: number;
+  failed: number;
+  waiting: number;
+  notRun: number;
+  notApplicable: number;
+  autoVerified: number;
+  selfAttested: number;
+  required: number;
+  requiredPassed: number;
+}
+
+export interface TestRunCaseResult {
+  caseId: string;
+  caseVersion: number;
+  title: string;
+  group: string;
+  required: boolean;
+  scope: TestCaseScope;
+  outcome: string;
+  verification: TestCaseVerification;
+  reasonCode: string | null;
+  reason: string | null;
+  firedAt: string | null;
+  resolvedAt: string | null;
+  windowEndsAt: string | null;
+  /** Ids and metadata only. */
+  evidence: Record<string, unknown>;
+}
+
+export interface TestRun {
+  runId: string;
+  name: string;
+  status: TestRunStatus;
+  startedAt: string;
+  completedAt: string | null;
+  deadlineAt: string;
+  summary: TestRunSummary;
+  cases: TestRunCaseResult[];
+  notApplicable: Array<{ caseId: string; title: string; reason: string }>;
+  disclaimer: string;
+}
+
+export interface ListTestRunsResponse {
+  runs: Array<Partial<TestRun> & { runId: string; name: string; status: TestRunStatus }>;
+  disclaimer?: string;
+}
+
+export interface TestCase {
+  caseId: string;
+  caseVersion: number;
+  title: string;
+  group: string;
+  scope: TestCaseScope;
+  required: boolean;
+  tags: string[];
+  applicable: boolean;
+  notApplicableReason: string | null;
+  /** `auto` = the platform checks it; `attest_only` = you mark it done by hand in the dashboard. */
+  verifiability: 'auto' | 'attest_only';
+  steps: string[];
+  expected: string;
+}
+
+export interface ListTestCasesResponse {
+  cases: TestCase[];
+  disclaimer?: string;
+}
+
+export interface CreateTestCaseInput {
+  title: string;
+  steps: string[];
+  expected: string;
+  description?: string;
+  /** Optional check the platform runs; kinds and params come from getTestCaseCatalogue(). */
+  check?: { kind: string; params: Record<string, unknown> };
+  appliesWhen?: { direction?: 'any' | 'sale' | 'purchase'; countries?: string[] };
+}
+
+export type UpdateTestCaseInput = Partial<CreateTestCaseInput>;
+
+export interface TestCaseWriteResponse {
+  id: string;
+  verifiability: 'auto' | 'attest_only';
+  verifiabilityLabel: string;
+  disclaimer?: string;
+}
+
+export interface TestCaseCatalogue {
+  checks: Array<{ kind: string; label: string; params: Array<Record<string, unknown>> }>;
+  appliesWhen: {
+    directions: Array<{ value: string; label: string }>;
+    countries: Array<{ value: string; label: string }>;
+  };
+  limits: { titleMax: number; textMax: number; stepsMax: number; casesMax: number; casesUsed: number };
+  disclaimer?: string;
+}

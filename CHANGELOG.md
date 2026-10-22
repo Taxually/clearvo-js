@@ -4,6 +4,13 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — integration tests (backend routes ship with the Integration Passport Stage 3 release)
+
+- SDK: `startTestRun`, `getTestRun`, `listTestRuns`, `listTestCases`, `createTestCase`, `updateTestCase`, `archiveTestCase`, `getTestCaseCatalogue` (`/v1/test-runs`, `/v1/test-cases`, sandbox key only).
+- MCP: `start_test_run`, `get_test_run`, `list_test_runs`, `list_test_cases`, `create_test_case`, `archive_test_case`, `get_test_case_catalogue`.
+- CLI: `clearvo tests run [--wait] [--json] [--tag] [--case]` (with `--wait` it polls until the run is no longer queued or running, prints the summary and exits 1 if the run failed), `clearvo tests status <runId>`, `clearvo tests cases list|create|archive`.
+- Also in this release: `simulateReceivedInvoices` / `simulate_received_invoices` / `clearvo receive simulate` (see the entry below).
+
 ## Unreleased — check-family toggles removed (backend change deploys with the next release)
 
 - MCP: `list_check_families` and `toggle_check_family` are removed. The backend routes behind them (`/v1/rules/families`) and the per-entity rule overrides they wrote are removed; to switch off a platform rule for one entity use `suppress_rule`.
