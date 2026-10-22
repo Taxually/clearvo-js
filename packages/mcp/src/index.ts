@@ -2570,9 +2570,11 @@ const TOOLS = [
       'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
       '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
       '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
-      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii and fr_ereporting allow ' +
+      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii allows ' +
       '"immediate", "batch_auto" and "batch_review" — default "batch_review": nothing is sent until a human confirms the ' +
-      'batch; pt_efatura and e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). Enabling fr_ereporting/es_sii/pt_efatura also requires ' +
+      'batch; fr_ereporting allows "batch_review" (default) and "batch_auto" — with batch_auto a Flux 2 batch you have not ' +
+      'confirmed is sent automatically the day before its filing deadline, and you can still confirm it earlier; ' +
+      'fr_ereporting never allows "immediate"; pt_efatura and e-invoicing regimes are immediate-only; the call fails with SUBMISSION_MODE_NOT_ALLOWED otherwise). Enabling fr_ereporting/es_sii/pt_efatura also requires ' +
       'the entity already hold a current STANDARD registration for that regime\'s own country — otherwise the call ' +
       'fails REGISTRATION_REQUIRED with a { ok:false, code, message, country, entityId, fixUrl } body (fixUrl is ' +
       'an absolute URL at "/registrations?country=<cc>&returnTo=/jurisdictions" on this API\'s own host); point ' +

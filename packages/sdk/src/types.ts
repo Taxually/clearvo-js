@@ -2234,8 +2234,9 @@ export interface ReportingObligation {
   /** Date the obligation started (or starts) applying; null when never enabled. */
   effectiveFrom: string | null;
   /**
-   * es_sii and fr_ereporting allow 'immediate' | 'batch_auto' | 'batch_review'
-   * (default 'batch_review' — nothing is filed until a human confirms the batch).
+   * es_sii allows 'immediate' | 'batch_auto' | 'batch_review'; fr_ereporting allows 'batch_review' | 'batch_auto'
+   * (default 'batch_review' — nothing is filed until a human confirms the batch; with 'batch_auto' an unconfirmed
+   * French batch is sent the day before its filing deadline).
    * Null when never set.
    */
   submissionMode: RegimeSubmissionMode | null;
@@ -2296,8 +2297,8 @@ export type ReportingObligationPatch =
       /** Required when enabled is true. YYYY-MM-DD. */
       effectiveFrom?: string;
       /**
-       * Must be one the regime allows — SUBMISSION_MODE_NOT_ALLOWED otherwise. es_sii and
-       * fr_ereporting allow all three; omitted on a first enable, the regime's default
+       * Must be one the regime allows — SUBMISSION_MODE_NOT_ALLOWED otherwise. es_sii allows
+       * all three and fr_ereporting allows 'batch_review' | 'batch_auto'; omitted on a first enable, the regime's default
        * ('batch_review') applies. A change never affects a batch that is already open.
        */
       submissionMode?: RegimeSubmissionMode;
