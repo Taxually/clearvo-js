@@ -1617,6 +1617,7 @@ const TOOLS = [
       'NOT_VALIDATED), validation (what was checked against which rule set and version, with error/warning counts and a summary; ' +
       'the findings are on get_invoice), attachments (the supplier\'s supporting documents, listed only, never the bytes), ' +
       'rendition (original | generated | none: how the PDF read answers) and supersededBy. ' +
+      'Every invoice also carries source ({ value, label }): how it entered the platform (for example api, mcp, dashboard, batch_upload); show label as is. ' +
       'Paginate using the nextCursor / prevCursor values returned in each response: pass nextCursor as after_id to advance forward.',
     inputSchema: {
       type: 'object' as const,
@@ -1667,6 +1668,7 @@ const TOOLS = [
       'invoice in its own right, none = the PDF read would answer 422) and supersededBy (the corrected re-send that replaced a ' +
       'needs-review record). The pdfUrl of a received document returns that readable copy for any received Peppol/e-invoice; when ' +
       'it cannot be rendered it answers an explicit 422 code (for example PDF_SCRIPT_UNSUPPORTED) rather than a 500, and pdfUrl is omitted. ' +
+      'source ({ value, label }) says how the invoice entered the platform (for example api, mcp, dashboard, batch_upload); show label as is. ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
       'or check whether a suggested action has been applied.',
     inputSchema: {
