@@ -1,0 +1,47 @@
+name: Merge dependent PRs after backend release
+
+# A backend release (ADO Pipeline 282) sends `backend-released` when it succeeds, listing the ADO PR ids that
+# are now live. Open PRs here carrying `Depends-on-backend: <id>` for one of them are merged automatically, so
+# this repo never ships ahead of the backend it documents or calls. Label a PR `hold` to keep it out.
+# Manual run: Actions -> Run workflow (pr_ids, dry_run).
+
+on:
+  repository_dispatch:
+    types: [backend-released]
+  workflow_dispatch:
+    inputs:
+      pr_ids:
+        description: 'Comma-separated ADO PR ids that are live (e.g. 17852,17860)'
+        required: true
+      dry_run:
+        description: 'Only log what would happen'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: backend-release-merge
+  cancel-in-progress: false
+
+jobs:
+  merge-dependents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Merge PRs that were waiting for the backend
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_IDS: ${{ github.event_name == 'repository_dispatch' && join(github.event.client_payload.pr_ids, ',') || inputs.pr_ids }}
+          BACKEND_BUILD: ${{ github.event.client_payload.build_id || 'manual' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_AUTOFIX_WEBHOOK_URL }}
+          LABEL: SDK, MCP and CLI
+          DEPLOY_CHECK: none
+          EXTRA_NOTE: 'Merged only: publishing to npm is a separate step.'
+        run: bash .github/scripts/merge-dependents.sh
