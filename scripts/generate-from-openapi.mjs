@@ -83,7 +83,7 @@ function generate(openapi) {
     if (!schema || !Array.isArray(schema.enum)) {
       throw new Error(`openapi.json is missing components.schemas.${name}.enum — cannot generate ${name}.`);
     }
-    enums[name] = schema.enum;
+    enums[name] = schema.enum.filter((v) => v !== null);
   }
   if (!enums.InvoiceReason.includes('HELD_UNMAPPED_TAX_CODE')) {
     throw new Error(`openapi.json's InvoiceReason.enum no longer contains 'HELD_UNMAPPED_TAX_CODE' — the tax-code-mapping hard cut depends on it.`);

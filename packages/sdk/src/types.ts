@@ -1974,7 +1974,7 @@ export interface Webhook {
   url: string;
   events: string[];
   /** Only for `invoice.status_changed`: the statuses delivered. Empty means every status change. */
-  statuses?: InvoiceStatus[];
+  statuses?: Array<InvoiceStatus | InvoiceReason>;
   entityId: string | null;
   active: boolean;
   createdAt: string;
@@ -1988,7 +1988,7 @@ export interface CreateWebhookInput {
    */
   events?: WebhookEventName[] | string[];
   /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
-  statuses?: InvoiceStatus[];
+  statuses?: Array<InvoiceStatus | InvoiceReason>;
 }
 
 export interface CreateWebhookResponse extends Webhook {
@@ -2005,7 +2005,7 @@ export interface TestWebhookInput {
   /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending, .business_status_changed or .status_changed. */
   event?: string;
   /** Only with event `invoice.status_changed`: the new status the sample reports (default: the invoice's own status, else ACCEPTED). */
-  to?: InvoiceStatus;
+  to?: InvoiceStatus | InvoiceReason;
   /** Build the payload from one of your own invoices instead of sample values. */
   invoiceId?: string;
 }
@@ -2977,7 +2977,7 @@ export interface ListMandateTransactionsParams {
 }
 
 export type MandateTransactionTerminalArtifact =
-  | { type: 'einvoice'; einvoicingRecordId: string; status: string; reason: string; statusLabel: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
+  | { type: 'einvoice'; einvoicingRecordId: string; clearanceStatus: string; clearanceStatusLabel: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
   | { type: 'period'; periodId: string; periodKey: string; periodStatus: string; closedAt: string | null; submittedAt: string | null; filedAt: string | null }
   | { type: 'recorded_only' }
   | null;
@@ -4408,23 +4408,26 @@ export interface StatusChangedWebhookPayload {
   referenceId: string | null;
   country: string;
   documentType: string;
-  /** The previous status; null for the first status of a record. */
-  from: InvoiceStatus | null;
-  /** Same as `status`. */
-  to: InvoiceStatus;
-  /** The invoice's status block after the change. The public reason code is `reasonCode` (`reason` below is the cause of the change). */
+  /** The previous stored reason code; null for the first status of a record. Use `previousStatus`. */
+  from: string | null;
+  /** The new stored reason code. Use `status` and `reason`. */
+  to: string;
+  /** The status before the change; null for the first status of a record. */
+  previousStatus: InvoiceStatus | null;
+  /** The invoice's status after the change. */
   status: InvoiceStatus;
+  statusLabel: string;
   stage: InvoiceStage | null;
   /** The public reason code ({@link InvoiceReason}). */
-  reasonCode: InvoiceReason;
-  statusLabel?: string;
-  terminal: boolean;
+  reason: InvoiceReason;
   issues: Issue[];
-  buyerResponse: BuyerResponse | null;
+  terminal: boolean;
+  /** The buyer's decision, when the regime has one. */
+  buyerResponse?: BuyerResponse | null;
   /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   /** Who and what caused the change. */
-  reason: {
+  cause: {
     code: string | null;
     message: string | null;
     actor: 'authority' | 'rule' | 'system' | 'merchant' | 'platform';
