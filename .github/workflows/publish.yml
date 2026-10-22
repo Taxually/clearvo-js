@@ -5,14 +5,17 @@ name: Publish to npm
 # publisher on npmjs.com pointing at this repo and this exact filename, so do
 # not rename the file without updating all three.
 #
-# Release: bump the versions in packages/*/package.json, merge, then push a tag:
-#   git tag v<date-or-version> && git push origin v<date-or-version>
-# A package whose version is already on the registry is skipped, so re-running
-# is safe.
+# Release: bump the versions in packages/*/package.json and merge. A bump that
+# needs a backend change carries `Depends-on-backend: <ADO PR id>` and stays a
+# draft; backend-release-merge.yml merges it once that backend release is live
+# and then dispatches this workflow (a merge made with GITHUB_TOKEN does not
+# fire the push trigger below). A package whose version is already on the
+# registry is skipped, so any extra run is a no-op.
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: ['packages/*/package.json']
   workflow_dispatch: {}
 
 permissions:
