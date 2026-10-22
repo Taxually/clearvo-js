@@ -137,3 +137,13 @@ Sandbox keys (`csk_test_...`) are available on the [sandbox](https://clearvo.io/
 - [API docs](https://clearvo.io/docs)
 - [Claude Code quickstart](https://clearvo.io/docs/claude-code)
 - [Supported countries](https://clearvo.io/countries)
+
+## Releasing
+
+`@clearvo/sdk`, `@clearvo/mcp` and `@clearvo/cli` publish to npm from GitHub Actions (`.github/workflows/publish.yml`) using npm Trusted Publishing: no npm token, no `npm login`, no 2FA prompt.
+
+1. Bump `version` in each `packages/*/package.json` you are releasing, update `CHANGELOG.md`, and merge to `main`.
+2. Push a tag from `main`: `git tag v<version-or-date> && git push origin v<version-or-date>` (or run the workflow by hand from the Actions tab).
+3. The workflow builds, then publishes sdk, mcp and cli in that order. A package whose version is already on npm is skipped, so a re-run is safe.
+
+Each package has a trusted publisher set on npmjs.com (org `Taxually`, repo `clearvo-js`, workflow `publish.yml`, no environment). If the workflow file is ever renamed, update all three there.

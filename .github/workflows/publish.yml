@@ -1,0 +1,54 @@
+name: Publish to npm
+
+# Publishes @clearvo/sdk, @clearvo/mcp and @clearvo/cli with npm Trusted
+# Publishing (OIDC): no npm token and no 2FA prompt. Each package has a trusted
+# publisher on npmjs.com pointing at this repo and this exact filename, so do
+# not rename the file without updating all three.
+#
+# Release: bump the versions in packages/*/package.json, merge, then push a tag:
+#   git tag v<date-or-version> && git push origin v<date-or-version>
+# A package whose version is already on the registry is skipped, so re-running
+# is safe.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing needs npm >= 11.5.1; Node 22 ships an older npm.
+      - run: npm install -g npm@^11.5.1
+
+      - run: npm install
+
+      - name: Build all packages
+        run: npm run build
+
+      # sdk first, then mcp and cli.
+      - name: Publish packages
+        run: |
+          set -euo pipefail
+          for dir in sdk mcp cli; do
+            name=$(node -p "require('./packages/$dir/package.json').name")
+            version=$(node -p "require('./packages/$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "::notice::$name@$version is already on npm, skipping"
+              continue
+            fi
+            echo "Publishing $name@$version"
+            (cd "packages/$dir" && npm publish --provenance --access public)
+          done
