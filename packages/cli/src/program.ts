@@ -1022,6 +1022,137 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo receive simulate ─────────────────────────────────────────────────
+  // Sandbox only: creates sample received invoices / credit notes through the real inbound pipeline.
+  const receive = program.command('receive').description('Received (inbound) invoices');
+  receive
+    .command('simulate')
+    .description('Sandbox only: create sample received invoices or credit notes from a fictional supplier (needs a csk_test_ key)')
+    .option('--country <code>', 'DE or FR: the tax registration the invoices are received under (default: the establishment country, else the single supported registration)')
+    .option('--type <type>', 'invoice (default) or credit_note')
+    .option('--count <n>', 'How many documents, 1-20 (default 1)')
+    .option('--total <amount>', 'Gross total of each document (default 1200)')
+    .option('--currency <code>', 'Three-letter currency code (France: EUR only)')
+    .option('--issue-date <date>', 'YYYY-MM-DD (default today)')
+    .option('--status <status>', 'Move each document to this lifecycle status after it arrives (e.g. APPROVED, DISPUTED, REFUSED)')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; type?: string; count?: string; total?: string; currency?: string; issueDate?: string; status?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.country) body.country = opts.country.toUpperCase();
+      if (opts.type) body.type = opts.type;
+      if (opts.count) body.count = Number(opts.count);
+      if (opts.total) body.totalAmount = Number(opts.total);
+      if (opts.currency) body.currency = opts.currency.toUpperCase();
+      if (opts.issueDate) body.issueDate = opts.issueDate;
+      if (opts.status) body.businessStatus = opts.status;
+      const result = await api('POST', '/receive/simulate', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo tests ────────────────────────────────────────────────────────────
+  // Sandbox only: run your integration tests (POST /test-runs) and read the outcome. Exit code 1 when the run failed, so CI can gate on it.
+  const tests = program.command('tests').description('Your integration tests in the sandbox: run them, read the outcome, manage your own tests');
+
+  function printRunSummary(run: Record<string, unknown>) {
+    const sum = (run.summary ?? {}) as Record<string, number>;
+    console.log(`Run ${run.runId} "${run.name}": ${String(run.status).toUpperCase()}`);
+    console.log(`  passed ${sum.passed ?? 0}, failed ${sum.failed ?? 0}, waiting ${sum.waiting ?? 0}, not run ${sum.notRun ?? 0}, not applicable ${sum.notApplicable ?? 0}`);
+    console.log(`  required tests passed: ${sum.requiredPassed ?? 0} of ${sum.required ?? 0} (checked automatically: ${sum.autoVerified ?? 0}, marked done by hand: ${sum.selfAttested ?? 0})`);
+    for (const c of (Array.isArray(run.cases) ? run.cases : []) as Array<Record<string, unknown>>) {
+      if (c.outcome === 'failed') console.log(`  FAILED: ${c.title}${c.reason ? ` - ${c.reason}` : ''}`);
+    }
+    if (typeof run.disclaimer === 'string') console.log(`\n${run.disclaimer}`);
+  }
+
+  tests
+    .command('run')
+    .description('Start a run of your integration tests (sandbox key). With --wait, poll until it is no longer queued or running; exits 1 if it failed')
+    .option('--name <name>', 'A name for the run')
+    .option('--tag <tag>', 'Run only tests with this tag (repeatable; default "automatic")', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--case <id>', 'Run only this test (repeatable; ids from "clearvo tests cases list")', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--deadline-minutes <n>', 'How long the run may wait for your integration to act, 1-1440 (default 10)')
+    .option('--idempotency-key <key>', 'Retrying with the same key returns the same run')
+    .option('--wait', 'Wait for the run to finish and print its summary')
+    .option('--interval <seconds>', 'Seconds between polls with --wait (default 5)')
+    .option('--json', 'Print JSON instead of a summary')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { name?: string; tag?: string[]; case?: string[]; deadlineMinutes?: string; idempotencyKey?: string; wait?: boolean; interval?: string; json?: boolean; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.name) body.name = opts.name;
+      if (opts.tag?.length) body.tags = opts.tag;
+      if (opts.case?.length) body.caseIds = opts.case;
+      if (opts.deadlineMinutes) body.deadlineMinutes = Number(opts.deadlineMinutes);
+      const started = await api('POST', '/test-runs', body, opts.idempotencyKey ? { 'x-idempotency-key': opts.idempotencyKey } : undefined) as Record<string, unknown>;
+      if (!opts.wait) {
+        if (opts.json) print(started, !!opts.pretty);
+        else console.log(`Started run ${started.runId} (${started.status}). Read it with: clearvo tests status ${started.runId}`);
+        return;
+      }
+      const intervalMs = Math.max(0, Number(opts.interval ?? 5)) * 1000;
+      let run = started;
+      for (;;) {
+        run = await api('GET', `/test-runs/${encodeURIComponent(String(started.runId))}`) as Record<string, unknown>;
+        if (run.status !== 'queued' && run.status !== 'running') break;
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+      if (opts.json) print(run, !!opts.pretty);
+      else printRunSummary(run);
+      if (run.status === 'failed') process.exit(1);
+    });
+
+  tests
+    .command('status <runId>')
+    .description('Show one test run: its status, counts and each test\'s outcome')
+    .option('--json', 'Print JSON instead of a summary')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (runId: string, opts: { json?: boolean; pretty?: boolean }) => {
+      const run = await api('GET', `/test-runs/${encodeURIComponent(runId)}`) as Record<string, unknown>;
+      if (opts.json) print(run, !!opts.pretty);
+      else printRunSummary(run);
+    });
+
+  const testCases = tests.command('cases').description('The tests you can run: standard ones and your own');
+
+  testCases
+    .command('list')
+    .description('List your tests, whether each applies to your setup and how it is checked')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      print(await api('GET', '/test-cases'), !!opts.pretty);
+    });
+
+  testCases
+    .command('create')
+    .description('Add a test of your own (see GET /test-cases/catalogue for the checks it accepts)')
+    .requiredOption('--title <title>', 'A short name for the test')
+    .requiredOption('--step <step>', 'What to do, one step per flag (repeatable)', (v: string, prev: string[] = []) => [...prev, v])
+    .requiredOption('--expected <text>', 'What should happen when the steps are done')
+    .option('--description <text>', 'Optional extra detail')
+    .option('--check <json>', 'Optional check the platform runs, as JSON: {"kind":"...","params":{...}}')
+    .option('--applies-when <json>', 'Optional JSON: {"direction":"any|sale|purchase","countries":["FR"]}')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { title: string; step: string[]; expected: string; description?: string; check?: string; appliesWhen?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { title: opts.title, steps: opts.step, expected: opts.expected };
+      if (opts.description) body.description = opts.description;
+      try {
+        if (opts.check) body.check = JSON.parse(opts.check);
+        if (opts.appliesWhen) body.appliesWhen = JSON.parse(opts.appliesWhen);
+      } catch {
+        console.error('--check and --applies-when must be valid JSON');
+        process.exit(1);
+      }
+      print(await api('POST', '/test-cases', body), !!opts.pretty);
+    });
+
+  testCases
+    .command('archive <caseId>')
+    .description('Remove one of your own tests from new runs (past runs keep showing it)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('DELETE', `/test-cases/${encodeURIComponent(caseId)}`), !!opts.pretty);
+    });
+
   // ── clearvo validate-tin-batch ───────────────────────────────────────────────
   program
     .command('validate-tin-batch <file>')

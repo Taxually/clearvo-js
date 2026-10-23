@@ -4,6 +4,13 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — integration tests (backend routes ship with the Integration Passport Stage 3 release)
+
+- SDK: `startTestRun`, `getTestRun`, `listTestRuns`, `listTestCases`, `createTestCase`, `updateTestCase`, `archiveTestCase`, `getTestCaseCatalogue` (`/v1/test-runs`, `/v1/test-cases`, sandbox key only).
+- MCP: `start_test_run`, `get_test_run`, `list_test_runs`, `list_test_cases`, `create_test_case`, `archive_test_case`, `get_test_case_catalogue`.
+- CLI: `clearvo tests run [--wait] [--json] [--tag] [--case]` (with `--wait` it polls until the run is no longer queued or running, prints the summary and exits 1 if the run failed), `clearvo tests status <runId>`, `clearvo tests cases list|create|archive`.
+- Also in this release: `simulateReceivedInvoices` / `simulate_received_invoices` / `clearvo receive simulate` (see the entry below).
+
 ## Unreleased — check-family toggles removed (backend change deploys with the next release)
 
 - MCP: `list_check_families` and `toggle_check_family` are removed. The backend routes behind them (`/v1/rules/families`) and the per-entity rule overrides they wrote are removed; to switch off a platform rule for one entity use `suppress_rule`.
@@ -73,6 +80,15 @@ Additive: default US shipping facts. A customer can save a standing answer for `
 - SDK: `TaxCalculateRequest.lineItems[]` gains `shippingCarrier`, `chargeAvoidable`, `actualCostOfShipment`; `TemplateParamDto` gains `optionLabels`.
 - MCP: `calculate_tax` (and `quote_duties`) line items gain the three fields; `list_rule_templates` names the `default_shipping_carrier`, `default_shipping_charge_avoidable` and `default_shipping_actual_cost` templates.
 - CLI: no change (`clearvo calculate` reads a JSON file).
+
+## Unreleased — publish only AFTER the backend sandbox inbound simulator PR (Taxually-einvoicing 17701) and the registration-based country fix are deployed
+
+New endpoint `POST /v1/receive/simulate` (sandbox keys only): create sample received invoices and credit notes from a fictional supplier, through the same pipeline as a real received document (stored, archived, `invoice.received` webhook, no email). The documents are received under one of the entity's tax registrations (`country`: DE or FR, any country the entity is established or VAT-registered in). Needs the docs PR in clearvo-marketing (`public/openapi.json`, docs page, `llms.txt`) to ship with it.
+
+- SDK: `client.simulateReceivedInvoices({ country?, type?, count?, supplier?, totalAmount?, currency?, lines?, issueDate?, businessStatus?, entityId? })`, with `SimulateReceivedInvoicesInput` and `SimulateReceivedInvoicesResponse` types. `ReceivedInvoiceFields.intakeChannel` lists the France and `SANDBOX_SIMULATION` values.
+- MCP: `simulate_received_invoices` tool.
+- CLI: `clearvo receive simulate [--country] [--type] [--count] [--total] [--currency] [--issue-date] [--status] [--entity]`.
+- Not bumped: the product owner sets versions when publishing.
 
 ## Unreleased — backend webhook test-event PR (Taxually-einvoicing 17676) is deployed; ready to publish
 

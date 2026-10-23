@@ -44,6 +44,7 @@ const READ_ONLY = new Set<string>([
   'list_platform_rule_changes', 'list_rule_property_definitions', 'list_rule_templates', 'get_rule_template',
   'list_field_mappings', 'list_rules_engine_datasets', 'get_rules_engine_dataset', 'list_rules_engine_dataset_rows',
   'query_data', 'simulate_rule', 'quote_duties', 'estimate_duties', 'get_import_settlement',
+  'get_test_run', 'list_test_runs', 'list_test_cases', 'get_test_case_catalogue',
   // Filings (GET routes).
   'get_registration_filing_setup', 'list_filings', 'get_filing', 'list_filing_change_requests', 'get_filing_bank_account',
   'list_filing_setups', 'list_filing_upload_months', 'get_filing_upload_month', 'get_filing_upload_error_report', 'get_filing_upload_template',
@@ -57,6 +58,8 @@ const DESTRUCTIVE = new Set<string>([
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi',
   'update_business_status', 'update_invoice_business_status',
+  // Removes one of the customer's own tests from new runs.
+  'archive_test_case',
   // Grant access / open an outbound data channel.
   'invite_team_member', 'create_webhook',
   // Overwrites previously stored authority credentials.
@@ -73,9 +76,11 @@ const NON_IDEMPOTENT = new Set<string>([
   'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
   'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch',
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account', 'create_company_code',
-  'receive_invoice_document', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
+  'receive_invoice_document', 'simulate_received_invoices', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
   'move_rule', 'amend_sii_report',
+  // Each call starts a new run / adds a new test.
+  'start_test_run', 'create_test_case',
   // Each call appends a new request to the filing's timeline.
   'request_filing_change',
   // A second upload of the same file is refused 409 FILE_ALREADY_ADDED; a repeated replace re-deletes a file id that is gone.

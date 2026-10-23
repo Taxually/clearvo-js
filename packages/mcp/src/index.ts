@@ -134,6 +134,9 @@ async function callApi(
 // string tool argument the LLM itself holds in context, so rejecting an
 // oversized payload here — before decoding/uploading — avoids a confusing
 // timeout or opaque failure further down the chain.
+const TEST_DISCLAIMER =
+  ' These results show how your integration handled simulated scenarios in the sandbox; nothing is sent to any tax authority, network or supplier, and this is not a certification.';
+
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
 // Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
@@ -1818,6 +1821,126 @@ const TOOLS = [
       },
       required: ['webhookId'],
     },
+  },
+  {
+    name: 'simulate_received_invoices',
+    description:
+      'Sandbox only: create sample incoming (received) invoices or credit notes for this entity, to build and test an accounts-payable ' +
+      'integration without waiting for a real supplier. Needs a sandbox API key; a live key returns 403 SANDBOX_ONLY. Each document is a ' +
+      'realistic e-invoice (Factur-X for France, ZUGFeRD for Germany) from a clearly fictional supplier, received through the same ' +
+      'pipeline as a real received document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
+      'intakeChannel SANDBOX_SIMULATION, and no email is sent. With no arguments it creates one invoice for the entity\'s own country. ' +
+      'The documents are received under one of the entity\'s tax registrations: country (DE or FR) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ' +
+      '(each call adds new ones). businessStatus (e.g. APPROVED, DISPUTED, REFUSED) moves each document along its lifecycle after it arrives, ' +
+      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. French samples are EUR only. ' +
+      'Returns the created invoices, any duplicates, how many of your webhook endpoints are subscribed to invoice.received, and notes.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        country: { type: 'string', enum: ['DE', 'FR'], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
+        type: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Document type. Default invoice.' },
+        count: { type: 'integer', minimum: 1, maximum: 20, description: 'How many documents to create (1-20). Default 1.' },
+        supplier: {
+          type: 'object',
+          description: 'Optional override of the fictional supplier. The name always keeps a sample marker.',
+          properties: {
+            name: { type: 'string' },
+            taxNumber: { type: 'string', description: 'Must be a valid number for the country and never a real registered one.' },
+            legalRegistrationNumber: { type: 'string', description: 'France: SIREN or SIRET.' },
+          },
+        },
+        totalAmount: { type: 'number', description: 'Gross total of each document. Default 1200. Not allowed together with lines.' },
+        currency: { type: 'string', description: 'Three-letter currency code. Default EUR; France accepts EUR only.' },
+        lines: {
+          type: 'array',
+          description: 'Optional lines (description, quantity, unitPrice net); the tax rate is the standard rate. Not allowed together with totalAmount.',
+          items: {
+            type: 'object',
+            properties: {
+              description: { type: 'string' },
+              quantity: { type: 'number' },
+              unitPrice: { type: 'number', description: 'Net unit price.' },
+            },
+            required: ['description', 'quantity', 'unitPrice'],
+          },
+        },
+        issueDate: { type: 'string', description: 'Issue date, YYYY-MM-DD. Default today; the due date is 30 days later.' },
+        businessStatus: { type: 'string', description: 'Lifecycle status to move each created document to after it arrives. Default IN_HAND (leave as received).' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'start_test_run',
+    description:
+      'Start a run of your integration tests in the sandbox and return at once with a runId; read the outcome with get_test_run. ' +
+      'By default it runs the tests the platform can check on its own (tag "automatic"); tests that need a manual step are reported as not run. ' +
+      'Only one run can be in progress at a time (409 RUN_IN_PROGRESS) and a sandbox connection is required.' +
+      TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'A name for the run (up to 200 characters)' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Run only tests carrying one of these tags (default ["automatic"])' },
+        caseIds: { type: 'array', items: { type: 'string' }, description: 'Run only these tests (ids from list_test_cases)' },
+        deadlineMinutes: { type: 'integer', description: 'How long a run may wait for your integration to act, 1 to 1440 minutes (default 10)' },
+      },
+    },
+  },
+  {
+    name: 'get_test_run',
+    description:
+      'Read one test run: its status (running, waiting, passed, failed or cancelled), the counts, and each test\'s outcome with the evidence ids behind it. ' +
+      'The run is "passed" only when every required test passed with the platform\'s own check; a test marked done by hand never counts.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { runId: { type: 'string', description: 'The runId returned by start_test_run or list_test_runs' } },
+      required: ['runId'],
+    },
+  },
+  {
+    name: 'list_test_runs',
+    description: 'List your recent test runs, newest first (up to 50), each with its status and counts.' + TEST_DISCLAIMER,
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'list_test_cases',
+    description:
+      'List the tests you can run: the standard ones and the ones added for your account or by you, each with whether it applies to your setup, ' +
+      'whether it is checked automatically or marked done by hand, its steps and the expected outcome.' + TEST_DISCLAIMER,
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'create_test_case',
+    description:
+      'Add a test of your own to your suite. With a check the platform verifies it automatically; without one you mark it done by hand in the dashboard. ' +
+      'Use get_test_case_catalogue for the checks and choices a test accepts.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'A short name for the test' },
+        steps: { type: 'array', items: { type: 'string' }, description: 'What to do, one step per item' },
+        expected: { type: 'string', description: 'What should happen when the steps are done' },
+        description: { type: 'string', description: 'Optional extra detail' },
+        check: { type: 'object', description: 'Optional check the platform runs: { kind, params } as listed by get_test_case_catalogue' },
+        appliesWhen: { type: 'object', description: 'Optional: { direction?: "any" | "sale" | "purchase", countries?: string[] }' },
+      },
+      required: ['title', 'steps', 'expected'],
+    },
+  },
+  {
+    name: 'archive_test_case',
+    description: 'Remove one of your own tests from new runs. Past runs keep showing it. Standard tests cannot be removed.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'get_test_case_catalogue',
+    description: 'List the closed choices for adding a test: the checks and their settings, who a test can apply to, and the limits.' + TEST_DISCLAIMER,
+    inputSchema: { type: 'object' as const, properties: {} },
   },
   {
     name: 'validate_tax_numbers_batch',
@@ -4283,6 +4406,32 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'test_webhook':
       return callApi('POST', '/webhooks/test', args);
+
+    case 'start_test_run':
+      return callApi('POST', '/test-runs', args);
+
+    case 'get_test_run':
+      return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}`);
+
+    case 'list_test_runs':
+      return callApi('GET', '/test-runs');
+
+    case 'list_test_cases':
+      return callApi('GET', '/test-cases');
+
+    case 'create_test_case':
+      return callApi('POST', '/test-cases', args);
+
+    case 'archive_test_case':
+      return callApi('DELETE', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}`);
+
+    case 'get_test_case_catalogue':
+      return callApi('GET', '/test-cases/catalogue');
+
+    case 'simulate_received_invoices': {
+      const { entityId, ...body } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/receive/simulate', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
 
     case 'validate_tax_numbers_batch':
       return callApi('POST', '/tax-numbers/validate-batch', args);

@@ -10,6 +10,8 @@ import type {
   InvoiceStatusResponse,
   ListInvoicesParams,
   ListInvoicesResponse,
+  SimulateReceivedInvoicesInput,
+  SimulateReceivedInvoicesResponse,
   TaxCalculateRequest,
   QuoteDutiesInput,
   DutiesResult,
@@ -49,6 +51,15 @@ import type {
   Webhook,
   CreateWebhookInput,
   TestWebhookInput,
+  StartTestRunInput,
+  StartTestRunResponse,
+  TestRun,
+  ListTestRunsResponse,
+  ListTestCasesResponse,
+  CreateTestCaseInput,
+  UpdateTestCaseInput,
+  TestCaseWriteResponse,
+  TestCaseCatalogue,
   TestWebhookResponse,
   CreateWebhookResponse,
   ListWebhooksResponse,
@@ -325,6 +336,16 @@ export class ClearvoClient {
     );
   }
 
+  /**
+   * Sandbox only (a csk_test_ key; a live key gets 403 SANDBOX_ONLY). Creates sample received invoices or credit notes
+   * from a fictional supplier through the same pipeline as a real received document: stored, archived and announced
+   * with the invoice.received webhook. With no input it creates one invoice for the entity's own country.
+   */
+  simulateReceivedInvoices(input: SimulateReceivedInvoicesInput = {}): Promise<SimulateReceivedInvoicesResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/receive/simulate', body, entityHeaders(entityId));
+  }
+
   listInvoices(params: ListInvoicesParams = {}): Promise<ListInvoicesResponse> {
     const qs = new URLSearchParams();
     if (params.limit    != null) qs.set('limit',     String(params.limit));
@@ -571,6 +592,46 @@ export class ClearvoClient {
   /** Sends one signed test event to a webhook you registered and reports what your endpoint did. Nothing is stored. */
   testWebhook(input: TestWebhookInput): Promise<TestWebhookResponse> {
     return this.request('POST', '/webhooks/test', input);
+  }
+
+  // ── Integration tests (sandbox only) ───────────────────────────────────────────
+
+  /** Starts a run of your integration tests in the sandbox and returns at once; poll getTestRun(runId). One run at a time (409 RUN_IN_PROGRESS). */
+  startTestRun(input: StartTestRunInput = {}): Promise<StartTestRunResponse> {
+    const { idempotencyKey, ...body } = input;
+    return this.request('POST', '/test-runs', body, idempotencyKey ? { 'x-idempotency-key': idempotencyKey } : undefined);
+  }
+
+  /** One run: status (queued, running, waiting, passed, failed or cancelled), counts and each test's outcome. */
+  getTestRun(runId: string): Promise<TestRun> {
+    return this.request('GET', `/test-runs/${encodeURIComponent(runId)}`);
+  }
+
+  listTestRuns(): Promise<ListTestRunsResponse> {
+    return this.request('GET', '/test-runs');
+  }
+
+  listTestCases(): Promise<ListTestCasesResponse> {
+    return this.request('GET', '/test-cases');
+  }
+
+  createTestCase(input: CreateTestCaseInput): Promise<TestCaseWriteResponse> {
+    return this.request('POST', '/test-cases', input);
+  }
+
+  /** Changes one of your own tests; this creates a new version. Standard tests cannot be changed. */
+  updateTestCase(caseId: string, input: UpdateTestCaseInput): Promise<TestCaseWriteResponse> {
+    return this.request('PATCH', `/test-cases/${encodeURIComponent(caseId)}`, input);
+  }
+
+  /** Removes one of your own tests from new runs; past runs keep showing it. */
+  archiveTestCase(caseId: string): Promise<{ id: string; archived: true }> {
+    return this.request('DELETE', `/test-cases/${encodeURIComponent(caseId)}`);
+  }
+
+  /** The closed choices for adding a test: checks and their settings, who it applies to, and the limits. */
+  getTestCaseCatalogue(): Promise<TestCaseCatalogue> {
+    return this.request('GET', '/test-cases/catalogue');
   }
 
   // ── Batch TIN Validation ──────────────────────────────────────────────────────

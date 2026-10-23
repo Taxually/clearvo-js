@@ -840,7 +840,7 @@ export type ValidationOutcome =
  */
 export interface ReceivedInvoiceFields {
   validationOutcome?: ValidationOutcome | null;
-  /** PEPPOL_AS4, DE_INBOUND_API, DE_INBOUND_DASHBOARD, DE_INBOUND_BULK or DE_INBOUND_EMAIL. */
+  /** PEPPOL_AS4, DE_INBOUND_API/DASHBOARD/BULK/EMAIL, FR_INBOUND_API/DASHBOARD/BULK, FR_PLATFORM_INBOUND or SANDBOX_SIMULATION. */
   intakeChannel?: string;
   /** When the platform received the document (not when it was stored). */
   receivedAt?: string;
@@ -874,6 +874,40 @@ export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+}
+
+export interface SimulateReceivedInvoicesInput {
+  /** DE or FR: the registration the documents are received under (any country the entity is established or VAT-registered in; else 409 COUNTRY_NOT_REGISTERED). Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
+  country?: 'DE' | 'FR';
+  /** Default invoice. A credit note references an invoice from the same call. */
+  type?: 'invoice' | 'credit_note';
+  /** 1 to 20 documents (default 1). Every call adds new documents. */
+  count?: number;
+  /** Optional override of the fictional supplier; the name always keeps a sample marker. */
+  supplier?: { name?: string; taxNumber?: string; legalRegistrationNumber?: string };
+  /** Gross total of each document (default 1200). Not allowed together with `lines`. */
+  totalAmount?: number;
+  /** Three-letter code. Default EUR; France accepts EUR only. */
+  currency?: string;
+  /** Net unit prices at the standard rate. Not allowed together with `totalAmount`. */
+  lines?: Array<{ description: string; quantity: number; unitPrice: number }>;
+  /** YYYY-MM-DD. Default today; the due date is 30 days later. */
+  issueDate?: string;
+  /** Lifecycle status to move each created document to after it arrives (default IN_HAND). */
+  businessStatus?: string;
+  /** Required for account-scoped keys. */
+  entityId?: string;
+}
+
+export interface SimulateReceivedInvoicesResponse {
+  ok: boolean;
+  sandbox: true;
+  /** Received invoices in the same shape GET /v1/invoices returns (cast to ReceivedInvoiceFields for the inbound fields). */
+  created: unknown[];
+  /** Ids of documents that were already present and so were not created again. */
+  duplicates: string[];
+  webhooks: { event: string; subscribedEndpoints: number };
+  notes: string[];
 }
 
 export interface ListInvoicesResponse {
@@ -5321,3 +5355,131 @@ export interface FilingUploadTemplate {
 }
 
 export type FilingUploadTemplateFormat = 'csv' | 'xlsx' | 'json';
+
+// ── Integration tests (test runs and test cases, sandbox only) ──────────────────
+
+export type TestRunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'waiting' | 'cancelled';
+export type TestCaseScope = 'standard' | 'added_for_you' | 'your_organisation';
+export type TestCaseVerification = 'auto' | 'self_attested' | null;
+
+export interface StartTestRunInput {
+  name?: string;
+  /** Run only tests carrying one of these tags (default ["automatic"]). */
+  tags?: string[];
+  /** Run only these tests (ids from listTestCases). */
+  caseIds?: string[];
+  /** How long the run may wait for your integration to act, 1 to 1440 minutes (default 10). */
+  deadlineMinutes?: number;
+  /** Retrying with the same key returns the same run (`idempotent: true`). */
+  idempotencyKey?: string;
+}
+
+export interface StartTestRunResponse {
+  runId: string;
+  name: string;
+  status: TestRunStatus;
+  startedAt: string;
+  deadlineAt: string;
+  links: { self: string };
+  /** Present (true) when the same idempotency key already started this run. */
+  idempotent?: boolean;
+  disclaimer?: string;
+}
+
+export interface TestRunSummary {
+  passed: number;
+  failed: number;
+  waiting: number;
+  notRun: number;
+  notApplicable: number;
+  autoVerified: number;
+  selfAttested: number;
+  required: number;
+  requiredPassed: number;
+}
+
+export interface TestRunCaseResult {
+  caseId: string;
+  caseVersion: number;
+  title: string;
+  group: string;
+  required: boolean;
+  scope: TestCaseScope;
+  outcome: string;
+  verification: TestCaseVerification;
+  reasonCode: string | null;
+  reason: string | null;
+  firedAt: string | null;
+  resolvedAt: string | null;
+  windowEndsAt: string | null;
+  /** Ids and metadata only. */
+  evidence: Record<string, unknown>;
+}
+
+export interface TestRun {
+  runId: string;
+  name: string;
+  status: TestRunStatus;
+  startedAt: string;
+  completedAt: string | null;
+  deadlineAt: string;
+  summary: TestRunSummary;
+  cases: TestRunCaseResult[];
+  notApplicable: Array<{ caseId: string; title: string; reason: string }>;
+  disclaimer: string;
+}
+
+export interface ListTestRunsResponse {
+  runs: Array<Partial<TestRun> & { runId: string; name: string; status: TestRunStatus }>;
+  disclaimer?: string;
+}
+
+export interface TestCase {
+  caseId: string;
+  caseVersion: number;
+  title: string;
+  group: string;
+  scope: TestCaseScope;
+  required: boolean;
+  tags: string[];
+  applicable: boolean;
+  notApplicableReason: string | null;
+  /** `auto` = the platform checks it; `attest_only` = you mark it done by hand in the dashboard. */
+  verifiability: 'auto' | 'attest_only';
+  steps: string[];
+  expected: string;
+}
+
+export interface ListTestCasesResponse {
+  cases: TestCase[];
+  disclaimer?: string;
+}
+
+export interface CreateTestCaseInput {
+  title: string;
+  steps: string[];
+  expected: string;
+  description?: string;
+  /** Optional check the platform runs; kinds and params come from getTestCaseCatalogue(). */
+  check?: { kind: string; params: Record<string, unknown> };
+  appliesWhen?: { direction?: 'any' | 'sale' | 'purchase'; countries?: string[] };
+}
+
+export type UpdateTestCaseInput = Partial<CreateTestCaseInput>;
+
+export interface TestCaseWriteResponse {
+  id: string;
+  verifiability: 'auto' | 'attest_only';
+  verifiabilityLabel: string;
+  disclaimer?: string;
+}
+
+export interface TestCaseCatalogue {
+  checks: Array<{ kind: string; label: string; params: Array<Record<string, unknown>> }>;
+  appliesWhen: {
+    directions: Array<{ value: string; label: string }>;
+    countries: Array<{ value: string; label: string }>;
+  };
+  limits: { titleMax: number; textMax: number; stepsMax: number; casesMax: number; casesUsed: number };
+  disclaimer?: string;
+}
