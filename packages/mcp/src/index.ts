@@ -8,6 +8,31 @@ import {
 import { createHash } from 'crypto';
 import { getToolAnnotations } from './tool-annotations.js';
 
+// Countries the received-invoice simulator covers. Repeated in the SDK and CLI; `npm run test:simulation-countries` fails on drift.
+const SIMULATION_COUNTRY_CODES = [
+  'AE', 'AT', 'AU', 'BE', 'CH', 'DE', 'DK', 'EE', 'FI', 'FR', 'HR', 'IE',
+  'IS', 'JP', 'LT', 'LU', 'LV', 'NL', 'NO', 'NZ', 'SE', 'SG', 'SI', 'SK',
+];
+
+// Scenarios of the received-invoice simulator. Repeated in the SDK (ids and descriptions) and CLI (ids); `npm run test:simulation-countries` fails on drift.
+const SIMULATION_SCENARIOS = [
+  { id: 'standard', description: 'A clean invoice or credit note with one line, accepted without warnings or review. The default.' },
+  { id: 'credit_note_for_existing', description: 'A credit note that refers to a real invoice you already simulated (its number and date appear in relatedDocuments). When there is no uncredited simulated invoice for the country, one is created first.' },
+  { id: 'warnings_only', description: 'A valid document that the checks flag with warnings: it is stored and announced as received, with flags on the invoice.' },
+  { id: 'needs_review_format', description: 'A file that does not follow the e-invoice format. It is stored for review (RECEIVED_NEEDS_REVIEW, validationOutcome FORMAT_ERROR) and invoice.received still fires.' },
+  { id: 'needs_review_business_rules', description: 'A well-formed file whose totals break a mandatory invoice rule. It is stored for review (RECEIVED_NEEDS_REVIEW, validationOutcome BUSINESS_RULE_ERROR) with the failed checks on the invoice.' },
+  { id: 'duplicate', description: 'Each invoice is created, then sent again by the same supplier with the same number and date but a changed file. The second copy creates nothing new and fires invoice.duplicate.' },
+  { id: 'duplicate_exact', description: 'Each invoice is created, then sent again byte for byte. The second copy is recognised and ignored: nothing new is created and no event fires, as for a real redelivery.' },
+  { id: 'with_references', description: 'The document carries a purchase order reference and a buyer reference.' },
+  { id: 'with_payment_terms', description: 'The document states payment terms in words, and its issue date is 60 days back so the due date has already passed (unless you set issueDate).' },
+  { id: 'with_attachment', description: 'The document embeds a small supporting file (a CSV), listed under attachments on the invoice.' },
+  { id: 'with_discounts', description: 'Three lines, each with a fixed discount, so the line totals differ from quantity times price.' },
+  { id: 'many_lines', description: '25 lines, to exercise paging and large payloads.' },
+  { id: 'unicode_text', description: 'Long line descriptions in accented Latin, Greek, Cyrillic, Japanese and Arabic text.' },
+  { id: 'foreign_supplier', description: 'The supplier is established in a different country from your registration (its address, tax number and currency come from that country), while you stay the customer.' },
+] as const;
+const SIMULATION_SCENARIO_LISTING = SIMULATION_SCENARIOS.map((s) => `${s.id}: ${s.description}`).join(' ');
+
 // White-label tenants get their own branded env var names instead of CLEARVO_*.
 // CLEARVO_API_KEY always wins if set; otherwise the first matching tenant alias is used.
 // The public API itself is not white-labeled yet — there is no separate api.taxually.com
@@ -1827,19 +1852,22 @@ const TOOLS = [
     description:
       'Sandbox only: create sample incoming (received) invoices or credit notes for this entity, to build and test an accounts-payable ' +
       'integration without waiting for a real supplier. Needs a sandbox API key; a live key returns 403 SANDBOX_ONLY. Each document is a ' +
-      'realistic e-invoice (Factur-X for France, ZUGFeRD for Germany) from a clearly fictional supplier, received through the same ' +
-      'pipeline as a real received document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
-      'intakeChannel SANDBOX_SIMULATION, and no email is sent. With no arguments it creates one invoice for the entity\'s own country. ' +
-      'The documents are received under one of the entity\'s tax registrations: country (DE or FR) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ' +
+      `realistic e-invoice in the country's own format (Factur-X for France, ZUGFeRD for Germany, Peppol BIS Billing 3.0 or PINT for the other countries: Australia, Austria, Belgium, Croatia, Denmark, Estonia, Finland, Iceland, Ireland, Japan, Latvia, Lithuania, Luxembourg, Netherlands, New Zealand, Norway, Singapore, Slovakia, Slovenia, Sweden, Switzerland, United Arab Emirates) from a clearly fictional supplier, received through the same ` +
+      'pipeline as receive_invoice_document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
+      'intakeChannel SANDBOX_SIMULATION, and no email is sent. ' +
+      `The documents are received under one of the entity's tax registrations: country (${SIMULATION_COUNTRY_CODES.join(', ')}) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise; 409 COUNTRY_NOT_ENABLED when it has no sample documents), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ` +
       '(each call adds new ones). businessStatus (e.g. APPROVED, DISPUTED, REFUSED) moves each document along its lifecycle after it arrives, ' +
-      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. French samples are EUR only. ' +
+      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. Documents are in the country\'s own currency; French samples are EUR only. ' +
+      'scenario picks the shape of the document (default standard): a scenario that cannot be built for the country is 400 SCENARIO_NOT_AVAILABLE, and one that builds its own lines cannot be combined with lines or totalAmount (400 INVALID_SCENARIO). ' +
+      `${SIMULATION_SCENARIO_LISTING} ` +
       'Returns the created invoices, any duplicates, how many of your webhook endpoints are subscribed to invoice.received, and notes.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        country: { type: 'string', enum: ['DE', 'FR'], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
+        country: { type: 'string', enum: [...SIMULATION_COUNTRY_CODES], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
         type: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Document type. Default invoice.' },
         count: { type: 'integer', minimum: 1, maximum: 20, description: 'How many documents to create (1-20). Default 1.' },
+        scenario: { type: 'string', enum: SIMULATION_SCENARIOS.map((s) => s.id), description: `Optional. The shape of the document. Default standard. ${SIMULATION_SCENARIO_LISTING}` },
         supplier: {
           type: 'object',
           description: 'Optional override of the fictional supplier. The name always keeps a sample marker.',
@@ -1850,7 +1878,7 @@ const TOOLS = [
           },
         },
         totalAmount: { type: 'number', description: 'Gross total of each document. Default 1200. Not allowed together with lines.' },
-        currency: { type: 'string', description: 'Three-letter currency code. Default EUR; France accepts EUR only.' },
+        currency: { type: 'string', description: 'Three-letter currency code. Default the country\'s own currency (EUR for euro countries; DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY or AED for the others); France accepts EUR only.' },
         lines: {
           type: 'array',
           description: 'Optional lines (description, quantity, unitPrice net); the tax rate is the standard rate. Not allowed together with totalAmount.',
