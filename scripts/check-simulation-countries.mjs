@@ -42,8 +42,10 @@ if (!same(cliIds, EXPECTED_SCENARIOS)) fail(`packages/cli/src/program.ts: scenar
 const openapiPath = process.env.CLEARVO_MARKETING_OPENAPI_PATH;
 if (openapiPath && existsSync(openapiPath)) {
   const spec = JSON.parse(readFileSync(openapiPath, 'utf8'));
-  const schema = spec.paths?.['/v1/receive/simulate']?.post?.requestBody?.content?.['application/json']?.schema?.properties?.scenario;
-  if (!same(schema?.enum, EXPECTED_SCENARIOS)) fail(`${openapiPath}: scenario enum is ${schema?.enum ? schema.enum.join(',') : 'missing'}, expected ${EXPECTED_SCENARIOS.join(',')}`);
+  const schema = spec.paths?.['/receive/simulate']?.post?.requestBody?.content?.['application/json']?.schema;
+  const resolved = schema?.$ref ? spec.components?.schemas?.[schema.$ref.split('/').pop()] : schema;
+  const scenario = resolved?.properties?.scenario;
+  if (!same(scenario?.enum, EXPECTED_SCENARIOS)) fail(`${openapiPath}: scenario enum is ${scenario?.enum ? scenario.enum.join(',') : 'missing'}, expected ${EXPECTED_SCENARIOS.join(',')}`);
 }
 
 if (failed) process.exit(1);
