@@ -1813,6 +1813,7 @@ export function createProgram(): Command {
     .option('--description <text>', 'Rule description')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY — default BUSINESS_POLICY')
     .option('--sort-order <n>', 'Evaluation order within this ruleKind')
+    .option('--clearance-status <status>', 'What a matched ERROR rule makes of the document: REJECTED (default), NEEDS_INFO (accepted, flagged for the sender to complete) or EXCLUDED (skipped: recorded, nothing submitted). Only for --rule-kind ERROR')
     .option('--conditions <json>', 'JSON array, ANDed at the top level: each element is {property, operator, value?} or a group {any: [...]} / {all: [...]} (max 50 leaves, 2 levels deep). Omit or [] to always match', '[]')
     .option('--company-code <code>', 'Scope the rule to one of the entity\'s active company codes (Enterprise). Omit for an entity-wide rule')
     .option('--actions <json>', 'JSON array of {property, value} (literal) or {property, fn, args?} (function dispatch)', '[]')
@@ -1823,7 +1824,7 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
       domain: string; recordType?: string; ruleKind: string; code: string; name: string; description?: string;
-      legalBasisTag?: string; sortOrder?: string; conditions: string; actions: string; templateId?: string;
+      legalBasisTag?: string; sortOrder?: string; clearanceStatus?: string; conditions: string; actions: string; templateId?: string;
       effectiveFrom?: string; effectiveTo?: string; companyCode?: string; entity?: string; pretty?: boolean;
     }) => {
       const body: Record<string, unknown> = {
@@ -1835,6 +1836,7 @@ export function createProgram(): Command {
       if (opts.description) body.description = opts.description;
       if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
       if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.clearanceStatus) body.clearanceStatus = opts.clearanceStatus;
       if (opts.templateId) body.templateId = opts.templateId;
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
       if (opts.effectiveTo) body.effectiveTo = opts.effectiveTo;
@@ -1851,6 +1853,7 @@ export function createProgram(): Command {
     .option('--description <text>')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY')
     .option('--sort-order <n>')
+    .option('--clearance-status <status>', 'What a matched ERROR rule makes of the document: REJECTED (default), NEEDS_INFO (accepted, flagged for the sender to complete) or EXCLUDED (skipped: recorded, nothing submitted). Only for an ERROR rule')
     .option('--conditions <json>', 'JSON array replacing the rule\'s own conditions (leaves or {any|all: [...]} groups)')
     .option('--company-code <code>', 'Re-scope to another active company code')
     .option('--entity-wide', 'Make the rule entity-wide again (company code null)')
@@ -1863,7 +1866,7 @@ export function createProgram(): Command {
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
-      version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string;
+      version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string; clearanceStatus?: string;
       conditions?: string; actions?: string; effectiveFrom?: string; effectiveTo?: string;
       companyCode?: string; entityWide?: boolean;
       enabled?: boolean; disabled?: boolean; archive?: boolean; entity?: string; pretty?: boolean;
@@ -1873,6 +1876,7 @@ export function createProgram(): Command {
       if (opts.description) body.description = opts.description;
       if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
       if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.clearanceStatus) body.clearanceStatus = opts.clearanceStatus;
       if (opts.conditions) body.conditions = parseJsonOption('--conditions', opts.conditions);
       if (opts.actions) body.actions = parseJsonOption('--actions', opts.actions);
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
