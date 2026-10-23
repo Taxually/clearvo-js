@@ -3,6 +3,22 @@ import { createHash } from 'crypto';
 import { homedir } from 'os';
 import { join, basename } from 'path';
 import { Command } from 'commander';
+import { BodyReadError, errorToJson, exitCodeForStatus, failedRows, formatErrorLines, parseErrorResponse, readBody, isRetryableStatus, timeoutSignal } from './error-format';
+
+/** Just under the 150 s Azure Front Door cut; override with CLEARVO_TIMEOUT_MS (milliseconds, 0 = none). */
+const DEFAULT_TIMEOUT_MS = 140_000;
+import type { ParsedError } from './error-format';
+
+/** Exit codes: 0 success, 1 other failure, 2 usage, 3 auth (401/403), 4 validation (400/422), 5 server or network (5xx, timeout, no connection). */
+const EXIT_USAGE = 2;
+const EXIT_SERVER = 5;
+
+/** A failed API call carrying everything the response said. */
+class ApiFailure extends Error {
+  constructor(public readonly parsed: ParsedError, public readonly serverSide = false) {
+    super(parsed.message);
+  }
+}
 
 /** Commander collector for the repeatable --classification-code flag. */
 function collectClassificationCode(val: string, prev: string[]): string[] {
@@ -17,7 +33,7 @@ function collectClassificationCode(val: string, prev: string[]): string[] {
 function parseClassificationCodes(values: string[]): Array<{ system: string; code: string }> {
   if (values.length > 5) {
     console.error('Error: --classification-code may be given at most 5 times.');
-    process.exit(1);
+    process.exit(EXIT_USAGE);
   }
   return values.map((v) => {
     const i = v.indexOf(':');
@@ -25,7 +41,7 @@ function parseClassificationCodes(values: string[]): Array<{ system: string; cod
     const code = i > 0 ? v.slice(i + 1) : '';
     if (!/^[a-z0-9_]{1,30}$/.test(system) || !code) {
       console.error(`Error: invalid --classification-code "${v}". Expected system:code with a lowercase system, e.g. stripe:txcd_10103001`);
-      process.exit(1);
+      process.exit(EXIT_USAGE);
     }
     return { system, code };
   });
@@ -54,7 +70,7 @@ export function createProgram(): Command {
     console.error('Error: CLEARVO_API_KEY is not set.');
     console.error('Set it as an environment variable or in ~/.clearvo/config.json');
     console.error('Get a key at https://app.clearvo.io/settings');
-    process.exit(1);
+    process.exit(3);
   }
   
   async function api(
@@ -63,10 +79,28 @@ export function createProgram(): Command {
     body?: unknown,
     extraHeaders?: Record<string, string>
   ): Promise<unknown> {
-    // FormData (e.g. bulk CSV upload) must not get a JSON Content-Type or be stringified —
-    // fetch sets the correct multipart boundary itself when the body is a FormData instance.
+    return apiOrExit(() => apiCall(method, path, body, extraHeaders));
+  }
+
+  /** Runs an API call; a failure is printed (text, or JSON on stderr with --json-errors / a non-TTY stdout) and the process exits with the code for its class. */
+  async function apiOrExit<T>(call: () => Promise<T>): Promise<T> {
+    try {
+      return await call();
+    } catch (e) {
+      if (e instanceof ApiFailure) reportFailureAndExit(e);
+      throw e;
+    }
+  }
+
+  /** One HTTP call that throws ApiFailure (instead of exiting) on a network failure, a non-2xx status or a 2xx that is not JSON. */
+  async function apiCall(
+    method: string,
+    path: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>
+  ): Promise<unknown> {
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
-    const res = await fetch(`${getBaseUrl()}${path}`, {
+    const res = await fetchOrFail(`${getBaseUrl()}${path}`, {
       method,
       headers: {
         'x-api-key': getApiKey(),
@@ -76,46 +110,104 @@ export function createProgram(): Command {
       },
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
-    const data = await res.json().catch(() => ({})) as Record<string, unknown>;
-    if (!res.ok) {
-      // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
-      const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
-      // The Filings routes put the stable code in `error` and the sentence in `message` or `detail`.
-      const filingsCode = !errObj && typeof data.error === 'string' && (typeof data.message === 'string' || typeof data.detail === 'string') ? data.error : undefined;
-      const parts = [`HTTP ${res.status}: ${errObj ? (errObj.message ?? errObj.code ?? 'Unknown error') : filingsCode ? (data.message ?? data.detail) : (data.error ?? 'Unknown error')}`];
-      if (data.hint) parts.push(`Hint: ${data.hint}`);
-      if (data.field) parts.push(`Field: ${data.field}`);
-      if (data.code) parts.push(`Code: ${data.code}`);
-      else if (filingsCode) parts.push(`Code: ${filingsCode}`);
-      if (filingsCode) {
+    // A 2xx whose body cannot be read (abort, reset, truncated stream) is a failure, not an empty success.
+    const read = await readBody(res).catch((e) => { throw e instanceof BodyReadError ? transportFailure(e, timeoutMsSetting()) : e; });
+    if (!res.ok) throw new ApiFailure(parseErrorResponse(res, read));
+    // 204 or an empty body: the call worked but there is nothing to print.
+    if (res.status === 204 || read.text === '') return { ok: true, status: res.status };
+    // A 2xx that is not JSON (a proxy's HTML page) is not success carrying {}.
+    if (!read.isJson) {
+      throw new ApiFailure({ status: res.status, message: `HTTP ${res.status}: Unexpected non-JSON response`, rawBody: read.text.slice(0, 500), requestId: res.headers?.get?.('x-request-id') ?? undefined }, true);
+    }
+    return read.json === null ? { ok: true, status: res.status } : read.json;
+  }
+
+  /** fetch with a timeout; a network failure or timeout becomes an ApiFailure with status 0. */
+  function timeoutMsSetting(): number {
+    const n = Number(process.env.CLEARVO_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+    return Number.isFinite(n) && n >= 0 ? n : DEFAULT_TIMEOUT_MS;
+  }
+
+  async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
+    const timeoutMs = timeoutMsSetting();
+    try {
+      return await fetch(url, timeoutMs > 0 ? { ...init, signal: timeoutSignal(timeoutMs) } : init);
+    } catch (cause) {
+      throw transportFailure(cause, timeoutMs);
+    }
+  }
+
+  /** The status-0 ApiFailure for a failed fetch or an unreadable 2xx body. */
+  function transportFailure(cause: unknown, timeoutMs: number): ApiFailure {
+    const original = cause instanceof BodyReadError ? cause.cause : cause;
+    const timedOut = original instanceof Error && (original.name === 'TimeoutError' || original.name === 'AbortError');
+    return new ApiFailure({
+      status: 0,
+      code: timedOut ? 'TIMEOUT' : 'NETWORK_ERROR',
+      message: timedOut
+        ? `Request timed out after ${timeoutMs} ms; the operation may still have completed, check its status before retrying`
+        : `Network error: ${original instanceof Error ? original.message : String(original)}`,
+    });
+  }
+
+  /** Prints a failure and exits: 3 auth, 4 validation, 5 server or network, 1 other. */
+  function reportFailureAndExit(f: ApiFailure): never {
+    const e = f.parsed;
+    if (wantJsonErrors()) {
+      console.error(JSON.stringify(errorToJson(e)));
+    } else {
+      const parts = formatErrorLines(e);
+      const data = e.body;
+      const filingsCode = data && typeof data.error === 'string' && (typeof data.message === 'string' || typeof data.detail === 'string') ? data.error : undefined;
+      if (data && filingsCode) {
         // Extra body fields of a Filings refusal: existingId, reason, filesWithErrors, contactUrl, currentVersion, declaration, ...
-        const extras = Object.fromEntries(Object.entries(data).filter(([k]) => !['error', 'message', 'detail', 'hint', 'field', 'code', 'errors'].includes(k)));
+        const extras = Object.fromEntries(Object.entries(data).filter(([k]) => !['error', 'message', 'detail', 'hint', 'field', 'code', 'errors', 'details', 'issues'].includes(k)));
         if (Object.keys(extras).length > 0) parts.push(`Details: ${JSON.stringify(extras)}`);
         if (filingsCode === 'FILE_ERRORS') parts.push('Next: look at the error reports (`clearvo filings upload error-report <month> <fileId>`), fix the file and upload it again or delete it, then run process again.');
         if (filingsCode === 'SYSTEM_FILE_ERRORS') parts.push('Next: a file we prepared for you has errors and cannot be changed by you. Contact support (see contactUrl in the details).');
         if (filingsCode === 'DECLARATION_VERSION_MISMATCH') parts.push('Next: read the current declaration (`clearvo filings upload month <month>`) and repeat with --declaration-version set to its version.');
       }
-      if (Array.isArray(data.errors) && data.errors.length > 0) {
-        parts.push('Errors:');
-        for (const e of (data.errors as Array<Record<string, unknown>>).slice(0, 25)) {
-          parts.push(`  - ${e.path ?? '/'} ${e.errorCode ?? e.code ?? ''}: ${e.message ?? ''}`);
-        }
-      }
       console.error(parts.join('\n'));
-      process.exit(1);
     }
-    return data;
+    return process.exit(f.serverSide ? EXIT_SERVER : exitCodeForStatus(e.status));
   }
-  
+
+  /** True with --json-errors, CLEARVO_JSON_ERRORS=1, or when stdout is not a terminal (a script or CI is reading). */
+  function wantJsonErrors(): boolean {
+    return jsonErrorsArg || program.opts().jsonErrors === true || process.env.CLEARVO_JSON_ERRORS === '1' || !process.stdout.isTTY;
+  }
+  /** Set when --json-errors appeared anywhere on the command line (see the parseAsync wrapper below). */
+  let jsonErrorsArg = false;
+
   /** A GET that returns a file (CSV, XLSX, PDF/image) rather than JSON. Exits on a non-2xx response, printing the error like api(). */
   async function apiFile(path: string, extraHeaders?: Record<string, string>): Promise<Response> {
-    const res = await fetch(`${getBaseUrl()}${path}`, { method: 'GET', headers: { 'x-api-key': getApiKey(), ...extraHeaders } });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({})) as Record<string, unknown>;
-      console.error(`HTTP ${res.status}: ${data.message ?? data.detail ?? data.error ?? 'Unknown error'}${typeof data.error === 'string' && (data.message || data.detail) ? `\nCode: ${data.error}` : ''}`);
-      process.exit(1);
+    return apiOrExit(async () => {
+      const res = await fetchOrFail(`${getBaseUrl()}${path}`, { method: 'GET', headers: { 'x-api-key': getApiKey(), ...extraHeaders } });
+      if (!res.ok) throw new ApiFailure(parseErrorResponse(res, await readBody(res)));
+      return res;
+    });
+  }
+
+  /** Reads and parses a JSON file; a missing or malformed file is a usage error naming the file. */
+  function readJsonFile(file: string): unknown {
+    return readJsonFileRaw(file).value;
+  }
+
+  /** Like readJsonFile, also returning the file's text (for a content hash). */
+  function readJsonFileRaw(file: string): { raw: string; value: unknown } {
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf8');
+    } catch (e) {
+      console.error(`Error: cannot read ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      return process.exit(EXIT_USAGE);
     }
-    return res;
+    try {
+      return { raw, value: JSON.parse(raw) };
+    } catch (e) {
+      console.error(`Invalid JSON in ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      return process.exit(EXIT_USAGE);
+    }
   }
 
   /** Human-readable summary of a stored REJECTED / NEEDS_INFO send (UNROUTABLE is a NEEDS_INFO outcome): the error, one line per failed check, and the next step. */
@@ -141,8 +233,24 @@ export function createProgram(): Command {
   const program = new Command()
     .name('clearvo')
     .description('Clearvo CLI — submit invoices, calculate tax, validate tax numbers')
-    .version('0.3.0');
-  
+    .version('0.3.0')
+    .option('--json-errors', 'Print a failed call as one JSON object on stderr ({status, code, message, hint, details, issues, errors, requestId}); automatic when stdout is not a terminal. Exit codes: 0 ok, 1 other, 2 usage, 3 auth (401/403), 4 validation (400/422), 5 server or network')
+    // A usage error from the argument parser (unknown option, missing argument) exits 2, like the usage errors below. Set before the
+    // sub-commands are created so they inherit it.
+    .exitOverride((err) => { process.exit(err.exitCode === 0 ? 0 : EXIT_USAGE); });
+
+  // --json-errors works before or after the sub-command (`clearvo send f --json-errors`): a sub-command does not declare it, so it
+  // is taken out of the arguments here, before the parser sees them (anything after a `--` is left alone).
+  const parseAsyncOnProgram = program.parseAsync.bind(program);
+  program.parseAsync = ((argv?: readonly string[], parseOptions?: { from: 'node' | 'electron' | 'user' }) => {
+    const args = [...(argv ?? process.argv)];
+    const stop = args.indexOf('--');
+    const end = stop === -1 ? args.length : stop;
+    const kept = args.filter((a, i) => !(i < end && a === '--json-errors'));
+    jsonErrorsArg = kept.length !== args.length;
+    return parseAsyncOnProgram(kept, parseOptions);
+  }) as typeof program.parseAsync;
+
   // ── clearvo send <file> ───────────────────────────────────────────────────────
   // Hard cut: there is no `taxCode` field anywhere in the request — not on a
   // line, `shipping`, or an allowance/charge. Set `clientTaxCode` (RECOMMENDED
@@ -175,8 +283,7 @@ export function createProgram(): Command {
     .option('--no-throw-on-rejected', 'Exit 0 when the stored outcome is REJECTED or NEEDS_INFO (default: exit 1)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string; throwOnRejected?: boolean }) => {
-      const raw = readFileSync(file, 'utf8');
-      const body = JSON.parse(raw) as Record<string, unknown>;
+      const body = readJsonFile(file) as Record<string, unknown>;
       if (opts.dryRun) body.dryRun = true;
       if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
       // x-idempotency-key is optional: the API generates its own identity key from the invoice
@@ -190,7 +297,8 @@ export function createProgram(): Command {
         // Stored, not processed yet: not an answer. Exit 0 (nothing failed) but say how to follow it.
         console.error(`PROCESSING${result.id ? ` (${result.id})` : ''}: stored, not processed yet. Poll \`clearvo status ${result.id ?? '<id>'}\` (GET /v1/status) or wait for the invoice.status_changed webhook; do not resend.`);
       }
-      if (opts.throwOnRejected !== false && (outcome === 'REJECTED' || outcome === 'NEEDS_INFO' || outcome === 'UNROUTABLE')) {
+      // ok:false is a failure whatever the outcome name (a hold such as SETUP_NEEDED is "not sent" too); only a real success exits 0.
+      if (opts.throwOnRejected !== false && (outcome === 'REJECTED' || outcome === 'NEEDS_INFO' || outcome === 'UNROUTABLE' || result.ok === false)) {
         console.error(describeStoredRejection(result, String(outcome)));
         if (result.clearanceStatus === 'UNROUTABLE') console.error('Only you can move this one: fix the recipient (address or Peppol ID) and resend the corrected document with the same invoice number.');
         process.exit(1);
@@ -205,12 +313,37 @@ export function createProgram(): Command {
   // small file vs. one who doesn't want a client-side size check still has a
   // reason to pick between them), but BOTH now POST to the exact same route, which
   // decides the real transport by request size regardless of which command was used.
-  const MAX_BULK_ROWS = 500;
-  const MAX_BULK_UPLOAD_BYTES = 25 * 1024 * 1024;
+  function readTextFile(file: string): string {
+    try {
+      return readFileSync(file, 'utf8');
+    } catch (e) {
+      console.error(`Error: cannot read ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      return process.exit(EXIT_USAGE);
+    }
+  }
 
-  function countCsvDataRows(csvContent: string): number {
-    const lines = csvContent.split(/\r\n|\r|\n/).filter(line => line.length > 0);
-    return Math.max(0, lines.length - 1);
+  /**
+   * Prints how to follow a 202 bulk envelope and exits non-zero when the answer is a failure: `ok:false` (the batch
+   * FAILED) or any row ERRORED / NEEDS_INFO (listed on stderr). A 200 is not "every row worked".
+   */
+  function finishBulk(result: unknown): void {
+    const r = (result ?? {}) as Record<string, unknown>;
+    if (r.completedInline === false && typeof r.batchId === 'string') {
+      console.error(`Poll: clearvo bulk-upload-status ${r.batchId}`);
+    }
+    const bad = failedRows(r);
+    if (r.ok === false || bad.length > 0) {
+      if (r.ok === false) console.error(`Bulk upload failed${typeof r.error === 'string' ? `: ${r.error}` : ''}${typeof r.code === 'string' ? ` (${r.code})` : ''}`);
+      if (bad.length > 0) {
+        console.error(`${bad.length} row${bad.length === 1 ? '' : 's'} did not succeed:`);
+        for (const row of bad.slice(0, 25)) {
+          console.error(`  - row ${row.rowNumber ?? '?'} ${row.outcome}${row.invoiceNumber ? ` (${row.invoiceNumber})` : ''}: ${row.errorMessage ?? row.errorCode ?? ''}`);
+        }
+        if (bad.length > 25) console.error(`  and ${bad.length - 25} more (see \`clearvo bulk-upload-errors\` or the rows in the output)`);
+      }
+      if (r.rowsTruncated === true) console.error('Only the first 500 rows are in this answer; page the rest from rowsUrl.');
+      process.exit(1);
+    }
   }
 
   function csvFormData(csvContent: string, filename: string): FormData {
@@ -221,34 +354,27 @@ export function createProgram(): Command {
 
   program
     .command('send-bulk <file>')
-    .description('Submit many transactions at once from a CSV file (up to 500 rows / 25MB, processed synchronously) — see `clearvo send-bulk-async` for a larger file')
+    .description('Submit many transactions at once from a CSV file. The server waits a short time for the batch: a 200 carries the summary and the first 500 rows, a 202 means still running (the command prints `Poll: clearvo bulk-upload-status <id>`). Exits 1 when the batch failed or any row ERRORED or NEEDS_INFO (listed on stderr)')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
-      const csvContent = readFileSync(file, 'utf8');
-      const rowCount = countCsvDataRows(csvContent);
-      const byteLength = Buffer.byteLength(csvContent, 'utf8');
-      if (rowCount > MAX_BULK_ROWS || byteLength > MAX_BULK_UPLOAD_BYTES) {
-        console.error(
-          `This CSV has ${rowCount} data rows (${byteLength} bytes) — send-bulk accepts at most ${MAX_BULK_ROWS} rows ` +
-          `and ${MAX_BULK_UPLOAD_BYTES / (1024 * 1024)}MB per call. Use \`clearvo send-bulk-async\` instead for a file this size.`
-        );
-        process.exit(1);
-      }
+      const csvContent = readTextFile(file);
       const result = await api('POST', '/send/bulk', csvFormData(csvContent, file.split('/').pop() || 'invoices.csv'), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
+      finishBulk(result);
     });
 
   program
     .command('send-bulk-async <file>')
-    .description('Submit many transactions at once from a CSV file too large for `send-bulk`\'s 500-row/25MB synchronous ceiling — the server decides the real transport by size regardless')
+    .description('The same route as `send-bulk`, for a large file: prints the batch envelope and `Poll: clearvo bulk-upload-status <id>` when it is still running. Exits 1 when the batch failed or any row ERRORED or NEEDS_INFO')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
-      const csvContent = readFileSync(file, 'utf8');
+      const csvContent = readTextFile(file);
       const filename = file.split('/').pop() || 'invoices.csv';
       const result = await api('POST', '/send/bulk', csvFormData(csvContent, filename), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
+      finishBulk(result);
     });
 
   program
@@ -336,8 +462,8 @@ export function createProgram(): Command {
     .description('File an AEAT Spain SII A1 amendment (full corrected invoice from a JSON file)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, file: string, opts: { pretty?: boolean }) => {
-      const raw = readFileSync(file, 'utf8');
-      const body = JSON.parse(raw) as Record<string, unknown>;
+      const { raw, value } = readJsonFileRaw(file);
+      const body = value as Record<string, unknown>;
       const idempotencyKey = createHash('sha256').update(`amend|${id}|${raw}`).digest('hex').slice(0, 64);
       const result = await api('POST', `/invoices/${encodeURIComponent(id)}/amend-report`, body, { 'x-idempotency-key': idempotencyKey });
       print(result, !!opts.pretty);
@@ -429,7 +555,7 @@ export function createProgram(): Command {
       pretty?: boolean;
       direction?: 'sale' | 'purchase';
     }) => {
-      const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const body = readJsonFile(file) as Record<string, unknown>;
       // The API defaults an omitted `commit` to true (persisted/billed) — this
       // command matches that default rather than overriding it. --dry-run is
       // the explicit opt-out; --commit is a harmless no-op kept so existing
@@ -456,7 +582,7 @@ export function createProgram(): Command {
     .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
-      const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const body = readJsonFile(file) as Record<string, unknown>;
       const result = await api('POST', '/duties/quote', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
@@ -470,7 +596,7 @@ export function createProgram(): Command {
     .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { entity?: string; pretty?: boolean }) => {
-      const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const body = readJsonFile(file) as Record<string, unknown>;
       const result = await api('POST', '/duties/estimate', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
@@ -483,7 +609,7 @@ export function createProgram(): Command {
     .option('--entity <id>', 'Entity ID (x-entity-id), for account-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (calculationId: string, file: string, opts: { entity?: string; pretty?: boolean }) => {
-      const body = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const body = readJsonFile(file) as Record<string, unknown>;
       const result = await api('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
@@ -1075,9 +1201,15 @@ export function createProgram(): Command {
     .option('--idempotency-key <key>', 'Retrying with the same key returns the same run')
     .option('--wait', 'Wait for the run to finish and print its summary')
     .option('--interval <seconds>', 'Seconds between polls with --wait (default 5)')
+    .option('--max-wait <minutes>', 'Give up waiting after this many minutes with --wait (default: the deadline plus 2 minutes); the run keeps going on the server')
     .option('--json', 'Print JSON instead of a summary')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { name?: string; tag?: string[]; case?: string[]; deadlineMinutes?: string; idempotencyKey?: string; wait?: boolean; interval?: string; json?: boolean; pretty?: boolean }) => {
+    .action(async (opts: { name?: string; tag?: string[]; case?: string[]; deadlineMinutes?: string; idempotencyKey?: string; wait?: boolean; interval?: string; maxWait?: string; json?: boolean; pretty?: boolean }) => {
+      // Checked before the run is started, so a typo does not leave a run going that nobody waits for.
+      if (opts.maxWait !== undefined && !(Number.isFinite(Number(opts.maxWait)) && Number(opts.maxWait) >= 0)) {
+        console.error('Error: --max-wait must be a number of minutes, zero or more');
+        process.exit(EXIT_USAGE);
+      }
       const body: Record<string, unknown> = {};
       if (opts.name) body.name = opts.name;
       if (opts.tag?.length) body.tags = opts.tag;
@@ -1090,10 +1222,33 @@ export function createProgram(): Command {
         return;
       }
       const intervalMs = Math.max(0, Number(opts.interval ?? 5)) * 1000;
+      // The run may take as long as its own deadline (default 10 minutes) plus a margin; --max-wait overrides.
+      const maxWaitMs = (opts.maxWait !== undefined ? Number(opts.maxWait) : Number(opts.deadlineMinutes ?? 10) + 2) * 60_000;
+      const startedAt = Date.now();
       let run = started;
       for (;;) {
-        run = await api('GET', `/test-runs/${encodeURIComponent(String(started.runId))}`) as Record<string, unknown>;
+        // One poll that fails with a timeout, a dropped connection, 429 or 5xx is retried up to 3 times with a growing pause
+        // instead of abandoning a run that is still going.
+        let attempt = 0;
+        for (;;) {
+          try {
+            run = await apiCall('GET', `/test-runs/${encodeURIComponent(String(started.runId))}`) as Record<string, unknown>;
+            break;
+          } catch (e) {
+            const transient = e instanceof ApiFailure && (e.parsed.status === 0 || isRetryableStatus(e.parsed.status));
+            if (!(e instanceof ApiFailure) || !transient || attempt >= 3) {
+              if (e instanceof ApiFailure) reportFailureAndExit(e);
+              throw e;
+            }
+            attempt++;
+            await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, 2000) * attempt));
+          }
+        }
         if (run.status !== 'queued' && run.status !== 'running') break;
+        if (Date.now() - startedAt >= maxWaitMs) {
+          console.error(`Timed out after ${Math.round(maxWaitMs / 60000)} minute(s) waiting for run ${started.runId} (still ${run.status}). It keeps going on the server: read it with \`clearvo tests status ${started.runId}\`.`);
+          process.exit(EXIT_SERVER);
+        }
         await new Promise((resolve) => setTimeout(resolve, intervalMs));
       }
       if (opts.json) print(run, !!opts.pretty);
@@ -1140,7 +1295,7 @@ export function createProgram(): Command {
         if (opts.appliesWhen) body.appliesWhen = JSON.parse(opts.appliesWhen);
       } catch {
         console.error('--check and --applies-when must be valid JSON');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       print(await api('POST', '/test-cases', body), !!opts.pretty);
     });
@@ -1159,7 +1314,7 @@ export function createProgram(): Command {
     .description('Validate up to 20 tax numbers from a JSON file (array of {countryCode, taxNumber})')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { pretty?: boolean }) => {
-      const items = JSON.parse(readFileSync(file, 'utf8')) as unknown[];
+      const items = readJsonFile(file) as unknown[];
       const result = await api('POST', '/tax-numbers/validate-batch', { items });
       print(result, !!opts.pretty);
     });
@@ -1187,7 +1342,7 @@ export function createProgram(): Command {
     .action(async (id: string, opts: { immediately?: boolean; from?: string; pretty?: boolean }) => {
       if (!opts.immediately && !opts.from) {
         console.error('Error: provide either --immediately or --from <date>');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const collectFromDate = opts.immediately ? null : (opts.from ?? null);
       const result = await api('PATCH', `/tax/registrations/${encodeURIComponent(id)}`, { collectFromDate });
@@ -1203,7 +1358,7 @@ export function createProgram(): Command {
     .action(async (id: string, opts: { number?: string; extra?: string; pretty?: boolean }) => {
       if (opts.number === undefined && opts.extra === undefined) {
         console.error('Error: provide --number and/or --extra');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const body: Record<string, unknown> = {};
       if (opts.number !== undefined) body.taxNumber = opts.number;
@@ -1212,7 +1367,7 @@ export function createProgram(): Command {
           body.extraFields = JSON.parse(opts.extra);
         } catch {
           console.error('Error: --extra must be valid JSON');
-          process.exit(1);
+          process.exit(EXIT_USAGE);
         }
       }
       const result = await api('PATCH', `/tax/registrations/${encodeURIComponent(id)}`, body);
@@ -1693,7 +1848,7 @@ export function createProgram(): Command {
     const [field, operator, ...rest] = raw.split(':');
     if (!field || !operator || rest.length === 0) {
       console.error(`Error: --filter must be "field:operator:value", got "${raw}"`);
-      process.exit(1);
+      process.exit(EXIT_USAGE);
     }
     const rawValue = rest.join(':');
     if (operator === 'in' || operator === 'between') {
@@ -1748,7 +1903,7 @@ export function createProgram(): Command {
       return JSON.parse(raw);
     } catch {
       console.error(`Error: ${flag} must be valid JSON`);
-      process.exit(1);
+      process.exit(EXIT_USAGE);
     }
   }
 
@@ -1950,7 +2105,7 @@ export function createProgram(): Command {
     .action(async (id: string | undefined, opts: { sampleSize?: string; draft?: string; entity?: string; pretty?: boolean }) => {
       if (!id && !opts.draft) {
         console.error('Error: pass an existing rule id, or --draft when previewing a rule that does not exist yet');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const body: Record<string, unknown> = {};
       if (opts.sampleSize) body.sampleSize = Number(opts.sampleSize);
@@ -2101,16 +2256,9 @@ export function createProgram(): Command {
       // Not routed through api() — that helper always parses the response as JSON, and this
       // route responds text/csv (same reason the hosted MCP connector never exposes an
       // export_rules_engine_dataset tool at all — see this file's own `rules` header comment).
-      const res = await fetch(`${getBaseUrl()}/rules-engine/datasets/${encodeURIComponent(id)}/export`, {
-        method: 'GET',
-        headers: { 'x-api-key': getApiKey(), ...(opts.entity ? { 'x-entity-id': opts.entity } : {}) },
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        console.error(`HTTP ${res.status}: ${text}`);
-        process.exit(1);
-      }
-      console.log(text);
+      // apiFile() shares the error path with api(): code, hint, errors, request id, gateway messages.
+      const res = await apiFile(`/rules-engine/datasets/${encodeURIComponent(id)}/export`, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      console.log(await res.text());
     });
 
   ruleDatasets
@@ -2321,7 +2469,7 @@ export function createProgram(): Command {
     const n = Number(v);
     if (!Number.isInteger(n) || n < 1) {
       console.error('Error: --snapshot-version must be the filing\'s snapshotVersion (a whole number from `clearvo filings get`)');
-      process.exit(1);
+      process.exit(EXIT_USAGE);
     }
     return n;
   };
@@ -2333,7 +2481,7 @@ export function createProgram(): Command {
       process.stdout.write(data);
     } else {
       console.error(`Error: ${label} is a binary file — pass --out <file>`);
-      process.exit(1);
+      process.exit(EXIT_USAGE);
     }
   };
 
@@ -2378,7 +2526,7 @@ export function createProgram(): Command {
     .action(async (id: string, opts: { snapshotVersion?: string; entity?: string; pretty?: boolean }) => {
       if (opts.snapshotVersion === undefined && !id.startsWith('ret_')) {
         console.error('Error: --snapshot-version is required for a stored return (a whole number from `clearvo filings get`); only a live ret_ return needs none');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const body = opts.snapshotVersion === undefined ? {} : { snapshotVersion: parseVersion(opts.snapshotVersion) };
       print(await api('POST', `/filings/${encodeURIComponent(id)}/approve`, body, entityHdr(opts.entity)), !!opts.pretty);
@@ -2414,11 +2562,11 @@ export function createProgram(): Command {
     .action(async (id: string, opts: { snapshotVersion?: string; endDate?: string; entity?: string; pretty?: boolean }) => {
       if (opts.snapshotVersion === undefined && !id.startsWith('ret_')) {
         console.error('Error: --snapshot-version is required for a stored return (a whole number from `clearvo filings get`); only a live ret_ return needs none');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       if (opts.endDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(opts.endDate)) {
         console.error('Error: --end-date must be a date in the form yyyy-mm-dd');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const body = { ...(opts.snapshotVersion === undefined ? {} : { snapshotVersion: parseVersion(opts.snapshotVersion) }), ...(opts.endDate === undefined ? {} : { endDate: opts.endDate }) };
       print(await api('POST', `/filings/${encodeURIComponent(id)}/pause`, body, entityHdr(opts.entity)), !!opts.pretty);
@@ -2433,7 +2581,7 @@ export function createProgram(): Command {
     .action(async (id: string, opts: { snapshotVersion?: string; entity?: string; pretty?: boolean }) => {
       if (opts.snapshotVersion === undefined && !id.startsWith('ret_')) {
         console.error('Error: --snapshot-version is required for a stored return (a whole number from `clearvo filings get`); only a live ret_ return needs none');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const body = opts.snapshotVersion === undefined ? {} : { snapshotVersion: parseVersion(opts.snapshotVersion) };
       print(await api('POST', `/filings/${encodeURIComponent(id)}/resume`, body, entityHdr(opts.entity)), !!opts.pretty);
@@ -2461,7 +2609,7 @@ export function createProgram(): Command {
       const amount = Number(opts.amount);
       if (!Number.isFinite(amount) || amount < 0) {
         console.error('Error: --amount must be a number, zero or more');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       print(await api('POST', `/filings/${encodeURIComponent(id)}/prepayment`, { snapshotVersion: parseVersion(opts.snapshotVersion), amount }, entityHdr(opts.entity)), !!opts.pretty);
     });
@@ -2563,15 +2711,15 @@ export function createProgram(): Command {
     .action(async (registrationId: string, opts: { frequency: string; attest?: boolean; start: string; startPeriod?: string; entity?: string; pretty?: boolean }) => {
       if (!opts.attest) {
         console.error('Error: pass --attest to confirm the frequency is the one on your tax account');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       if (opts.start !== 'asap' && opts.start !== 'later') {
         console.error('Error: --start must be asap or later');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       if (opts.start === 'later' && !opts.startPeriod) {
         console.error('Error: --start later needs --start-period <key>');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const body: Record<string, unknown> = { frequencyCode: opts.frequency, frequencyAttested: true, startChoice: opts.start };
       if (opts.startPeriod) body.startPeriodKey = opts.startPeriod;
@@ -2629,22 +2777,22 @@ export function createProgram(): Command {
       const lower = name.toLowerCase();
       if (!['.csv', '.xlsx', '.xls'].some((e) => lower.endsWith(e))) {
         console.error('Error: the file must be a .csv, .xlsx or .xls file');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       let bytes: Buffer;
       try {
         bytes = readFileSync(file);
       } catch {
         console.error(`Error: cannot read ${file}`);
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       if (bytes.length === 0) {
         console.error('Error: the file is empty');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       if (bytes.length > 25 * 1024 * 1024) {
         console.error('Error: the file is larger than 25 MB');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const type = lower.endsWith('.csv') ? 'text/csv' : lower.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
       const form = new FormData();
@@ -2671,7 +2819,7 @@ export function createProgram(): Command {
     .action(async (month: string, opts: { acceptDeclaration?: boolean; declarationVersion: string; entity?: string; pretty?: boolean }) => {
       if (!opts.acceptDeclaration) {
         console.error('Error: pass --accept-declaration to confirm the declaration (read it with `clearvo filings upload month ' + month + '`)');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const body: Record<string, unknown> = { declarationAccepted: true, declarationVersion: opts.declarationVersion };
       print(await api('POST', `/filings/upload/months/${encodeURIComponent(month)}/process`, body, entityHdr(opts.entity)), !!opts.pretty);
@@ -2695,7 +2843,7 @@ export function createProgram(): Command {
     .action(async (opts: { format: string; out?: string; entity?: string }) => {
       if (!['csv', 'xlsx', 'json'].includes(opts.format)) {
         console.error('Error: --format must be csv, xlsx or json');
-        process.exit(1);
+        process.exit(EXIT_USAGE);
       }
       const res = await apiFile(`/filings/upload/template?format=${opts.format}`, entityHdr(opts.entity));
       if (opts.format === 'xlsx') writeOut(opts.out, new Uint8Array(await res.arrayBuffer()), 'the template');

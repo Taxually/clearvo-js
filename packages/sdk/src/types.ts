@@ -8,12 +8,28 @@ export interface ClearvoClientOptions {
    * The default flips to false in the next major. 4xx and 5xx responses always throw.
    */
   throwOnRejected?: boolean;
+  /**
+   * Abort a request that takes longer than this many milliseconds (default 140000, just under the 150 s gateway cut). The call then throws a
+   * {@link ClearvoError} with status 0 and code `TIMEOUT`; a write may still have been processed, so check its status
+   * (or re-send with the same idempotency key) before treating it as lost. 0 disables the timeout.
+   */
+  timeoutMs?: number;
+  /**
+   * Opt-in automatic retries (default 0 = none) for 429, 503 and network failures or timeouts, with exponential
+   * backoff (honouring Retry-After). Only calls that are safe to repeat are retried: every GET, and writes that carry
+   * an idempotency key. Any other write is never retried automatically.
+   */
+  maxRetries?: number;
+  /** First backoff delay in milliseconds when retrying (default 500, doubling per attempt, capped at 30000). */
+  retryBaseDelayMs?: number;
 }
 
 /** Per-call options for `submitInvoice`. */
 export interface SubmitInvoiceOptions {
   /** Overrides the client's `throwOnRejected` for this call. */
   throwOnRejected?: boolean;
+  /** Overrides the client's `timeoutMs` for this call (milliseconds; 0 disables the timeout). */
+  timeoutMs?: number;
 }
 
 export interface Entity {
@@ -269,6 +285,7 @@ export interface RetryInvoiceRejectedResponse {
  * at the repo root instead.
  */
 export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
+import { collectFieldIssues, fieldErrorLines, isRetryableStatus } from './error-format.js';
 import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 
 /**
@@ -3089,37 +3106,80 @@ export interface BulkSendContinuation {
   error?: { code: string; message: string };
 }
 
+/** `immediate` (default) processes the rows; `batch_review` holds the batch for a person to confirm or discard first (an entity whose "always review uploads" setting is on converts `immediate` to `batch_review`). */
+export type BulkSubmissionMode = 'immediate' | 'batch_review';
+
 export interface SubmitInvoicesBulkInput {
-  /** The raw CSV text (not base64) — header row plus up to 500 data rows for the synchronous transport. */
+  /** The raw CSV text (not base64). There is no row-count ceiling client-side; the route bounds the upload size (413 FILE_TOO_LARGE). */
   csvContent: string;
   /** Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;
+  /** Defaults to `immediate`. */
+  submissionMode?: BulkSubmissionMode;
+  /** Seconds the server may wait for the batch to finish before answering (sent as `Prefer: wait=<n>`; the server caps it). 0 answers 202 straight away (`Prefer: respond-async`). Omit for the server default. */
+  wait?: number;
 }
 
 export interface SubmitInvoicesBulkAsyncInput {
-  /** The raw CSV text (not base64) — no row-count ceiling enforced client-side (the route itself bounds total upload size). */
+  /** The raw CSV text (not base64). */
   csvContent: string;
-  /** Optional filename to record against the batch. Ignored if the file ends up processed synchronously. */
+  /** Optional filename to record against the batch (must end in .csv). */
   filename?: string;
   entityId?: string;
+  /** Defaults to `immediate`. */
+  submissionMode?: BulkSubmissionMode;
+  /** Seconds the server may wait for the batch to finish before answering; 0 (the usual choice here) answers 202 straight away. */
+  wait?: number;
 }
 
-/** Returned when the upload was processed synchronously in-request (the whole file fit under the 500-row/25MB cap). */
-export interface SubmitInvoicesBulkResponse {
-  ok: boolean;
-  summary: BulkSendSummary;
-  rows: BulkSendRow[];
-  continuation: BulkSendContinuation | null;
-}
-
-/** Returned by submitInvoicesBulkAsync when the file was queued rather than processed synchronously. status is 'UPLOADED' for a freshly-queued batch; on a `duplicate: true` response it reflects whatever status the pre-existing matched batch is actually in (VALIDATING/COMPLETED/FAILED/CANCELLED), not necessarily 'UPLOADED'. */
-export interface SubmitInvoicesBulkAsyncQueuedResponse {
+/** The fields every `POST /v1/send/bulk` answer (200 or 202) carries. */
+export interface SubmitInvoicesBulkEnvelope {
+  /** False only when the batch FAILED. A 200 with `ok: true` can still hold rows that ERRORED or NEEDS_INFO: read `summary`. */
   ok: boolean;
   batchId: string;
   status: BulkUploadBatchStatus;
-  /** True means this exact file was already processed by an earlier call — nothing new was queued. */
+  reviewState?: string | null;
+  submissionMode?: BulkSubmissionMode;
+  reviewMode?: BulkSubmissionMode;
+  /** Why the batch is in review mode (for example the entity's own setting). */
+  reviewModeSource?: string;
+  /** True when the batch waits for a person to confirm it (`confirmBulkUpload`) or discard it. */
+  reviewRequired: boolean;
+  /** True when the batch finished inside the server's wait; false on a 202 (poll `pollUrl`). */
+  completedInline: boolean;
+  waitedMs?: number;
+  /** True means this exact file was already processed by an earlier call: nothing new was queued. */
   duplicate?: boolean;
+  pollUrl: string;
+  rowsUrl: string;
+  errorsUrl?: string;
+  links?: { self: string; rows: string; errors: string; confirm: string; discard: string };
 }
+
+/** HTTP 202: the batch is still running. Poll `getBulkUploadStatus(batchId)` (every 5 to 60 seconds) until COMPLETED, FAILED or CANCELLED, then page the rows. */
+export interface SubmitInvoicesBulkQueuedResponse extends SubmitInvoicesBulkEnvelope {
+  completedInline: false;
+}
+
+/** HTTP 200: the batch finished inside the wait. `rows` holds the first 500; when `rowsTruncated` is true page the rest from `rowsUrl`. */
+export interface SubmitInvoicesBulkCompletedResponse extends SubmitInvoicesBulkEnvelope {
+  completedInline: true;
+  summary: BulkSendSummary;
+  summaryText?: string;
+  rows: BulkSendRow[];
+  rowsTruncated: boolean;
+  /** Always null now (kept so older code compiles). */
+  continuation: BulkSendContinuation | null;
+  /** `UPLOAD_FAILED` with `error` when the batch FAILED. */
+  code?: string;
+  error?: string;
+}
+
+/** What `POST /v1/send/bulk` answers: 202 {@link SubmitInvoicesBulkQueuedResponse} or 200 {@link SubmitInvoicesBulkCompletedResponse}. Narrow on `completedInline`. */
+export type SubmitInvoicesBulkResponse = SubmitInvoicesBulkQueuedResponse | SubmitInvoicesBulkCompletedResponse;
+
+/** @deprecated Use {@link SubmitInvoicesBulkQueuedResponse}. */
+export type SubmitInvoicesBulkAsyncQueuedResponse = SubmitInvoicesBulkQueuedResponse;
 
 export interface GetBulkUploadStatusResponse {
   batchId: string;
@@ -4296,11 +4356,57 @@ export class ClearvoError extends Error {
     /** The per-field failures of a `POST /v1/send` rejection (see {@link SendRejectionBody}). */
     public readonly errors?: SendRejectionEntry[],
     /** The whole JSON error body, so fields beyond `message` / `code` are reachable: for the Filings upload routes `existingId` and `reason` (FILE_ALREADY_ADDED), `filesWithErrors` (FILE_ERRORS, SYSTEM_FILE_ERRORS) and `contactUrl` (SYSTEM_FILE_ERRORS), `currentVersion` and `declaration` (DECLARATION_VERSION_MISMATCH). Narrow with {@link FilingUploadErrorBody}. */
-    public readonly body?: ClearvoErrorBody
+    public readonly body?: ClearvoErrorBody,
+    extra: ClearvoErrorExtra = {}
   ) {
     super(message);
     this.name = 'ClearvoError';
+    // Error.cause needs the ES2022 lib typings; this package targets ES2020.
+    if (extra.cause !== undefined) (this as { cause?: unknown }).cause = extra.cause;
+    this.details = extra.details;
+    this.issues = extra.issues;
+    this.requestId = extra.requestId;
+    this.retryAfter = extra.retryAfter;
+    this.idempotencyKey = extra.idempotencyKey;
+    this.rawBody = extra.rawBody;
   }
+
+  /** The body's `details` as sent: Zod `{ formErrors, fieldErrors }`, or an array of `{ path, message }`. */
+  readonly details?: unknown;
+  /** The body's `issues: [{ path, message }]` with full dotted paths, when the API sent them. */
+  readonly issues?: Array<{ path?: string; message: string }>;
+  /** The `X-Request-Id` response header: quote it to support. */
+  readonly requestId?: string;
+  /** Seconds to wait, from the `Retry-After` response header. */
+  readonly retryAfter?: number;
+  /** The `X-Idempotency-Key` response header (or body field) when the API returned one. */
+  readonly idempotencyKey?: string;
+  /** The first 500 characters of the response when it was not JSON (a gateway HTML page, a plain-text 413, ...). */
+  readonly rawBody?: string;
+
+  /** Every field-level problem as `path: message` (just `message` for a form-level one), capped at 25 plus an "and N more" line. Empty when the API named none. */
+  get fieldErrors(): string[] {
+    return fieldErrorLines(collectFieldIssues(this.body ?? { details: this.details, issues: this.issues }));
+  }
+
+  /**
+   * True when trying again can help: 429, 502, 503, 504, or a network failure or timeout (status 0). A 504 or a timeout
+   * may mean the request WAS processed: re-send writes with the same idempotency key, or check status first.
+   */
+  get retryable(): boolean {
+    return this.status === 0 || isRetryableStatus(this.status);
+  }
+}
+
+/** Optional extra fields of a {@link ClearvoError}, beyond the positional constructor arguments. */
+export interface ClearvoErrorExtra {
+  details?: unknown;
+  issues?: Array<{ path?: string; message: string }>;
+  requestId?: string;
+  retryAfter?: number;
+  idempotencyKey?: string;
+  rawBody?: string;
+  cause?: unknown;
 }
 
 // ── Customs duties (POST /v1/duties/quote and the duties block on calculate) ────

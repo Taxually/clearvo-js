@@ -7,6 +7,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { createHash } from 'crypto';
 import { getToolAnnotations } from './tool-annotations.js';
+import { BodyReadError, failedRows, formatErrorLines, isFailureBody, parseErrorResponse, readBody, timeoutSignal } from './error-format.js';
 
 // White-label tenants get their own branded env var names instead of CLEARVO_*.
 // CLEARVO_API_KEY always wins if set; otherwise the first matching tenant alias is used.
@@ -86,25 +87,32 @@ async function callApi(
   // forwarded via extraHeaders) must win over the env-configured default —
   // only fall back to CLEARVO_ENTITY_ID when the call didn't specify one.
   if (ENTITY_ID && !headers['x-entity-id']) headers['x-entity-id'] = ENTITY_ID;
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
+  // A hung upstream must not hang the tool call: stop before the client's own tool timeout and say the call may have completed.
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
+      signal: timeoutSignal(FETCH_TIMEOUT_MS),
+    });
+  } catch (cause) {
+    throw transportError(cause);
+  }
+  // A 2xx whose body cannot be read (abort, reset, truncated stream) is a failure, not an empty success.
+  const read = await readBody(res).catch((e) => { throw e instanceof BodyReadError ? transportError(e) : e; });
   if (!res.ok) {
-    const err = data as Record<string, unknown>;
-    // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection, which
-    // also carries errors[] (one entry per failed check, JSON-pointer path and stable code).
-    const errObj = err.error !== null && typeof err.error === 'object' ? err.error as Record<string, unknown> : null;
-    // The Filings routes put the stable code in `error` and the sentence in `message` or `detail`.
-    const filingsCode = !errObj && typeof err.error === 'string' && (typeof err.message === 'string' || typeof err.detail === 'string') ? err.error : undefined;
-    const errorText = errObj ? String(errObj.message ?? errObj.code ?? 'Unknown error') : filingsCode ? String(err.message ?? err.detail) : String(err.error ?? 'Unknown error');
-    const errorList = Array.isArray(err.errors)
-      ? (err.errors as Array<Record<string, unknown>>).slice(0, 25).map(e =>
-          `  - ${String(e.path ?? '/')} ${String(e.errorCode ?? e.code ?? '')}: ${String(e.message ?? '')}`)
-      : [];
-    if (res.status === 400 && errorText.toLowerCase().includes('entity context')) {
+    const p = parseErrorResponse(res, read);
+    const err = p.body ?? {};
+    // Free-plan monitor-only calculation: the 402 body (calculationId, monitorOnly, upgradeUrl) is the tool's result
+    // (see calculate_tax's outputSchema), not an error to flatten into 'HTTP 402'. Same as the hosted connector. It carries
+    // no amounts: the tool description tells the agent to point the user at upgradeUrl.
+    if (res.status === 402 && err.error === 'plan_required') return err;
+    const nestedError = err.error !== null && typeof err.error === 'object' ? err.error as Record<string, unknown> : null;
+    // A plan gate (ecm_not_included, rules_not_included, ap_not_enabled, solution_not_enabled, ...) answers
+    // { error: '<feature>_not_included', message, upgradeUrl }.
+    const planGate = typeof err.error === 'string' && (err.error.endsWith('_not_included') || err.error === 'ap_not_enabled' || err.error === 'solution_not_enabled') && typeof err.message === 'string';
+    if (res.status === 400 && p.message.toLowerCase().includes('entity context')) {
       throw new Error(
         'This operation requires an entity context. ' +
         'Set CLEARVO_ENTITY_ID (or TAXUALLY_ENTITY_ID) in your MCP server env config, or use an entity-scoped API key. ' +
@@ -115,18 +123,49 @@ async function callApi(
     // message and the extra body fields (existingId, filesWithErrors, contactUrl, currentVersion, declaration) as JSON.
     const uploadRefusal = path.startsWith('/filings/upload/') && typeof err.error === 'string';
     const uploadExtras = uploadRefusal ? Object.fromEntries(Object.entries(err).filter(([k]) => k !== 'error' && k !== 'message')) : {};
-    const msg = [
-      `HTTP ${res.status}: ${uploadRefusal ? err.error : errorText}`,
-      uploadRefusal && typeof err.message === 'string' ? `Message: ${err.message}` : null,
-      uploadRefusal && Object.keys(uploadExtras).length > 0 ? `Details: ${JSON.stringify(uploadExtras)}` : null,
-      err.hint ? `Hint: ${err.hint}` : null,
-      err.field ? `Field: ${err.field}` : null,
-      err.code ? `Code: ${err.code}` : filingsCode && !uploadRefusal ? `Code: ${filingsCode}` : null,
-      errorList.length > 0 ? `Errors:\n${errorList.join('\n')}` : null,
-    ].filter(Boolean).join('\n');
-    throw new Error(msg);
+    const lines = formatErrorLines(p);
+    if (uploadRefusal) {
+      // First line is the stable code, then Message and Details; the generic Code line would repeat it.
+      lines[0] = `HTTP ${res.status}: ${err.error}`;
+      const codeAt = lines.findIndex(l => l.startsWith('Code: '));
+      if (codeAt > 0) lines.splice(codeAt, 1);
+      const extras = [
+        typeof err.message === 'string' ? `Message: ${err.message}` : null,
+        Object.keys(uploadExtras).length > 0 ? `Details: ${JSON.stringify(uploadExtras)}` : null,
+      ].filter((l): l is string => l !== null);
+      lines.splice(1, 0, ...extras);
+    }
+    if (typeof nestedError?.fixUrl === 'string') lines.push(`Fix: ${nestedError.fixUrl}`);
+    if (typeof err.upgradeUrl === 'string' && (planGate || res.status === 402)) lines.push(`Upgrade: ${err.upgradeUrl}`);
+    throw new Error(lines.join('\n'));
   }
-  return data;
+  // 204 or an empty body: the call worked but there is nothing to return.
+  if (res.status === 204 || read.text === '') return { ok: true, status: res.status };
+  // A 2xx that is not JSON (a proxy's HTML page) must not pass for success carrying {}.
+  if (!read.isJson) {
+    throw new Error(`HTTP ${res.status}: Unexpected non-JSON response\nResponse body: ${read.text.replace(/\s+/g, ' ').slice(0, 300)}`);
+  }
+  return read.json === null ? { ok: true, status: res.status } : read.json;
+}
+
+/**
+ * Stop an upstream call that gets no answer. Default 130 seconds: POST /v1/send can legitimately take up to about 90 seconds and
+ * the gateway cuts at 150. Override with CLEARVO_TIMEOUT_MS (milliseconds) when your client's own tool timeout is shorter or longer.
+ */
+const FETCH_TIMEOUT_MS = (() => {
+  const n = Number(process.env.CLEARVO_TIMEOUT_MS ?? 130_000);
+  return Number.isFinite(n) && n > 0 ? n : 130_000;
+})();
+
+/** The Error for a failed fetch or an unreadable 2xx body, saying whether the operation may have completed. */
+function transportError(cause: unknown): Error {
+  const original = cause instanceof BodyReadError ? cause.cause : cause;
+  const timedOut = original instanceof Error && (original.name === 'TimeoutError' || original.name === 'AbortError');
+  return new Error(
+    timedOut
+      ? `Request timed out after ${FETCH_TIMEOUT_MS / 1000} seconds with no answer; the operation may still have completed. Check its status (read the record back) before retrying a write.\nCode: TIMEOUT`
+      : `Network error: ${original instanceof Error ? original.message : String(original)}\nThe request may not have reached the API, or its answer was cut off. Check the connection, and read the record back before retrying a write.\nCode: NETWORK_ERROR`
+  );
 }
 
 // Matches the 5MB limit already enforced on this repo's other document-upload
@@ -139,15 +178,12 @@ const TEST_DISCLAIMER =
 
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
-// Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
-// POST /v1/send/bulk's synchronous ceiling (Taxually-Einvoicing lib/mcp/tools.ts). The public API
-// used to split sync/async across two endpoints (/send/bulk vs /send/bulk-async); that split was
-// folded into one door 2026-09-18 (unify-bulk-send-endpoint) — both tool names below still exist
-// (a caller who wants a guaranteed-synchronous small file vs. one who doesn't want a client-side
-// size check still has a reason to pick between them), but BOTH now POST to the exact same route,
-// which decides the real transport by request size regardless of which tool was called.
-const MAX_BULK_ROWS = 500;
-const MAX_BULK_UPLOAD_BYTES = 25 * 1024 * 1024;
+// Bulk CSV ingestion. The public API used to split sync/async across two endpoints (/send/bulk vs
+// /send/bulk-async); that split was folded into one door 2026-09-18 (unify-bulk-send-endpoint), and
+// the route no longer has a synchronous 500-row contract (it answers 200 inside a short wait or 202
+// with a poll URL), so there is no client-side row pre-check. BOTH tool names POST to the same route.
+// Tools whose 2xx result is flagged isError when any row ERRORED or NEEDS_INFO:
+const BULK_SUBMIT_TOOLS = new Set(['submit_invoices_bulk', 'submit_invoices_bulk_async']);
 
 // Filing data files (POST /v1/filings/upload/months/{month}/files) — same limits as the route and the hosted connector.
 const MAX_FILING_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -164,17 +200,6 @@ function filingUploadForm(fileName: string, contentBase64: string): FormData {
   const form = new FormData();
   form.append('file', new Blob([buffer], { type }), fileName);
   return form;
-}
-
-/**
- * Data-row count of a CSV's raw text (header row excluded, blank lines ignored) — used only by
- * submit_invoices_bulk's pre-check against MAX_BULK_ROWS above, entirely client-side (no API
- * call), so a caller blowing the sync cap gets pointed at submit_invoices_bulk_async instead of a
- * confusing 413/truncated response from the route itself.
- */
-function countCsvDataRows(csvContent: string): number {
-  const lines = csvContent.split(/\r\n|\r|\n/).filter(line => line.length > 0);
-  return Math.max(0, lines.length - 1);
 }
 
 /** Builds the multipart/form-data body submit_invoices_bulk(_async) send to POST /v1/send/bulk — a single 'file' field carrying the raw CSV text, same field name the route expects. */
@@ -2936,8 +2961,8 @@ const TOOLS = [
       properties: {
         customerId: { type: 'string', description: 'The customer ID to update (from list_customers or create_customer)' },
         name: { type: 'string' },
-        country: { type: 'string' },
-        taxId: { type: 'string' },
+        country: { type: ['string', 'null'], description: 'Pass null to clear it (this also clears taxId, the pair is no longer complete).' },
+        taxId: { type: ['string', 'null'], description: 'Pass null to clear it.' },
         taxIds: {
           type: 'array',
           description: 'Full replacement list of this customer\'s tax registrations (pass [] to clear every one) — first entry becomes the primary. Mutually exclusive with country/taxId. Omit entirely to leave existing registrations untouched.',
@@ -2947,13 +2972,13 @@ const TOOLS = [
             required: ['country', 'taxId'],
           },
         },
-        customerRef: { type: 'string' },
-        addressCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of this customer\'s own mailing address — independent of country/taxIds. Omit to leave unchanged; pass null to clear it.' },
-        addressLine1: { type: 'string' },
-        addressLine2: { type: 'string' },
-        city: { type: 'string' },
-        region: { type: 'string' },
-        postalCode: { type: 'string' },
+        customerRef: { type: ['string', 'null'], description: 'Your own reference for this customer. Pass null to clear it.' },
+        addressCountry: { type: ['string', 'null'], description: 'ISO 3166-1 alpha-2 country code of this customer\'s own mailing address — independent of country/taxIds. Omit to leave unchanged; pass null to clear it.' },
+        addressLine1: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        addressLine2: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        city: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        region: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        postalCode: { type: ['string', 'null'], description: 'Pass null to clear it.' },
         references: CUSTOMER_REFERENCES_SCHEMA,
         countrySpecific: {
           type: 'object',
@@ -2963,14 +2988,14 @@ const TOOLS = [
               type: 'object',
               description: 'Germany: stored default invoice format for this customer.',
               properties: {
-                invoiceFormat: { type: 'string', enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL'], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG). Pass null to clear it.' },
+                invoiceFormat: { type: ['string', 'null'], enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL', null], description: 'Default DE invoice format for this customer (second in precedence after a per-request countrySpecific.de.invoiceFormat, before the entity default). PEPPOL sends over the Peppol network and needs a confirmed Peppol ID for the customer. Not used for self-billed invoices (they return 422 DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED unless the request names ZUGFERD or XRECHNUNG). Pass null to clear it.' },
               },
             },
             ar: {
               type: 'object',
               description: 'Argentina AFIP buyer VAT condition.',
               properties: {
-                condicionIVAReceptorId: { type: 'integer', enum: [1, 2, 3, 4, 5], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign. Pass null to clear the stored value.' },
+                condicionIVAReceptorId: { type: ['integer', 'null'], enum: [1, 2, 3, 4, 5, null], description: '1=Responsable Inscripto, 2=Monotributo, 3=Exento, 4=Consumidor Final, 5=Foreign. Pass null to clear the stored value.' },
               },
             },
           },
@@ -3115,8 +3140,8 @@ const TOOLS = [
       properties: {
         supplierId: { type: 'string', description: 'The supplier ID to update (from list_suppliers or create_supplier)' },
         name: { type: 'string' },
-        country: { type: 'string' },
-        taxId: { type: 'string' },
+        country: { type: ['string', 'null'], description: 'Pass null to clear it (this also clears taxId, the pair is no longer complete).' },
+        taxId: { type: ['string', 'null'], description: 'Pass null to clear it.' },
         taxIds: {
           type: 'array',
           description: 'Full replacement list of this supplier\'s tax registrations (pass [] to clear every one) — first entry becomes the primary. Mutually exclusive with country/taxId. Omit entirely to leave existing registrations untouched.',
@@ -3126,13 +3151,13 @@ const TOOLS = [
             required: ['country', 'taxId'],
           },
         },
-        supplierRef: { type: 'string' },
-        establishmentCountry: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of this supplier\'s own place of establishment — independent of country/taxIds. Omit to leave unchanged; pass null to clear it.' },
-        addressLine1: { type: 'string' },
-        addressLine2: { type: 'string' },
-        city: { type: 'string' },
-        region: { type: 'string' },
-        postalCode: { type: 'string' },
+        supplierRef: { type: ['string', 'null'], description: 'Your own reference for this supplier. Pass null to clear it.' },
+        establishmentCountry: { type: ['string', 'null'], description: 'ISO 3166-1 alpha-2 country code of this supplier\'s own place of establishment — independent of country/taxIds. Omit to leave unchanged; pass null to clear it.' },
+        addressLine1: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        addressLine2: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        city: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        region: { type: ['string', 'null'], description: 'Pass null to clear it.' },
+        postalCode: { type: ['string', 'null'], description: 'Pass null to clear it.' },
         trusted: { type: 'boolean', description: 'AP decision layer full override — every vendor-charged-tax verification for this supplier then resolves ACCEPTED_AS_CHARGED regardless of delta.' },
         toleranceOverride: {
           type: ['object', 'null'],
@@ -3420,17 +3445,18 @@ const TOOLS = [
       },
     },
   },
-  // Bulk ingestion — MCP twins of POST /v1/send/bulk (both transports — the server picks by
-  // size, see MAX_BULK_ROWS's own comment above), GET /v1/send/bulk/{batchId}, and
+  // Bulk ingestion — MCP twins of POST /v1/send/bulk (200 inside a short wait, else 202 with a
+  // poll URL — see the BULK_SUBMIT_TOOLS comment above), GET /v1/send/bulk/{batchId}, and
   // GET /v1/send/bulk/{batchId}/errors.
   {
     name: 'submit_invoices_bulk',
     description:
       'Submits (does not just validate) many transactions at once from a CSV file, through the exact same resolution/' +
       'dispatch pipeline as submit_invoice, one call per row. csvContent is the raw CSV text — never base64-encode it. Up ' +
-      'to 500 rows / 25 MB, processed synchronously with per-row outcomes in the response — this tool refuses (without ' +
-      'calling the API at all) a csvContent over either limit and names submit_invoices_bulk_async in the error, since a ' +
-      'larger file is better handled asynchronously from the start. Unlike submit_invoice, no idempotency key is needed: ' +
+      'The server waits a short, bounded time for the batch: a 200 carries `summary` and the first 500 `rows` (`rowsTruncated` ' +
+      'says more exist), a 202 means it is still running (completedInline false: poll get_bulk_upload_status with the batchId). ' +
+      'A 200 is not "every row worked": the result is flagged as an error when the batch FAILED or any row ERRORED or NEEDS_INFO ' +
+      '(read summary and rows). There is no client-side row limit; the route answers 413 over its own upload limit. Unlike submit_invoice, no idempotency key is needed: ' +
       'each row\'s own content (entity + transaction_date + currency + amounts + country, or its source_reference column ' +
       'when present) is already the de-duplication key, so a byte-identical re-run of the same file is a safe no-op — set ' +
       'source_reference per row for the most reliable re-run behaviour. For a batched mandate (e.g. Spain SII, France ' +
@@ -3449,13 +3475,12 @@ const TOOLS = [
   {
     name: 'submit_invoices_bulk_async',
     description:
-      'Submits (does not just validate) many transactions at once from a CSV file — for a file too large for ' +
-      'submit_invoices_bulk\'s 500-row/25MB synchronous ceiling, or simply to skip that tool\'s client-side size check. ' +
+      'Submits (does not just validate) many transactions at once from a CSV file — the same route as submit_invoices_bulk, ' +
+      'meant for a large file. ' +
       'csvContent is the raw CSV text (not base64); same column shape and content-based de-duplication as ' +
       'submit_invoices_bulk (source_reference recommended per row for reliable re-runs — no idempotency key needed). The ' +
-      'underlying route decides the real transport by request size: a small csvContent may still come back as a completed ' +
-      'synchronous result (the same shape submit_invoices_bulk returns — summary/rows, no batchId) rather than a queued ' +
-      'batch. When it DOES queue, it returns { batchId, status: \'UPLOADED\' } immediately — poll get_bulk_upload_status ' +
+      'underlying route waits a short time: a small csvContent may come back as a completed 200 (summary and rows) rather ' +
+      'than a queued batch. When it is still running it answers 202 with { batchId, status, completedInline: false } — poll get_bulk_upload_status ' +
       'with that batchId every 30-60 seconds until status is COMPLETED/FAILED/CANCELLED, then call list_bulk_upload_errors ' +
       'if any rows errored. A response with duplicate: true means this exact file was already processed by an earlier ' +
       'call — nothing new was queued. Note: a stdio MCP client reads this file from local disk, so unlike the hosted ' +
@@ -3473,8 +3498,8 @@ const TOOLS = [
   {
     name: 'get_bulk_upload_status',
     description:
-      'Poll one async bulk upload batch — created via submit_invoices_bulk_async, or handed back as a `continuation` ' +
-      'batchId when submit_invoices_bulk\'s own file had more than 500 rows. Returns status (UPLOADED/VALIDATING/' +
+      'Poll one bulk upload batch — the batchId a submit_invoices_bulk or submit_invoices_bulk_async call returned ' +
+      'when it answered 202 (still running). Returns status (UPLOADED/VALIDATING/' +
       'COMPLETED/FAILED/CANCELLED), total, outcomeCounts keyed by the same BulkSendRowOutcome vocabulary submit_invoices_bulk ' +
       'returns per row (ACCEPTED/ACCUMULATED/NEEDS_INFO/HELD/NO_OBLIGATION/SKIPPED_DUPLICATE/ERRORED), and a human-readable ' +
       'summary. Call list_bulk_upload_errors afterward when outcomeCounts.ERRORED is greater than zero. 404 means no such ' +
@@ -4814,15 +4839,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'submit_invoices_bulk': {
       const { csvContent, entityId } = args as { csvContent: string; entityId?: string };
-      const rowCount = countCsvDataRows(csvContent);
-      const byteLength = Buffer.byteLength(csvContent, 'utf8');
-      if (rowCount > MAX_BULK_ROWS || byteLength > MAX_BULK_UPLOAD_BYTES) {
-        throw new Error(
-          `This CSV has ${rowCount} data rows (${byteLength} bytes) — submit_invoices_bulk accepts at most ${MAX_BULK_ROWS} rows ` +
-          `and ${MAX_BULK_UPLOAD_BYTES / (1024 * 1024)}MB per call. Use submit_invoices_bulk_async instead for a file this size — ` +
-          'no request was sent.',
-        );
-      }
       return callApi('POST', '/send/bulk', csvFormData(csvContent, 'invoices.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
     }
 
@@ -5056,7 +5072,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       // A stored REJECTED or NEEDS_INFO document is HTTP 200 but was not sent: flag it so an agent does not treat it as
       // delivered. The full body stays in the text so the fix (errors[], nextStep) is still readable.
-      ...(isUnsentSendOutcome(name, result) ? { isError: true } : {}),
+      // The same goes for a 2xx whose body says ok:false, or a bulk submit with a row that ERRORED or NEEDS_INFO. Nothing broader: a
+      // top-level error or code can sit in a correct result. Content is unchanged, so the detail is still readable.
+      ...(isUnsentSendOutcome(name, result) || isFailureBody(result) || (BULK_SUBMIT_TOOLS.has(name) && failedRows(result).length > 0) ? { isError: true } : {}),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
