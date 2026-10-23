@@ -13,6 +13,13 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 - CLI: `clearvo receive simulate --country` accepts any of the 24 codes; `--currency` help describes the per-country default.
 - A new check (`npm run test:simulation-countries`, run in CI) fails when the country list in the SDK, MCP server and CLI differs from the 24 above.
 
+Scenarios (same release): `POST /v1/receive/simulate` takes `scenario`, the shape of the document, so you can test your integration against more than the plain invoice. `standard` (default), `credit_note_for_existing` (refers to a real invoice you already simulated, or one created first), `warnings_only`, `needs_review_format` and `needs_review_business_rules` (stored for review, `invoice.received` still fires), `duplicate` (re-sent with a changed file, fires `invoice.duplicate`) and `duplicate_exact` (identical re-send, ignored), `with_references`, `with_payment_terms`, `with_attachment`, `with_discounts`, `many_lines`, `unicode_text` and `foreign_supplier`. A scenario a country's documents cannot carry is 400 `SCENARIO_NOT_AVAILABLE`; one that builds its own lines cannot be combined with `lines` or `totalAmount` (400 `INVALID_SCENARIO`).
+
+- SDK: `SimulateReceivedInvoicesInput.scenario` (`SimulationScenarioId`); new exports `SIMULATION_SCENARIOS` (id and description of each) and `SIMULATION_SCENARIO_IDS`.
+- MCP: `simulate_received_invoices` takes `scenario` and its description lists every scenario.
+- CLI: `clearvo receive simulate --scenario <id>`.
+- The same CI check now also fails when the scenario lists in the SDK, MCP server and CLI differ, or differ from the scenario enum in the published OpenAPI document.
+
 ## Unreleased — integration tests (backend routes ship with the Integration Passport Stage 3 release)
 
 - SDK: `startTestRun`, `getTestRun`, `listTestRuns`, `listTestCases`, `createTestCase`, `updateTestCase`, `archiveTestCase`, `getTestCaseCatalogue` (`/v1/test-runs`, `/v1/test-cases`, sandbox key only).

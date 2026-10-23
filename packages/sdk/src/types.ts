@@ -271,6 +271,7 @@ export interface RetryInvoiceRejectedResponse {
 export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 import type { SimulationCountryCode } from './simulation-countries.js';
+import type { SimulationScenarioId } from './simulation-scenarios.js';
 
 /**
  * POST /v1/send's clearanceStatus values — same generated source as
@@ -880,8 +881,10 @@ export interface InvoiceRecordTimestamps {
 export interface SimulateReceivedInvoicesInput {
   /** The registration the documents are received under: any country the entity is established or VAT-registered in that has sample documents (see `SIMULATION_COUNTRY_CODES`). Else 409 COUNTRY_NOT_REGISTERED, or 409 COUNTRY_NOT_ENABLED when the country has no sample documents. Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
   country?: SimulationCountryCode;
-  /** Default invoice. A credit note references an invoice from the same call. */
+  /** Default invoice (credit_note for the scenario credit_note_for_existing). */
   type?: 'invoice' | 'credit_note';
+  /** The shape of the document (see `SIMULATION_SCENARIOS`; default `standard`). 400 `SCENARIO_NOT_AVAILABLE` when the country's documents cannot carry it; 400 `INVALID_SCENARIO` for an unknown scenario or a combination it cannot take (`lines`/`totalAmount` with a scenario that builds its own lines, `businessStatus` with a scenario that stores the document for review). */
+  scenario?: SimulationScenarioId;
   /** 1 to 20 documents (default 1). Every call adds new documents. */
   count?: number;
   /** Optional override of the fictional supplier; the name always keeps a sample marker. */
@@ -905,7 +908,7 @@ export interface SimulateReceivedInvoicesResponse {
   sandbox: true;
   /** Received invoices in the same shape GET /v1/invoices returns (cast to ReceivedInvoiceFields for the inbound fields). */
   created: unknown[];
-  /** Ids of documents that were already present and so were not created again. */
+  /** Ids of documents that were already present and so were not created again (every duplicate scenario lists them). */
   duplicates: string[];
   webhooks: { event: string; subscribedEndpoints: number };
   notes: string[];

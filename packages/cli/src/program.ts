@@ -10,6 +10,12 @@ const SIMULATION_COUNTRY_CODES = [
   'IS', 'JP', 'LT', 'LU', 'LV', 'NL', 'NO', 'NZ', 'SE', 'SG', 'SI', 'SK',
 ];
 
+// Scenarios of the received-invoice simulator (ids only; the SDK and MCP server carry the descriptions). `npm run test:simulation-countries` fails on drift.
+const SIMULATION_SCENARIO_IDS = [
+  'standard', 'credit_note_for_existing', 'warnings_only', 'needs_review_format', 'needs_review_business_rules', 'duplicate',
+  'duplicate_exact', 'with_references', 'with_payment_terms', 'with_attachment', 'with_discounts', 'many_lines', 'unicode_text', 'foreign_supplier',
+];
+
 /** Commander collector for the repeatable --classification-code flag. */
 function collectClassificationCode(val: string, prev: string[]): string[] {
   return [...prev, val];
@@ -1036,6 +1042,7 @@ export function createProgram(): Command {
     .description('Sandbox only: create sample received invoices or credit notes from a fictional supplier (needs a csk_test_ key)')
     .option('--country <code>', `One of ${SIMULATION_COUNTRY_CODES.join(', ')}: the tax registration the invoices are received under, a country the entity is established or VAT-registered in (default: the establishment country, else the single supported registration)`)
     .option('--type <type>', 'invoice (default) or credit_note')
+    .option('--scenario <id>', `The shape of the document, one of ${SIMULATION_SCENARIO_IDS.join(', ')} (default standard)`)
     .option('--count <n>', 'How many documents, 1-20 (default 1)')
     .option('--total <amount>', 'Gross total of each document (default 1200)')
     .option('--currency <code>', 'Three-letter currency code (default: the country\'s own currency, e.g. EUR, DKK, SEK, NOK, CHF, AUD, JPY; France: EUR only)')
@@ -1043,10 +1050,11 @@ export function createProgram(): Command {
     .option('--status <status>', 'Move each document to this lifecycle status after it arrives (e.g. APPROVED, DISPUTED, REFUSED)')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { country?: string; type?: string; count?: string; total?: string; currency?: string; issueDate?: string; status?: string; entity?: string; pretty?: boolean }) => {
+    .action(async (opts: { country?: string; type?: string; scenario?: string; count?: string; total?: string; currency?: string; issueDate?: string; status?: string; entity?: string; pretty?: boolean }) => {
       const body: Record<string, unknown> = {};
       if (opts.country) body.country = opts.country.toUpperCase();
       if (opts.type) body.type = opts.type;
+      if (opts.scenario) body.scenario = opts.scenario;
       if (opts.count) body.count = Number(opts.count);
       if (opts.total) body.totalAmount = Number(opts.total);
       if (opts.currency) body.currency = opts.currency.toUpperCase();
