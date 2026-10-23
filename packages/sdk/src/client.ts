@@ -709,9 +709,9 @@ export class ClearvoClient {
   /**
    * Enable/disable regimes. Enabling requires `effectiveFrom` (EFFECTIVE_FROM_REQUIRED
    * otherwise) and, for es_sii/fr_ereporting, a current registration in that country
-   * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii and
-   * fr_ereporting accept submissionMode 'immediate' | 'batch_auto' | 'batch_review'
-   * (default 'batch_review'). Disabling es_sii while a batch is open / ready_for_review /
+   * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii accepts
+   * submissionMode 'immediate' | 'batch_auto' | 'batch_review'; fr_ereporting accepts 'batch_review' | 'batch_auto'
+   * (a batch_auto period you have not confirmed is sent the day before its filing deadline). Default 'batch_review'. Disabling es_sii while a batch is open / ready_for_review /
    * overdue is refused 409 OBLIGATION_HAS_PENDING_BATCH unless `force: true`.
    */
   updateReportingObligations(input: UpdateReportingObligationsInput): Promise<UpdateReportingObligationsResponse> {
