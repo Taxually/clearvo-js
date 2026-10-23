@@ -122,7 +122,7 @@ describe('clearvo tests', () => {
     global.fetch = f as unknown as typeof fetch;
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(sub(createProgram(), 'tests', 'cases', 'create').parseAsync(
-      ['--title', 'T', '--step', 'one', '--expected', 'ok', '--check', '{bad'], { from: 'user' })).rejects.toThrow('exit 1');
+      ['--title', 'T', '--step', 'one', '--expected', 'ok', '--check', '{bad'], { from: 'user' })).rejects.toThrow('exit 2');
     expect(f).not.toHaveBeenCalled();
     errSpy.mockRestore();
   });

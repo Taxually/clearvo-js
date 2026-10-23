@@ -21,6 +21,7 @@
     "test:rules-engine-tools": "node scripts/verify-rules-engine-tools.js",
     "test:filings-tools": "node scripts/verify-filings-tools.js",
     "test:send-contract": "node scripts/verify-send-contract.js",
+    "test:error-passthrough": "node scripts/verify-error-passthrough.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch"
   },

@@ -114,10 +114,10 @@ describe('clearvo send outcome', () => {
     }
   });
 
-  it('still exits 1 on an HTTP error', async () => {
+  it('still exits non-zero on an HTTP error (3 for 401)', async () => {
     reply({ error: 'Invalid API key' }, 401);
     exitThrows();
-    await expect(run()).rejects.toThrow('exit 1');
+    await expect(run()).rejects.toThrow('exit 3');
     expect(stderr()).toContain('HTTP 401');
   });
 });

@@ -111,7 +111,23 @@ const result = await client.submitInvoice(invoice);
 if (isRejected(result)) console.log(result.errors, result.nextStep);
 ```
 
+### Errors
+
+Every failure is a `ClearvoError` carrying everything the API said: `status`, `code`, `message`, `hint`, `details`, `issues`, `errors[]`, `requestId` (the `X-Request-Id` header), `retryAfter` (seconds, from `Retry-After`), `idempotencyKey` and, when the body was not JSON (a gateway page), `rawBody`. A validation failure puts its field errors in `message` (`Invalid request body: country: must be 2 characters; ...`); `err.fieldErrors` lists them as `path: message`. `err.retryable` is true for 429, 502, 503, 504 and network failures. A 502, 503 or 504 can mean the request was processed: check its status, or re-send writes with the same idempotency key.
+
+A network failure or timeout throws a `ClearvoError` with status `0` and code `NETWORK_ERROR` or `TIMEOUT` (`cause` kept). `timeoutMs` (default 120000) sets the timeout. `maxRetries` (default 0, opt-in) retries 429, 503 and network failures with backoff, only for GETs and writes that carry an idempotency key; any other write is never retried. A 2xx with an empty body resolves to `{ ok: true, status }`; a 2xx that is not JSON throws.
+
+```typescript
+try {
+  await client.submitInvoice(invoice, 'order-1001');
+} catch (err) {
+  if (err instanceof ClearvoError) console.error(err.status, err.code, err.fieldErrors, err.requestId);
+}
+```
+
 ## CLI
+
+A failed call prints the error, its field errors, the hint, `Retry-After` and `Request-Id`. Exit codes: `0` success, `1` other failure, `2` usage (bad option, unreadable or invalid JSON file), `3` auth (401, 403), `4` validation (400, 422), `5` server or network (5xx, timeout, no connection). `--json-errors` (also automatic when stdout is not a terminal) prints one JSON object on stderr: `{status, code, message, hint, details, issues, errors, requestId}`. `send` and `send-bulk` exit non-zero when the body says `ok: false` or a row ERRORED or NEEDS_INFO.
 
 ```bash
 # One-off usage
