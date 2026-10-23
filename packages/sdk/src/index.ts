@@ -1,5 +1,7 @@
 export { ClearvoClient } from './client.js';
 export { ClearvoError, isRejected } from './types.js';
+export { SIMULATION_COUNTRY_CODES } from './simulation-countries.js';
+export type { SimulationCountryCode } from './simulation-countries.js';
 export type {
   CompanyCode,
   ListCompanyCodesParams,

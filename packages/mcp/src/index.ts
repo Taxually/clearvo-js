@@ -8,6 +8,12 @@ import {
 import { createHash } from 'crypto';
 import { getToolAnnotations } from './tool-annotations.js';
 
+// Countries the received-invoice simulator covers. Repeated in the SDK and CLI; `npm run test:simulation-countries` fails on drift.
+const SIMULATION_COUNTRY_CODES = [
+  'AE', 'AT', 'AU', 'BE', 'CH', 'DE', 'DK', 'EE', 'FI', 'FR', 'HR', 'IE',
+  'IS', 'JP', 'LT', 'LU', 'LV', 'NL', 'NO', 'NZ', 'SE', 'SG', 'SI', 'SK',
+];
+
 // White-label tenants get their own branded env var names instead of CLEARVO_*.
 // CLEARVO_API_KEY always wins if set; otherwise the first matching tenant alias is used.
 // The public API itself is not white-labeled yet — there is no separate api.taxually.com
@@ -1827,17 +1833,17 @@ const TOOLS = [
     description:
       'Sandbox only: create sample incoming (received) invoices or credit notes for this entity, to build and test an accounts-payable ' +
       'integration without waiting for a real supplier. Needs a sandbox API key; a live key returns 403 SANDBOX_ONLY. Each document is a ' +
-      'realistic e-invoice (Factur-X for France, ZUGFeRD for Germany) from a clearly fictional supplier, received through the same ' +
-      'pipeline as a real received document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
-      'intakeChannel SANDBOX_SIMULATION, and no email is sent. With no arguments it creates one invoice for the entity\'s own country. ' +
-      'The documents are received under one of the entity\'s tax registrations: country (DE or FR) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ' +
+      `realistic e-invoice in the country's own format (Factur-X for France, ZUGFeRD for Germany, Peppol BIS Billing 3.0 or PINT for the other countries: Australia, Austria, Belgium, Croatia, Denmark, Estonia, Finland, Iceland, Ireland, Japan, Latvia, Lithuania, Luxembourg, Netherlands, New Zealand, Norway, Singapore, Slovakia, Slovenia, Sweden, Switzerland, United Arab Emirates) from a clearly fictional supplier, received through the same ` +
+      'pipeline as receive_invoice_document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
+      'intakeChannel SANDBOX_SIMULATION, and no email is sent. ' +
+      `The documents are received under one of the entity's tax registrations: country (${SIMULATION_COUNTRY_CODES.join(', ')}) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise; 409 COUNTRY_NOT_ENABLED when it has no sample documents), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ` +
       '(each call adds new ones). businessStatus (e.g. APPROVED, DISPUTED, REFUSED) moves each document along its lifecycle after it arrives, ' +
-      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. French samples are EUR only. ' +
+      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. Documents are in the country\'s own currency; French samples are EUR only. ' +
       'Returns the created invoices, any duplicates, how many of your webhook endpoints are subscribed to invoice.received, and notes.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        country: { type: 'string', enum: ['DE', 'FR'], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
+        country: { type: 'string', enum: [...SIMULATION_COUNTRY_CODES], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
         type: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Document type. Default invoice.' },
         count: { type: 'integer', minimum: 1, maximum: 20, description: 'How many documents to create (1-20). Default 1.' },
         supplier: {
@@ -1850,7 +1856,7 @@ const TOOLS = [
           },
         },
         totalAmount: { type: 'number', description: 'Gross total of each document. Default 1200. Not allowed together with lines.' },
-        currency: { type: 'string', description: 'Three-letter currency code. Default EUR; France accepts EUR only.' },
+        currency: { type: 'string', description: 'Three-letter currency code. Default the country\'s own currency (EUR for euro countries; DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY or AED for the others); France accepts EUR only.' },
         lines: {
           type: 'array',
           description: 'Optional lines (description, quantity, unitPrice net); the tax rate is the standard rate. Not allowed together with totalAmount.',

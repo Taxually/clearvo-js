@@ -46,6 +46,9 @@ jobs:
           CLEARVO_MARKETING_OPENAPI_PATH: ${{ github.workspace }}/clearvo-marketing/public/openapi.json
         run: npm run test:codegen-diff
 
+      - name: Simulator country list is identical in SDK, MCP and CLI
+        run: npm run test:simulation-countries
+
       - name: Build all packages
         run: npm run build
 

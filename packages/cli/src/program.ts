@@ -4,6 +4,12 @@ import { homedir } from 'os';
 import { join, basename } from 'path';
 import { Command } from 'commander';
 
+// Countries the received-invoice simulator covers. Repeated in the SDK and MCP server; `npm run test:simulation-countries` fails on drift.
+const SIMULATION_COUNTRY_CODES = [
+  'AE', 'AT', 'AU', 'BE', 'CH', 'DE', 'DK', 'EE', 'FI', 'FR', 'HR', 'IE',
+  'IS', 'JP', 'LT', 'LU', 'LV', 'NL', 'NO', 'NZ', 'SE', 'SG', 'SI', 'SK',
+];
+
 /** Commander collector for the repeatable --classification-code flag. */
 function collectClassificationCode(val: string, prev: string[]): string[] {
   return [...prev, val];
@@ -1028,11 +1034,11 @@ export function createProgram(): Command {
   receive
     .command('simulate')
     .description('Sandbox only: create sample received invoices or credit notes from a fictional supplier (needs a csk_test_ key)')
-    .option('--country <code>', 'DE or FR: the tax registration the invoices are received under (default: the establishment country, else the single supported registration)')
+    .option('--country <code>', `One of ${SIMULATION_COUNTRY_CODES.join(', ')}: the tax registration the invoices are received under, a country the entity is established or VAT-registered in (default: the establishment country, else the single supported registration)`)
     .option('--type <type>', 'invoice (default) or credit_note')
     .option('--count <n>', 'How many documents, 1-20 (default 1)')
     .option('--total <amount>', 'Gross total of each document (default 1200)')
-    .option('--currency <code>', 'Three-letter currency code (France: EUR only)')
+    .option('--currency <code>', 'Three-letter currency code (default: the country\'s own currency, e.g. EUR, DKK, SEK, NOK, CHF, AUD, JPY; France: EUR only)')
     .option('--issue-date <date>', 'YYYY-MM-DD (default today)')
     .option('--status <status>', 'Move each document to this lifecycle status after it arrives (e.g. APPROVED, DISPUTED, REFUSED)')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')

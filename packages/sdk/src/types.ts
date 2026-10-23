@@ -270,6 +270,7 @@ export interface RetryInvoiceRejectedResponse {
  */
 export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
+import type { SimulationCountryCode } from './simulation-countries.js';
 
 /**
  * POST /v1/send's clearanceStatus values — same generated source as
@@ -877,8 +878,8 @@ export interface InvoiceRecordTimestamps {
 }
 
 export interface SimulateReceivedInvoicesInput {
-  /** DE or FR: the registration the documents are received under (any country the entity is established or VAT-registered in; else 409 COUNTRY_NOT_REGISTERED). Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
-  country?: 'DE' | 'FR';
+  /** The registration the documents are received under: any country the entity is established or VAT-registered in that has sample documents (see `SIMULATION_COUNTRY_CODES`). Else 409 COUNTRY_NOT_REGISTERED, or 409 COUNTRY_NOT_ENABLED when the country has no sample documents. Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
+  country?: SimulationCountryCode;
   /** Default invoice. A credit note references an invoice from the same call. */
   type?: 'invoice' | 'credit_note';
   /** 1 to 20 documents (default 1). Every call adds new documents. */
@@ -887,7 +888,7 @@ export interface SimulateReceivedInvoicesInput {
   supplier?: { name?: string; taxNumber?: string; legalRegistrationNumber?: string };
   /** Gross total of each document (default 1200). Not allowed together with `lines`. */
   totalAmount?: number;
-  /** Three-letter code. Default EUR; France accepts EUR only. */
+  /** Three-letter code. Default the country's own currency (EUR, DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY or AED); France accepts EUR only. */
   currency?: string;
   /** Net unit prices at the standard rate. Not allowed together with `totalAmount`. */
   lines?: Array<{ description: string; quantity: number; unitPrice: number }>;

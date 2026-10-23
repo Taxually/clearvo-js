@@ -4,6 +4,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — received-invoice simulator covers 24 countries (publish after backend PR 18366 is live; SDK 0.6.0, MCP 0.7.0, CLI 0.6.0)
+
+`POST /v1/receive/simulate` (sandbox keys only) now creates sample received invoices for 24 countries instead of Germany and France only: AE, AT, AU, BE, CH, DE, DK, EE, FI, FR, HR, IE, IS, JP, LT, LU, LV, NL, NO, NZ, SE, SG, SI, SK. Each document is a realistic e-invoice in the country's own format (Factur-X for France, ZUGFeRD for Germany, Peppol BIS Billing 3.0 or PINT for the others) and the default currency is the country's own (EUR for euro countries; DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY, AED for the others; France accepts EUR only). `country` stays optional: it is the registration the documents are received under (a country the entity is established or VAT-registered in that has sample documents); 409 `COUNTRY_NOT_REGISTERED`, 409 `COUNTRY_NOT_ENABLED` or 400 `COUNTRY_REQUIRED` otherwise.
+
+- SDK: `SimulateReceivedInvoicesInput.country` is now `SimulationCountryCode` (the 24 codes); new exports `SIMULATION_COUNTRY_CODES` and `SimulationCountryCode`. Code that passed `'DE' | 'FR'` keeps compiling.
+- MCP: `simulate_received_invoices` country enum and description list all 24 countries, the formats, the country's own default currency and the new 409 errors.
+- CLI: `clearvo receive simulate --country` accepts any of the 24 codes; `--currency` help describes the per-country default.
+- A new check (`npm run test:simulation-countries`, run in CI) fails when the country list in the SDK, MCP server and CLI differs from the 24 above.
+
 ## Unreleased — integration tests (backend routes ship with the Integration Passport Stage 3 release)
 
 - SDK: `startTestRun`, `getTestRun`, `listTestRuns`, `listTestCases`, `createTestCase`, `updateTestCase`, `archiveTestCase`, `getTestCaseCatalogue` (`/v1/test-runs`, `/v1/test-cases`, sandbox key only).
