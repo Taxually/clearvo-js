@@ -28,6 +28,13 @@ let next = { status: 200, headers: {}, body: '{}' };
 const api = http.createServer((req, res) => {
   req.on('data', () => {});
   req.on('end', () => {
+    if (next.cut) {
+      // Promise 100 bytes, send a few, drop the connection: the body of a 2xx cannot be read.
+      res.writeHead(next.status, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+      res.write('{"ok":tr');
+      setTimeout(() => res.destroy(), 20);
+      return;
+    }
     res.writeHead(next.status, { 'Content-Type': 'application/json', ...next.headers });
     res.end(next.body);
   });
@@ -82,7 +89,7 @@ api.listen(0, '127.0.0.1', async () => {
     body: json({ error: 'Invalid request body', code: 'VALIDATION_ERROR', hint: 'Fix the fields', details: { formErrors: [], fieldErrors: { country: ['must be 2 characters'] } } }),
   });
   expect(r.isError, 'a 400 must be isError');
-  for (const s of ['HTTP 400: Invalid request body: country: must be 2 characters', 'Code: VALIDATION_ERROR', 'Hint: Fix the fields', '  - country: must be 2 characters', 'Retry-After: 4s', 'Request-Id: req_77']) {
+  for (const s of ['HTTP 400: Invalid request body: country: must be 2 characters', 'Code: VALIDATION_ERROR', 'Hint: Fix the fields', 'Retry-After: 4s', 'Request-Id: req_77']) {
     expect(r.text.includes(s), `a 400 must say "${s}": ${r.text}`);
   }
 
@@ -110,7 +117,11 @@ api.listen(0, '127.0.0.1', async () => {
   r = await tool('get_bulk_upload_status', { batchId: 'b1' }, { status: 200, body: json({ ok: false, error: 'Batch failed' }) });
   expect(r.isError && r.text.includes('Batch failed'), `ok:false on a 200 must be isError: ${r.text}`);
   r = await tool('get_bulk_upload_status', { batchId: 'b1' }, { status: 200, body: json({ error: 'Something went wrong', code: 'X' }) });
-  expect(r.isError, 'a top-level error on a 200 must be isError');
+  expect(!r.isError, 'a top-level error or code on a 200 is NOT enough to flag isError (a FAILED batch read or a validation result is a correct result)');
+  r = await tool('get_bulk_upload_status', { batchId: 'b1' }, { status: 200, body: json({ batchId: 'b1', status: 'FAILED', code: 'UPLOAD_FAILED', message: 'The file could not be processed' }) });
+  expect(!r.isError && r.text.includes('UPLOAD_FAILED'), `a FAILED batch status read is a correct result: ${r.text}`);
+  r = await tool('get_bulk_upload_status', { batchId: 'b1' }, { cut: true, status: 200 });
+  expect(r.isError && r.text.includes('Network error') && r.text.includes('NETWORK_ERROR'), `a 2xx whose body is cut off must be an error, not {ok:true}: ${r.text}`);
   r = await tool('get_bulk_upload_status', { batchId: 'b1' }, { status: 200, body: json({ batchId: 'b1', status: 'COMPLETED', error: null }) });
   expect(!r.isError, 'a healthy 200 (error: null) must not be an error');
 
@@ -131,7 +142,6 @@ api.listen(0, '127.0.0.1', async () => {
     status: 402, body: json({ error: 'plan_required', reason: 'custom_api_requires_growth', calculationId: 'calc_1', monitorOnly: true, message: 'Upgrade to Growth', upgradeUrl: 'https://app.clearvo.io/billing' }),
   });
   expect(!r.text.startsWith('Error:') && r.text.includes('"calculationId": "calc_1"') && r.text.includes('"monitorOnly": true') && r.text.includes('"upgradeUrl"'), `402 plan_required must keep its body: ${r.text}`);
-  expect(r.isError, 'a plan_required result carries no amounts, so it is flagged isError');
   r = await tool('get_bulk_upload_status', { batchId: 'b1' }, { status: 403, body: json({ error: 'ecm_not_included', message: 'Exemption certificates are not in your plan', upgradeUrl: 'https://app.clearvo.io/billing' }) });
   expect(r.isError && r.text.includes('Exemption certificates are not in your plan') && r.text.includes('Upgrade: https://app.clearvo.io/billing') && r.text.includes('Code: ecm_not_included'), `a plan gate must show the sentence and the link: ${r.text}`);
 

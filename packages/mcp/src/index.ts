@@ -7,7 +7,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { createHash } from 'crypto';
 import { getToolAnnotations } from './tool-annotations.js';
-import { failedRows, formatErrorLines, isFailureBody, parseErrorResponse, readBody } from './error-format.js';
+import { BodyReadError, failedRows, formatErrorLines, isFailureBody, parseErrorResponse, readBody, timeoutSignal } from './error-format.js';
 
 // White-label tenants get their own branded env var names instead of CLEARVO_*.
 // CLEARVO_API_KEY always wins if set; otherwise the first matching tenant alias is used.
@@ -94,23 +94,19 @@ async function callApi(
       method,
       headers,
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: timeoutSignal(FETCH_TIMEOUT_MS),
     });
   } catch (cause) {
-    const timedOut = cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
-    throw new Error(
-      timedOut
-        ? `Request timed out after ${FETCH_TIMEOUT_MS / 1000} seconds with no answer; the operation may still have completed. Check its status (read the record back) before retrying a write.\nCode: TIMEOUT`
-        : `Network error: ${cause instanceof Error ? cause.message : String(cause)}\nThe request may not have reached the API. Retry, or check the connection.\nCode: NETWORK_ERROR`
-    );
+    throw transportError(cause);
   }
-  const read = await readBody(res);
+  // A 2xx whose body cannot be read (abort, reset, truncated stream) is a failure, not an empty success.
+  const read = await readBody(res).catch((e) => { throw e instanceof BodyReadError ? transportError(e) : e; });
   if (!res.ok) {
     const p = parseErrorResponse(res, read);
     const err = p.body ?? {};
     // Free-plan monitor-only calculation: the 402 body (calculationId, monitorOnly, upgradeUrl) is the tool's result
-    // (see calculate_tax's outputSchema), not an error to flatten into 'HTTP 402'. Same as the hosted connector. The result
-    // is flagged isError by the caller (it carries a top-level `error`): there are no amounts in it.
+    // (see calculate_tax's outputSchema), not an error to flatten into 'HTTP 402'. Same as the hosted connector. It carries
+    // no amounts: the tool description tells the agent to point the user at upgradeUrl.
     if (res.status === 402 && err.error === 'plan_required') return err;
     const nestedError = err.error !== null && typeof err.error === 'object' ? err.error as Record<string, unknown> : null;
     // A plan gate (ecm_not_included, rules_not_included, ap_not_enabled, solution_not_enabled, ...) answers
@@ -152,8 +148,25 @@ async function callApi(
   return read.json === null ? { ok: true, status: res.status } : read.json;
 }
 
-/** Stop an upstream call before the client's own tool timeout (typically 60 to 120 seconds). */
-const FETCH_TIMEOUT_MS = 85_000;
+/**
+ * Stop an upstream call that gets no answer. Default 130 seconds: POST /v1/send can legitimately take up to about 90 seconds and
+ * the gateway cuts at 150. Override with CLEARVO_TIMEOUT_MS (milliseconds) when your client's own tool timeout is shorter or longer.
+ */
+const FETCH_TIMEOUT_MS = (() => {
+  const n = Number(process.env.CLEARVO_TIMEOUT_MS ?? 130_000);
+  return Number.isFinite(n) && n > 0 ? n : 130_000;
+})();
+
+/** The Error for a failed fetch or an unreadable 2xx body, saying whether the operation may have completed. */
+function transportError(cause: unknown): Error {
+  const original = cause instanceof BodyReadError ? cause.cause : cause;
+  const timedOut = original instanceof Error && (original.name === 'TimeoutError' || original.name === 'AbortError');
+  return new Error(
+    timedOut
+      ? `Request timed out after ${FETCH_TIMEOUT_MS / 1000} seconds with no answer; the operation may still have completed. Check its status (read the record back) before retrying a write.\nCode: TIMEOUT`
+      : `Network error: ${original instanceof Error ? original.message : String(original)}\nThe request may not have reached the API, or its answer was cut off. Check the connection, and read the record back before retrying a write.\nCode: NETWORK_ERROR`
+  );
+}
 
 // Matches the 5MB limit already enforced on this repo's other document-upload
 // paths (e.g. the buyer collection wizard). documentBase64 travels as a JSON
@@ -5059,8 +5072,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       // A stored REJECTED or NEEDS_INFO document is HTTP 200 but was not sent: flag it so an agent does not treat it as
       // delivered. The full body stays in the text so the fix (errors[], nextStep) is still readable.
-      // The same goes for any 2xx whose body is a failure: ok:false, a top-level error/code, a 402 plan_required result (no amounts),
-      // or a bulk submit with a row that ERRORED or NEEDS_INFO. Content is unchanged, so the detail is still readable.
+      // The same goes for a 2xx whose body says ok:false, or a bulk submit with a row that ERRORED or NEEDS_INFO. Nothing broader: a
+      // top-level error or code can sit in a correct result. Content is unchanged, so the detail is still readable.
       ...(isUnsentSendOutcome(name, result) || isFailureBody(result) || (BULK_SUBMIT_TOOLS.has(name) && failedRows(result).length > 0) ? { isError: true } : {}),
     };
   } catch (err) {

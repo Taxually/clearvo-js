@@ -9,7 +9,7 @@ export interface ClearvoClientOptions {
    */
   throwOnRejected?: boolean;
   /**
-   * Abort a request that takes longer than this many milliseconds (default 120000). The call then throws a
+   * Abort a request that takes longer than this many milliseconds (default 140000, just under the 150 s gateway cut). The call then throws a
    * {@link ClearvoError} with status 0 and code `TIMEOUT`; a write may still have been processed, so check its status
    * (or re-send with the same idempotency key) before treating it as lost. 0 disables the timeout.
    */
@@ -28,6 +28,8 @@ export interface ClearvoClientOptions {
 export interface SubmitInvoiceOptions {
   /** Overrides the client's `throwOnRejected` for this call. */
   throwOnRejected?: boolean;
+  /** Overrides the client's `timeoutMs` for this call (milliseconds; 0 disables the timeout). */
+  timeoutMs?: number;
 }
 
 export interface Entity {

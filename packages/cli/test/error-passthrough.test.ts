@@ -56,7 +56,8 @@ describe('failure text', () => {
     expect(out).toContain('HTTP 400: Invalid request body: country: must be 2 characters');
     expect(out).toContain('Code: VALIDATION_ERROR');
     expect(out).toContain('Hint: Fix the fields');
-    expect(out).toContain('  - country: must be 2 characters');
+    // Printed once (in the message), not again as a list.
+    expect(out.split('country: must be 2 characters')).toHaveLength(2);
     expect(out).toContain('Retry-After: 3s');
     expect(out).toContain('Request-Id: req_42');
   });
@@ -64,7 +65,7 @@ describe('failure text', () => {
   it('uses the full dotted paths of issues[]', async () => {
     reply(json({ error: 'Invalid request body', details: { fieldErrors: { countrySpecific: ['Invalid input'] } }, issues: [{ path: 'countrySpecific.de.invoiceFormat', message: 'Invalid enum value' }] }, 422));
     await expect(run('send', file)).rejects.toThrow('exit 4');
-    expect(stderr()).toContain('  - countrySpecific.de.invoiceFormat: Invalid enum value');
+    expect(stderr()).toContain('countrySpecific.de.invoiceFormat: Invalid enum value');
     expect(stderr()).not.toContain('countrySpecific: Invalid input');
   });
 
@@ -123,6 +124,20 @@ describe('--json-errors', () => {
     expect(JSON.parse(String(errSpy.mock.calls[0][0]))).toMatchObject({ status: 403, message: 'nope' });
   });
 
+  it('keeps field and every extra body field, so a piped caller loses nothing', async () => {
+    reply(json({ error: 'FILE_ALREADY_ADDED', message: 'Already added.', existingId: 'f9', reason: 'same_name', field: 'file', filesWithErrors: 2, contactUrl: 'https://x/contact' }, 409));
+    await expect(run('--json-errors', 'send', file)).rejects.toThrow('exit 1');
+    const parsed = JSON.parse(String(errSpy.mock.calls[0][0]));
+    expect(parsed.field).toBe('file');
+    expect(parsed.body).toMatchObject({ existingId: 'f9', reason: 'same_name', filesWithErrors: 2, contactUrl: 'https://x/contact' });
+  });
+
+  it('works after the sub-command too (clearvo send f --json-errors)', async () => {
+    reply(json({ error: 'nope' }, 403));
+    await expect(run('send', file, '--json-errors')).rejects.toThrow('exit 3');
+    expect(JSON.parse(String(errSpy.mock.calls[0][0]))).toMatchObject({ status: 403, message: 'nope' });
+  });
+
   it('keeps rawBody for a non-JSON gateway page', async () => {
     reply(html('<html>bad gateway</html>', 502));
     await expect(run('--json-errors', 'send', file)).rejects.toThrow('exit 5');
@@ -144,6 +159,51 @@ describe('2xx bodies', () => {
     await expect(run('bulk-upload-status', 'b1')).rejects.toThrow('exit 5');
     expect(stderr()).toContain('Unexpected non-JSON response');
     expect(stdout()).toBe('');
+  });
+});
+
+describe('transport', () => {
+  const brokenBody = (status = 200) => new Response(new ReadableStream({ start(c) { c.error(new TypeError('terminated')); } }), { status });
+
+  it('a 2xx whose body cannot be read is a network failure (exit 5), not an empty success', async () => {
+    reply(brokenBody());
+    await expect(run('bulk-upload-status', 'b1')).rejects.toThrow('exit 5');
+    expect(stderr()).toContain('Network error: terminated');
+    expect(stdout()).toBe('');
+  });
+
+  it('an unreadable error body still reports the status', async () => {
+    reply(brokenBody(503));
+    await expect(run('bulk-upload-status', 'b1')).rejects.toThrow('exit 5');
+    expect(stderr()).toContain('HTTP 503');
+  });
+
+  it('passes a signal that really aborts, with and without AbortSignal.timeout', async () => {
+    process.env.CLEARVO_TIMEOUT_MS = '20';
+    const hang = (_u: string, init: RequestInit) => new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
+    global.fetch = vi.fn(hang) as unknown as typeof fetch;
+    try {
+      await expect(run('bulk-upload-status', 'b1')).rejects.toThrow('exit 5');
+      expect(stderr()).toContain('timed out after 20 ms');
+      errSpy.mockClear();
+      const original = (AbortSignal as unknown as { timeout?: unknown }).timeout;
+      (AbortSignal as unknown as { timeout?: unknown }).timeout = undefined;
+      try {
+        await expect(run('bulk-upload-status', 'b1')).rejects.toThrow('exit 5');
+        expect(stderr()).toContain('timed out after 20 ms');
+      } finally {
+        (AbortSignal as unknown as { timeout?: unknown }).timeout = original;
+      }
+    } finally {
+      delete process.env.CLEARVO_TIMEOUT_MS;
+    }
+  });
+
+  it('the default timeout is 140000 ms', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout');
+    reply(json({ ok: true }, 200));
+    await run('bulk-upload-status', 'b1');
+    expect(spy).toHaveBeenCalledWith(140000);
   });
 });
 
@@ -244,11 +304,20 @@ describe('tests run --wait', () => {
     expect(f).toHaveBeenCalledTimes(2);
   });
 
-  it('stops at --max-wait', async () => {
-    const f = vi.fn().mockResolvedValueOnce(json({ runId: 'r1', status: 'running' }, 202)).mockResolvedValue(json(runBody('running'), 200));
+  it('keeps polling until --max-wait is reached, then stops', async () => {
+    const f = vi.fn().mockResolvedValueOnce(json({ runId: 'r1', status: 'running' }, 202)).mockImplementation(async () => json(runBody('running'), 200));
     global.fetch = f as unknown as typeof fetch;
-    await expect(run('tests', 'run', '--wait', '--interval', '0', '--max-wait', '0')).rejects.toThrow('exit 5');
+    // 0.0008 minutes is about 48 ms; polling every 5 ms must go round several times before the deadline.
+    await expect(run('tests', 'run', '--wait', '--interval', '0.005', '--max-wait', '0.0008')).rejects.toThrow('exit 5');
+    expect(f.mock.calls.length).toBeGreaterThan(4);
     expect(stderr()).toContain('Timed out');
     expect(stderr()).toContain('clearvo tests status r1');
+  });
+
+  it('rejects a --max-wait that is not a number before starting the run', async () => {
+    const f = vi.fn();
+    global.fetch = f as unknown as typeof fetch;
+    await expect(run('tests', 'run', '--wait', '--max-wait', 'soon')).rejects.toThrow('exit 2');
+    expect(f).not.toHaveBeenCalled();
   });
 });

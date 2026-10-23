@@ -3,7 +3,10 @@ import { createHash } from 'crypto';
 import { homedir } from 'os';
 import { join, basename } from 'path';
 import { Command } from 'commander';
-import { errorToJson, exitCodeForStatus, failedRows, formatErrorLines, parseErrorResponse, readBody, isRetryableStatus } from './error-format';
+import { BodyReadError, errorToJson, exitCodeForStatus, failedRows, formatErrorLines, parseErrorResponse, readBody, isRetryableStatus, timeoutSignal } from './error-format';
+
+/** Just under the 150 s Azure Front Door cut; override with CLEARVO_TIMEOUT_MS (milliseconds, 0 = none). */
+const DEFAULT_TIMEOUT_MS = 140_000;
 import type { ParsedError } from './error-format';
 
 /** Exit codes: 0 success, 1 other failure, 2 usage, 3 auth (401/403), 4 validation (400/422), 5 server or network (5xx, timeout, no connection). */
@@ -107,7 +110,8 @@ export function createProgram(): Command {
       },
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
-    const read = await readBody(res);
+    // A 2xx whose body cannot be read (abort, reset, truncated stream) is a failure, not an empty success.
+    const read = await readBody(res).catch((e) => { throw e instanceof BodyReadError ? transportFailure(e, timeoutMsSetting()) : e; });
     if (!res.ok) throw new ApiFailure(parseErrorResponse(res, read));
     // 204 or an empty body: the call worked but there is nothing to print.
     if (res.status === 204 || read.text === '') return { ok: true, status: res.status };
@@ -119,20 +123,31 @@ export function createProgram(): Command {
   }
 
   /** fetch with a timeout; a network failure or timeout becomes an ApiFailure with status 0. */
+  function timeoutMsSetting(): number {
+    const n = Number(process.env.CLEARVO_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+    return Number.isFinite(n) && n >= 0 ? n : DEFAULT_TIMEOUT_MS;
+  }
+
   async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
-    const timeoutMs = Number(process.env.CLEARVO_TIMEOUT_MS ?? 120000);
+    const timeoutMs = timeoutMsSetting();
     try {
-      return await fetch(url, timeoutMs > 0 ? { ...init, signal: AbortSignal.timeout(timeoutMs) } : init);
+      return await fetch(url, timeoutMs > 0 ? { ...init, signal: timeoutSignal(timeoutMs) } : init);
     } catch (cause) {
-      const timedOut = cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
-      throw new ApiFailure({
-        status: 0,
-        code: timedOut ? 'TIMEOUT' : 'NETWORK_ERROR',
-        message: timedOut
-          ? `Request timed out after ${timeoutMs} ms; the operation may still have completed, check its status before retrying`
-          : `Network error: ${cause instanceof Error ? cause.message : String(cause)}`,
-      });
+      throw transportFailure(cause, timeoutMs);
     }
+  }
+
+  /** The status-0 ApiFailure for a failed fetch or an unreadable 2xx body. */
+  function transportFailure(cause: unknown, timeoutMs: number): ApiFailure {
+    const original = cause instanceof BodyReadError ? cause.cause : cause;
+    const timedOut = original instanceof Error && (original.name === 'TimeoutError' || original.name === 'AbortError');
+    return new ApiFailure({
+      status: 0,
+      code: timedOut ? 'TIMEOUT' : 'NETWORK_ERROR',
+      message: timedOut
+        ? `Request timed out after ${timeoutMs} ms; the operation may still have completed, check its status before retrying`
+        : `Network error: ${original instanceof Error ? original.message : String(original)}`,
+    });
   }
 
   /** Prints a failure and exits: 3 auth, 4 validation, 5 server or network, 1 other. */
@@ -159,8 +174,10 @@ export function createProgram(): Command {
 
   /** True with --json-errors, CLEARVO_JSON_ERRORS=1, or when stdout is not a terminal (a script or CI is reading). */
   function wantJsonErrors(): boolean {
-    return program.opts().jsonErrors === true || process.env.CLEARVO_JSON_ERRORS === '1' || !process.stdout.isTTY;
+    return jsonErrorsArg || program.opts().jsonErrors === true || process.env.CLEARVO_JSON_ERRORS === '1' || !process.stdout.isTTY;
   }
+  /** Set when --json-errors appeared anywhere on the command line (see the parseAsync wrapper below). */
+  let jsonErrorsArg = false;
 
   /** A GET that returns a file (CSV, XLSX, PDF/image) rather than JSON. Exits on a non-2xx response, printing the error like api(). */
   async function apiFile(path: string, extraHeaders?: Record<string, string>): Promise<Response> {
@@ -221,6 +238,18 @@ export function createProgram(): Command {
     // A usage error from the argument parser (unknown option, missing argument) exits 2, like the usage errors below. Set before the
     // sub-commands are created so they inherit it.
     .exitOverride((err) => { process.exit(err.exitCode === 0 ? 0 : EXIT_USAGE); });
+
+  // --json-errors works before or after the sub-command (`clearvo send f --json-errors`): a sub-command does not declare it, so it
+  // is taken out of the arguments here, before the parser sees them (anything after a `--` is left alone).
+  const parseAsyncOnProgram = program.parseAsync.bind(program);
+  program.parseAsync = ((argv?: readonly string[], parseOptions?: { from: 'node' | 'electron' | 'user' }) => {
+    const args = [...(argv ?? process.argv)];
+    const stop = args.indexOf('--');
+    const end = stop === -1 ? args.length : stop;
+    const kept = args.filter((a, i) => !(i < end && a === '--json-errors'));
+    jsonErrorsArg = kept.length !== args.length;
+    return parseAsyncOnProgram(kept, parseOptions);
+  }) as typeof program.parseAsync;
 
   // ── clearvo send <file> ───────────────────────────────────────────────────────
   // Hard cut: there is no `taxCode` field anywhere in the request — not on a
@@ -1176,6 +1205,11 @@ export function createProgram(): Command {
     .option('--json', 'Print JSON instead of a summary')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { name?: string; tag?: string[]; case?: string[]; deadlineMinutes?: string; idempotencyKey?: string; wait?: boolean; interval?: string; maxWait?: string; json?: boolean; pretty?: boolean }) => {
+      // Checked before the run is started, so a typo does not leave a run going that nobody waits for.
+      if (opts.maxWait !== undefined && !(Number.isFinite(Number(opts.maxWait)) && Number(opts.maxWait) >= 0)) {
+        console.error('Error: --max-wait must be a number of minutes, zero or more');
+        process.exit(EXIT_USAGE);
+      }
       const body: Record<string, unknown> = {};
       if (opts.name) body.name = opts.name;
       if (opts.tag?.length) body.tags = opts.tag;

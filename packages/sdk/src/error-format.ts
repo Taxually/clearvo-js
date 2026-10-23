@@ -2,8 +2,8 @@
 //
 // CANONICAL COPY: packages/sdk/src/error-format.ts. packages/cli/src/error-format.ts and
 // packages/mcp/src/error-format.ts are byte-identical copies (the three packages are published
-// independently, so they cannot import each other). packages/sdk/test/error-format-sync.test.ts
-// fails when a copy drifts: edit the SDK file, then copy it over the other two.
+// independently, so they cannot import each other). the "copies stay in sync" test in
+// packages/sdk/test/error-passthrough.test.ts fails when a copy drifts: edit the SDK file, then copy it over the other two.
 //
 // Pure functions only: no I/O, no dependencies.
 
@@ -62,11 +62,45 @@ function header(res: ResponseLike, name: string): string | undefined {
   }
 }
 
+/** The body of a 2xx response could not be read. `timedOut` is true for an abort or timeout. */
+export class BodyReadError extends Error {
+  readonly timedOut: boolean;
+  constructor(public readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'BodyReadError';
+    this.timedOut = cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
+  }
+}
+
+/**
+ * An AbortSignal that fires after `ms`. Uses AbortSignal.timeout where it exists (Node 17.3+, modern browsers) and an
+ * AbortController with an unref'd timer elsewhere (Node 16, React Native, older runtimes).
+ */
+export function timeoutSignal(ms: number): AbortSignal {
+  const native = (AbortSignal as unknown as { timeout?: (ms: number) => AbortSignal }).timeout;
+  if (typeof native === 'function') return native.call(AbortSignal, ms);
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    const reason = new Error('The operation timed out');
+    reason.name = 'TimeoutError';
+    controller.abort(reason);
+  }, ms) as unknown as { unref?: () => void };
+  timer.unref?.();
+  return controller.signal;
+}
+
 /** Reads a response body ONCE. `json` is set when the text parsed (a literal `null` stays `null`). */
 export async function readBody(res: ResponseLike): Promise<{ text: string; json?: unknown; isJson: boolean }> {
   let text = '';
   if (typeof res.text === 'function') {
-    try { text = await res.text(); } catch { text = ''; }
+    try {
+      text = await res.text();
+    } catch (cause) {
+      // A body that cannot be read on a 2xx (abort, reset, truncated stream) is a failure, never "success with nothing".
+      // On an error status the status line is the answer, so the read error is swallowed.
+      if (res.status >= 200 && res.status < 300) throw new BodyReadError(cause);
+      text = '';
+    }
   }
   if (text.trim() === '' && typeof res.json === 'function') {
     // A minimal Response stand-in (tests) that only offers json(), or text() that returns ''. On a real Response the
@@ -258,16 +292,13 @@ export function failedRows(body: unknown): Array<Record<string, unknown>> {
 }
 
 /**
- * True when a 2xx body is really a failure: `ok === false`, or a top-level `error` or `code` (a successful body has
- * neither). Per-row ERRORED / NEEDS_INFO outcomes of a bulk SUBMIT are checked separately with {@link failedRows}: a
- * tool that merely lists rows must not turn an error row into a failed call.
+ * True when a 2xx body is a failure: `ok === false`. Deliberately nothing broader: a top-level `error` or `code` can sit
+ * in a correct result (a FAILED batch status read, a validation result, a test-run record). Per-row ERRORED / NEEDS_INFO
+ * outcomes of a bulk SUBMIT are checked separately with {@link failedRows}: a tool that merely lists rows must not turn
+ * an error row into a failed call.
  */
 export function isFailureBody(body: unknown): boolean {
-  if (!isRecord(body)) return false;
-  if (body.ok === false) return true;
-  if (body.error !== undefined && body.error !== null && body.error !== '') return true;
-  // A bare `code` also names real records (a tax code, a rule code), so it only counts next to a `message` and with no `id`.
-  return body.ok !== true && typeof body.code === 'string' && body.code !== '' && typeof body.message === 'string' && body.id === undefined;
+  return isRecord(body) && body.ok === false;
 }
 
 /**
@@ -279,12 +310,7 @@ export function formatErrorLines(e: ParsedError): string[] {
   if (e.code) out.push(`Code: ${e.code}`);
   if (e.field) out.push(`Field: ${e.field}`);
   if (e.hint) out.push(`Hint: ${e.hint}`);
-  const issues = collectFieldIssues(e.body);
-  // The message already lists up to 25 of them; print the list again so each is on its own line.
-  if (issues.length > 0) {
-    out.push('Field errors:');
-    for (const l of fieldErrorLines(issues)) out.push(`  - ${l}`);
-  }
+  // Field errors are already in the message (up to 25): not printed a second time.
   const entries = errorEntryLines(e.errors);
   if (entries.length > 0) {
     out.push('Errors:');
@@ -302,6 +328,7 @@ export function errorToJson(e: ParsedError): Record<string, unknown> {
     status: e.status,
     code: e.code,
     message: e.message,
+    field: e.field,
     hint: e.hint,
     details: e.details,
     issues: e.issues ?? (collectFieldIssues(e.body).length > 0 ? collectFieldIssues(e.body) : undefined),
@@ -309,6 +336,8 @@ export function errorToJson(e: ParsedError): Record<string, unknown> {
     requestId: e.requestId,
     retryAfter: e.retryAfter,
     rawBody: e.rawBody,
+    // The whole parsed body, so a piped caller loses nothing (existingId, reason, filesWithErrors, contactUrl, currentVersion, ...).
+    body: e.body,
   };
   for (const k of Object.keys(j)) if (j[k] === undefined) delete j[k];
   return j;

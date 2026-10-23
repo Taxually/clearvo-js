@@ -156,6 +156,57 @@ describe('network behaviour', () => {
     expect((f.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('the default timeout passed to AbortSignal.timeout is 140000 ms; timeoutMs and a per-call timeoutMs override it', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout');
+    mockSeq(json({ ok: true }, 200), json({ ok: true }, 200), json({ id: '1', ok: true, outcome: 'CLEARED' }, 200));
+    await client().listFilings();
+    expect(spy).toHaveBeenLastCalledWith(140000);
+    await client({ timeoutMs: 5000 }).listFilings();
+    expect(spy).toHaveBeenLastCalledWith(5000);
+    await client().submitInvoice({} as never, undefined, { timeoutMs: 200000 });
+    expect(spy).toHaveBeenLastCalledWith(200000);
+    spy.mockRestore();
+  });
+
+  const hang = (_u: unknown, init: RequestInit) => new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
+
+  it('a short timeoutMs really aborts a fetch that never answers', async () => {
+    global.fetch = vi.fn(hang) as unknown as typeof fetch;
+    const err = await fail(client({ timeoutMs: 20 }).listFilings());
+    expect(err.status).toBe(0);
+    expect(err.code).toBe('TIMEOUT');
+  });
+
+  it('works without AbortSignal.timeout (older runtimes) through an AbortController fallback', async () => {
+    const original = (AbortSignal as unknown as { timeout?: unknown }).timeout;
+    (AbortSignal as unknown as { timeout?: unknown }).timeout = undefined;
+    try {
+      global.fetch = vi.fn(hang) as unknown as typeof fetch;
+      const err = await fail(client({ timeoutMs: 20 }).listFilings());
+      expect(err.code).toBe('TIMEOUT');
+    } finally {
+      (AbortSignal as unknown as { timeout?: unknown }).timeout = original;
+    }
+  });
+
+  it('a 2xx whose body cannot be read is NETWORK_ERROR, not an empty success; an unreadable error body keeps the status', async () => {
+    const broken = (status: number) => new Response(new ReadableStream({ start(c) { c.error(new TypeError('terminated')); } }), { status });
+    mockSeq(broken(200));
+    const err = await fail(client().listFilings());
+    expect(err.status).toBe(0);
+    expect(err.code).toBe('NETWORK_ERROR');
+    expect(err.message).toContain('terminated');
+    mockSeq(broken(503));
+    const e2 = await fail(client().listFilings());
+    expect(e2.status).toBe(503);
+  });
+
+  it('an aborted body read on a 2xx is TIMEOUT', async () => {
+    const aborted = new Response(new ReadableStream({ start(c) { c.error(Object.assign(new Error('aborted'), { name: 'AbortError' })); } }), { status: 200 });
+    mockSeq(aborted);
+    expect((await fail(client().listFilings())).code).toBe('TIMEOUT');
+  });
+
   it('does not retry by default', async () => {
     const f = mockSeq(json({ error: 'busy' }, 503), json({ ok: true }, 200));
     await fail(client().listFilings());

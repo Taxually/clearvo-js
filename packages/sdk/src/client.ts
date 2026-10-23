@@ -197,12 +197,26 @@ import type {
   FilingUploadTemplateFormat,
 } from './types.js';
 import { ClearvoError, isRejected } from './types.js';
-import { parseErrorResponse, parseRetryAfter, readBody } from './error-format.js';
+import { BodyReadError, parseErrorResponse, parseRetryAfter, readBody, timeoutSignal } from './error-format.js';
 import type { ClearvoErrorBody } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+// Just under the 150 s Azure Front Door cut, so a slow call still gets the API's own answer.
+const DEFAULT_TIMEOUT_MS = 140_000;
+
+/** The ClearvoError (status 0, TIMEOUT or NETWORK_ERROR, cause kept) for a failed fetch or an unreadable body. */
+function transportError(cause: unknown, timeoutMs: number): ClearvoError {
+  const original = cause instanceof BodyReadError ? cause.cause : cause;
+  const timedOut = original instanceof Error && (original.name === 'TimeoutError' || original.name === 'AbortError');
+  return new ClearvoError(
+    0,
+    timedOut
+      ? `Request timed out after ${timeoutMs} ms; the operation may still have completed, check its status before retrying`
+      : `Network error: ${original instanceof Error ? original.message : String(original)}`,
+    undefined, undefined, timedOut ? 'TIMEOUT' : 'NETWORK_ERROR', undefined, undefined, { cause: original },
+  );
+}
 const MAX_RETRY_DELAY_MS = 30_000;
 
 /** Builds the multipart/form-data body submitInvoicesBulk(Async) send to POST /v1/send/bulk — a single 'file' field carrying the raw CSV text, same field name the route expects. */
@@ -240,7 +254,7 @@ export class ClearvoClient {
    * NETWORK_ERROR or TIMEOUT, `cause` kept), and, when `maxRetries` is set, retries of 429 / 503 / network failures for
    * calls that are safe to repeat (GET, or a write carrying an idempotency key). A non-idempotent write is never retried.
    */
-  private async fetchWithPolicy(method: string, url: string, init: RequestInit): Promise<Response> {
+  private async fetchWithPolicy(method: string, url: string, init: RequestInit, timeoutMs: number = this.timeoutMs): Promise<Response> {
     const headers = (init.headers ?? {}) as Record<string, string>;
     const idempotent = method === 'GET' || Object.keys(headers).some(k => k.toLowerCase() === 'x-idempotency-key');
     const retries = idempotent ? this.maxRetries : 0;
@@ -248,16 +262,9 @@ export class ClearvoClient {
       let response: Response | undefined;
       let failure: ClearvoError | undefined;
       try {
-        response = await fetch(url, this.timeoutMs > 0 ? { ...init, signal: AbortSignal.timeout(this.timeoutMs) } : init);
+        response = await fetch(url, timeoutMs > 0 ? { ...init, signal: timeoutSignal(timeoutMs) } : init);
       } catch (cause) {
-        const timedOut = cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
-        failure = new ClearvoError(
-          0,
-          timedOut
-            ? `Request timed out after ${this.timeoutMs} ms; the operation may still have completed, check its status before retrying`
-            : `Network error: ${cause instanceof Error ? cause.message : String(cause)}`,
-          undefined, undefined, timedOut ? 'TIMEOUT' : 'NETWORK_ERROR', undefined, undefined, { cause },
-        );
+        failure = transportError(cause, timeoutMs);
       }
       if (response && !(attempt < retries && (response.status === 429 || response.status === 503))) return response;
       if (failure && attempt >= retries) throw failure;
@@ -272,7 +279,8 @@ export class ClearvoClient {
     method: string,
     path: string,
     body?: unknown,
-    extraHeaders?: Record<string, string>
+    extraHeaders?: Record<string, string>,
+    opts: { timeoutMs?: number } = {}
   ): Promise<T> {
     // FormData (e.g. bulk CSV upload) must not get a JSON Content-Type or be stringified —
     // fetch sets the correct multipart boundary itself when the body is a FormData instance,
@@ -287,11 +295,12 @@ export class ClearvoClient {
         ...extraHeaders,
       },
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
-    });
+    }, opts.timeoutMs ?? this.timeoutMs);
 
     if (!response.ok) throw await this.errorFrom(response);
 
-    const read = await readBody(response);
+    // A 2xx whose body cannot be read (abort, reset, truncated stream) is a failure, not an empty success.
+    const read = await readBody(response).catch((e) => { throw e instanceof BodyReadError ? transportError(e, opts.timeoutMs ?? this.timeoutMs) : e; });
     // 204, or an empty body: nothing to parse, but the call succeeded.
     if (response.status === 204 || read.text === '') return { ok: true, status: response.status } as T;
     // A 2xx that is not JSON (an HTML page from a proxy, plain text) must not pass for success.
@@ -349,7 +358,7 @@ export class ClearvoClient {
   async submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string, options: SubmitInvoiceOptions = {}): Promise<SendResult> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;
-    const result = await this.request<SendResult>('POST', '/send', input, headers);
+    const result = await this.request<SendResult>('POST', '/send', input, headers, { timeoutMs: options.timeoutMs });
     if ((options.throwOnRejected ?? this.throwOnRejected) && isRejected(result)) throw this.rejectionError(result);
     return result;
   }
