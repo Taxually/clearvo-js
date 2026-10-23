@@ -4,6 +4,10 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — rule outcome `clearanceStatus` (backend change deploys with the next release)
+
+- CLI: `rules create` and `rules update` take `--clearance-status REJECTED|NEEDS_INFO|EXCLUDED` (what a matched ERROR rule makes of the document; EXCLUDED skips it). The MCP tool schemas for `create_rule`/`update_rule` list it too.
+
 ## Unreleased — integration tests (backend routes ship with the Integration Passport Stage 3 release)
 
 - SDK: `startTestRun`, `getTestRun`, `listTestRuns`, `listTestCases`, `createTestCase`, `updateTestCase`, `archiveTestCase`, `getTestCaseCatalogue` (`/v1/test-runs`, `/v1/test-cases`, sandbox key only).
