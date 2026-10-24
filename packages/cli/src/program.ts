@@ -897,7 +897,7 @@ export function createProgram(): Command {
     .requiredOption('--iban <iban>', 'IBAN — format/checksum-validated before storing')
     .option('--currency <code>', 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.')
     .option('--bic <bic>', 'BIC')
-    .option('--account-holder-name <name>', 'Dashboard display only — never rendered onto an invoice')
+    .option('--account-holder-name <name>', 'Name of the account holder. Printed as the payee account name (BT-85) on invoices that use this account when the caller sends no iban')
     .option('--entity <entityId>', 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
