@@ -2,7 +2,7 @@
 'use strict';
 
 // Coverage for the integration-test tools: asserts the MCP server's tools/list
-// contains the seven test-run / test-case tools (names shared with the hosted
+// contains the eight test-run / test-case tools (names shared with the hosted
 // connector's lib/mcp/tools.ts) plus the two sandbox simulators, that each
 // carries the "not a certification" disclaimer, and that the input schemas list
 // exactly the route body fields. Spawn-and-JSON-RPC like verify-supplier-tools.js.
@@ -52,6 +52,7 @@ const timeout = setTimeout(() => fail('Timed out waiting for a tools/list respon
 const REQUIRED = {
   start_test_run: ['name', 'tags', 'caseIds', 'deadlineMinutes'],
   get_test_run: ['runId'],
+  export_test_run: ['runId'],
   list_test_runs: [],
   list_test_cases: [],
   create_test_case: ['title', 'steps', 'expected', 'description', 'check', 'appliesWhen'],

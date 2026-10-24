@@ -46,6 +46,15 @@ describe('ClearvoClient integration tests', () => {
     expect(init.method).toBe('GET');
   });
 
+  it('exportTestRun reads /test-runs/{id}/export with the id encoded', async () => {
+    const record = { format: 'test-run-record', version: 1, run: { runId: 'a/b' }, cases: [] };
+    const f = mock(record);
+    expect(await client().exportTestRun('a/b')).toEqual(record);
+    const [url, init] = f.mock.calls[0] as Call;
+    expect(url).toBe('http://x/v1/test-runs/a%2Fb/export');
+    expect(init.method).toBe('GET');
+  });
+
   it('listTestRuns and listTestCases are GETs', async () => {
     const f = mock({ runs: [], cases: [] });
     await client().listTestRuns();

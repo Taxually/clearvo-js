@@ -44,7 +44,7 @@ const READ_ONLY = new Set<string>([
   'list_platform_rule_changes', 'list_rule_property_definitions', 'list_rule_templates', 'get_rule_template',
   'list_field_mappings', 'list_rules_engine_datasets', 'get_rules_engine_dataset', 'list_rules_engine_dataset_rows',
   'query_data', 'simulate_rule', 'quote_duties', 'estimate_duties', 'get_import_settlement',
-  'get_test_run', 'list_test_runs', 'list_test_cases', 'get_test_case_catalogue',
+  'get_test_run', 'export_test_run', 'list_test_runs', 'list_test_cases', 'get_test_case_catalogue',
   // Filings (GET routes).
   'get_registration_filing_setup', 'list_filings', 'get_filing', 'list_filing_change_requests', 'get_filing_bank_account',
   'list_filing_setups', 'list_filing_upload_months', 'get_filing_upload_month', 'get_filing_upload_error_report', 'get_filing_upload_template',

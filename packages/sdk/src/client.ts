@@ -54,6 +54,7 @@ import type {
   StartTestRunInput,
   StartTestRunResponse,
   TestRun,
+  TestRunRecord,
   ListTestRunsResponse,
   ListTestCasesResponse,
   CreateTestCaseInput,
@@ -605,6 +606,11 @@ export class ClearvoClient {
   /** One run: status (queued, running, waiting, passed, failed or cancelled), counts and each test's outcome. */
   getTestRun(runId: string): Promise<TestRun> {
     return this.request('GET', `/test-runs/${encodeURIComponent(runId)}`);
+  }
+
+  /** The record of one run to keep: per test what was expected, what was observed and whether they matched, with the test version, evidence ids and a content digest. No bodies are kept. */
+  exportTestRun(runId: string): Promise<TestRunRecord> {
+    return this.request('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
   }
 
   listTestRuns(): Promise<ListTestRunsResponse> {

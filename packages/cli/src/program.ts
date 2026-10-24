@@ -1112,6 +1112,21 @@ export function createProgram(): Command {
       else printRunSummary(run);
     });
 
+  tests
+    .command('export <runId>')
+    .description('Export the record of one test run to keep (JSON): what each test expected, what was observed, the test version and a content digest')
+    .option('--out <file>', 'Write the record to this file instead of printing it')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (runId: string, opts: { out?: string; pretty?: boolean }) => {
+      const record = await api('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
+      if (opts.out) {
+        writeFileSync(opts.out, JSON.stringify(record, null, 2));
+        console.log(opts.out);
+      } else {
+        print(record, !!opts.pretty);
+      }
+    });
+
   const testCases = tests.command('cases').description('The tests you can run: standard ones and your own');
 
   testCases

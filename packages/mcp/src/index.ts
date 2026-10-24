@@ -1899,6 +1899,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'export_test_run',
+    description:
+      'Export the record of one test run to keep: for every test, what it expected, what was actually observed and whether the two matched, with the version of the test, the ids behind each result and a digest of the content. ' +
+      'No request or document bodies are kept. A test marked done by hand says so and never counts towards a pass.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { runId: { type: 'string', description: 'The runId returned by start_test_run or list_test_runs' } },
+      required: ['runId'],
+    },
+  },
+  {
     name: 'list_test_runs',
     description: 'List your recent test runs, newest first (up to 50), each with its status and counts.' + TEST_DISCLAIMER,
     inputSchema: { type: 'object' as const, properties: {} },
@@ -4414,6 +4425,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'get_test_run':
       return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}`);
+
+    case 'export_test_run':
+      return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}/export`);
 
     case 'list_test_runs':
       return callApi('GET', '/test-runs');
