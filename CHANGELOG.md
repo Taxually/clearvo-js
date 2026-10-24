@@ -4,6 +4,12 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — held-for-unmapped-tax-code invoices have no country (backend change deploys with the next release)
+
+- A document held for an unmapped tax code (`HELD_UNMAPPED_TAX_CODE`) has no tax treatment, so no mandate and no country: `country` (and `transactionId` on list and detail) is `null` until the code is mapped, on `/v1/send`, on an idempotent replay, and on `listInvoices`/`getInvoice`; the `country` filter never matches it.
+- SDK: `SendResult.country` and the typed `InvoiceRecordTimestamps` fields `country`/`transactionId` are `string | null`; `UnmappedTaxCodeReason` gains optional `codeName` (e.g. `Poland VAT`) and `codeRate` (percent, e.g. `23`), filled when the source system can name the code (Xero tax rates).
+- MCP: `list_invoices` and `submit_invoice` descriptions say the same. CLI: no change (it prints the JSON as returned).
+
 ## Unreleased — rule outcome `clearanceStatus` (backend change deploys with the next release)
 
 - CLI: `rules create` and `rules update` take `--clearance-status REJECTED|NEEDS_INFO|EXCLUDED` (what a matched ERROR rule makes of the document; EXCLUDED skips it). The MCP tool schemas for `create_rule`/`update_rule` list it too.
