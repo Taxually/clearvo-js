@@ -2,7 +2,7 @@
 'use strict';
 
 // Coverage for the integration-test tools: asserts the MCP server's tools/list
-// contains the eight test-run / test-case tools (names shared with the hosted
+// contains the ten test-run / test-case tools (names shared with the hosted
 // connector's lib/mcp/tools.ts) plus the two sandbox simulators, that each
 // carries the "not a certification" disclaimer, and that the input schemas list
 // exactly the route body fields. Spawn-and-JSON-RPC like verify-supplier-tools.js.
@@ -57,6 +57,8 @@ const REQUIRED = {
   list_test_cases: [],
   create_test_case: ['title', 'steps', 'expected', 'description', 'check', 'appliesWhen'],
   archive_test_case: ['caseId'],
+  skip_test_case: ['caseId'],
+  unskip_test_case: ['caseId'],
   get_test_case_catalogue: [],
 };
 const NEEDS_DISCLAIMER = Object.keys(REQUIRED);

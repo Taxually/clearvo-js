@@ -5397,6 +5397,8 @@ export interface TestRunSummary {
   selfAttested: number;
   required: number;
   requiredPassed: number;
+  requiredExcluded: number;
+  skipped: number;
 }
 
 export interface TestRunCaseResult {
@@ -5489,12 +5491,19 @@ export interface TestCase {
   scope: TestCaseScope;
   required: boolean;
   tags: string[];
+  /** True when you skipped this test: it is not run and counts nowhere. */
+  skipped: boolean;
   applicable: boolean;
   notApplicableReason: string | null;
   /** `auto` = the platform checks it; `attest_only` = you mark it done by hand in the dashboard. */
   verifiability: 'auto' | 'attest_only';
   steps: string[];
   expected: string;
+}
+
+export interface TestCaseSkipResult {
+  caseId: string;
+  skipped: boolean;
 }
 
 export interface ListTestCasesResponse {

@@ -1949,6 +1949,26 @@ const TOOLS = [
     },
   },
   {
+    name: 'skip_test_case',
+    description:
+      'Skip a test you do not need, for example a sale at a reduced rate when you sell at none. A skipped test is not run, counts nowhere and never blocks a result, ' +
+      'and every run and export lists it as skipped so a pass always says what was left out. Undo it with unskip_test_case.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'unskip_test_case',
+    description: 'Put a skipped test back, so new runs include it again.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
     name: 'get_test_case_catalogue',
     description: 'List the closed choices for adding a test: the checks and their settings, who a test can apply to, and the limits.' + TEST_DISCLAIMER,
     inputSchema: { type: 'object' as const, properties: {} },
@@ -4440,6 +4460,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'archive_test_case':
       return callApi('DELETE', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}`);
+
+    case 'skip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: true });
+
+    case 'unskip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: false });
 
     case 'get_test_case_catalogue':
       return callApi('GET', '/test-cases/catalogue');

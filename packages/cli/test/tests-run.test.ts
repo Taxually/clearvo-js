@@ -138,6 +138,20 @@ describe('clearvo tests', () => {
     expect(f.mock.calls[0][1].method).toBe('DELETE');
   });
 
+  it('skip and unskip PUT /test-cases/{id}/skip with the boolean body and print the result', async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(res({ caseId: 'a/b', skipped: true }))
+      .mockResolvedValueOnce(res({ caseId: 'a/b', skipped: false }));
+    global.fetch = f as unknown as typeof fetch;
+    await sub(createProgram(), 'tests', 'skip').parseAsync(['a/b'], { from: 'user' });
+    await sub(createProgram(), 'tests', 'unskip').parseAsync(['a/b'], { from: 'user' });
+    expect(f.mock.calls[0][0]).toBe('http://x/v1/test-cases/a%2Fb/skip');
+    expect(f.mock.calls[0][1].method).toBe('PUT');
+    expect(JSON.parse(f.mock.calls[0][1].body)).toEqual({ skipped: true });
+    expect(JSON.parse(f.mock.calls[1][1].body)).toEqual({ skipped: false });
+    expect(logSpy.mock.calls.flat().join('\n')).toContain('"skipped"');
+  });
+
   it('export GETs /test-runs/{id}/export with the id encoded and prints the record', async () => {
     const record = { format: 'test-run-record', version: 1, cases: [] };
     const f = vi.fn().mockResolvedValue(res(record));

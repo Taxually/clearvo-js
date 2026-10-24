@@ -60,6 +60,7 @@ import type {
   CreateTestCaseInput,
   UpdateTestCaseInput,
   TestCaseWriteResponse,
+  TestCaseSkipResult,
   TestCaseCatalogue,
   TestWebhookResponse,
   CreateWebhookResponse,
@@ -633,6 +634,16 @@ export class ClearvoClient {
   /** Removes one of your own tests from new runs; past runs keep showing it. */
   archiveTestCase(caseId: string): Promise<{ id: string; archived: true }> {
     return this.request('DELETE', `/test-cases/${encodeURIComponent(caseId)}`);
+  }
+
+  /** Skips a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped. */
+  skipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true });
+  }
+
+  /** Puts a skipped test back so new runs include it again. */
+  unskipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false });
   }
 
   /** The closed choices for adding a test: checks and their settings, who it applies to, and the limits. */

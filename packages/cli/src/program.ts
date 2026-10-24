@@ -1160,6 +1160,22 @@ export function createProgram(): Command {
       print(await api('POST', '/test-cases', body), !!opts.pretty);
     });
 
+  tests
+    .command('skip <caseId>')
+    .description('Skip a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true }), !!opts.pretty);
+    });
+
+  tests
+    .command('unskip <caseId>')
+    .description('Put a skipped test back so new runs include it again')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false }), !!opts.pretty);
+    });
+
   testCases
     .command('archive <caseId>')
     .description('Remove one of your own tests from new runs (past runs keep showing it)')

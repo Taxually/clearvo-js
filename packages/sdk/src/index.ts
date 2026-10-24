@@ -382,5 +382,6 @@ export type {
   CreateTestCaseInput,
   UpdateTestCaseInput,
   TestCaseWriteResponse,
+  TestCaseSkipResult,
   TestCaseCatalogue,
 } from './types.js';
