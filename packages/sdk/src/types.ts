@@ -5397,6 +5397,8 @@ export interface TestRunSummary {
   selfAttested: number;
   required: number;
   requiredPassed: number;
+  requiredExcluded: number;
+  skipped: number;
 }
 
 export interface TestRunCaseResult {
@@ -5430,6 +5432,52 @@ export interface TestRun {
   disclaimer: string;
 }
 
+export type TestRunComparison = 'match' | 'mismatch' | 'undecided';
+
+export interface TestRunRecordCase {
+  caseId: string;
+  caseVersion: number;
+  /** sha256 hex of the test's definition. */
+  definitionHash: string;
+  title: string;
+  group: string;
+  scope: TestCaseScope;
+  required: boolean;
+  expected: string;
+  actual: string;
+  comparison: TestRunComparison;
+  outcome: 'passed' | 'failed' | 'waiting' | 'not_run';
+  verification: TestCaseVerification;
+  reasonCode: string | null;
+  attempt: number;
+  firedAt: string | null;
+  resolvedAt: string | null;
+  /** Ids and metadata only. */
+  evidence: Record<string, unknown>;
+}
+
+/** The record of one test run to keep (GET /test-runs/{id}/export). */
+export interface TestRunRecord {
+  format: 'test-run-record';
+  version: number;
+  environment: 'sandbox';
+  run: {
+    runId: string;
+    name: string;
+    status: TestRunStatus;
+    startedAt: string | null;
+    completedAt: string | null;
+    summary: TestRunSummary;
+  };
+  cases: TestRunRecordCase[];
+  notApplicable: Array<{ caseId: string; title: string; reason: string }>;
+  disclaimer: string;
+  bodiesNote: string;
+  /** sha256 hex of the record's content. */
+  contentDigest: string;
+  exportedAt: string;
+}
+
 export interface ListTestRunsResponse {
   runs: Array<Partial<TestRun> & { runId: string; name: string; status: TestRunStatus }>;
   disclaimer?: string;
@@ -5443,12 +5491,19 @@ export interface TestCase {
   scope: TestCaseScope;
   required: boolean;
   tags: string[];
+  /** True when you skipped this test: it is not run and counts nowhere. */
+  skipped: boolean;
   applicable: boolean;
   notApplicableReason: string | null;
   /** `auto` = the platform checks it; `attest_only` = you mark it done by hand in the dashboard. */
   verifiability: 'auto' | 'attest_only';
   steps: string[];
   expected: string;
+}
+
+export interface TestCaseSkipResult {
+  caseId: string;
+  skipped: boolean;
 }
 
 export interface ListTestCasesResponse {
