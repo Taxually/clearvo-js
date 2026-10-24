@@ -543,7 +543,8 @@ const TOOLS = [
       '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held NEEDS_INFO ' +
       'asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode. An unrecognised ' +
       'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
-      'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
+      'machine-readable reason until the code is configured; such a held document has no mandate and no country yet, so `country` is null on the response ' +
+      '(and on a replay) and `reason` carries optional `codeName` and `codeRate` (percent) when the source system can name the code, e.g. a Xero tax rate. Set dryRun=true to preview each line\'s resolved ' +
       'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
     inputSchema: {
       type: 'object' as const,
@@ -1621,6 +1622,7 @@ const TOOLS = [
     description:
       'List invoices previously submitted through Clearvo. ' +
       'Filter by country, clearance status, or date. ' +
+      'An invoice held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
       'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), clearance status labels, and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +

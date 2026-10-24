@@ -178,6 +178,11 @@ export interface SendResult {
    */
   warnings?: Array<{ code: string; message?: string; [k: string]: unknown }>;
   message?: string;
+  /**
+   * The country the document was routed to. Null for HELD_UNMAPPED_TAX_CODE (also on an idempotent replay): a held document has no
+   * tax treatment, so no mandate and no country until its tax code is mapped.
+   */
+  country?: string | null;
   /** Present only when status is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
   errorCode?: string;
   /** Present only when status is HELD_UNMAPPED_TAX_CODE — the machine-readable diagnostic for which code wasn't configured and where to fix it. */
@@ -770,6 +775,10 @@ export interface UnmappedTaxCodeReason {
   direction: 'sale' | 'purchase' | null;
   /** Dashboard deep link, pre-filled, for configuring this code. */
   deepLink: string;
+  /** The name the source system shows for the code (Xero: the tax rate's name, e.g. 'Poland VAT'). Absent when the connector cannot name it. */
+  codeName?: string | null;
+  /** The rate in percent (23 for 23%) the source system holds for the code. Absent when unknown. */
+  codeRate?: number | null;
 }
 
 /** IN_FLIGHT: Clearvo is working on it. WAIT_MERCHANT: you can fix it (never expires). WAIT_PLATFORM: Clearvo resolves it. DONE_OK / DONE_REJECTED / DONE_NA: finished. */
@@ -871,6 +880,13 @@ export interface ReceivedInvoiceFields {
 
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
 export interface InvoiceRecordTimestamps {
+  /**
+   * Null while the invoice is held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE): the tax code decides the tax treatment and the
+   * treatment decides the mandate, so until the code is mapped the invoice has no country. The `country` filter on listInvoices never matches it.
+   */
+  country?: string | null;
+  /** Parent compliance-mandate transaction id; null until one is resolved, and always null while the invoice is held for an unmapped tax code. */
+  transactionId?: string | null;
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
