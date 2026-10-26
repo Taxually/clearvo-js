@@ -4,6 +4,12 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — one exchange rate field for every country (backend change deploys with the next release)
+
+- An invoice whose currency differs from the currency its tax is reported in is no longer stopped with `TAX_REPORTING_CONVERSION_MISSING`. Without `exchangeRate` or `taxReporting` it is sent with the warning `MISSING_EXCHANGE_RATE` (raised only when a line carries tax). Hungary still needs the rate for a non-HUF invoice: `MISSING_EXCHANGE_RATE_REQUIRED`, stored NEEDS_INFO.
+- `countrySpecific.hu.exchangeRate` is a deprecated alias of the top-level `exchangeRate` (the top-level value wins). `MISSING_HU_EXCHANGE_RATE` and `INVALID_HU_EXCHANGE_RATE` are retired; a non-positive rate fails `INVALID_EXCHANGE_RATE`. A null `exchangeRate` counts as not sent.
+- SDK: doc comments on `SubmitInvoiceInput.taxReportingCurrency`, `exchangeRate` and `countrySpecific` updated. MCP: `submit_invoice` description updated. CLI: no change (bulk CSV already uses the generic `exchangeRate` column).
+
 ## Unreleased — held-for-unmapped-tax-code invoices have no country (backend change deploys with the next release)
 
 - A document held for an unmapped tax code (`HELD_UNMAPPED_TAX_CODE`) has no tax treatment, so no mandate and no country: `country` (and `transactionId` on list and detail) is `null` until the code is mapped, on `/v1/send`, on an idempotent replay, and on `listInvoices`/`getInvoice`; the `country` filter never matches it.

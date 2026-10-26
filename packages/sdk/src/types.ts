@@ -497,8 +497,10 @@ export interface SubmitInvoiceInput {
    * transaction whose jurisdiction reports in RON). Omit to let it resolve
    * automatically from the transaction's own tax jurisdiction; only set it to
    * override that. When the resolved reporting currency differs from
-   * `currency`, you must also supply `exchangeRate` or `taxReporting`
-   * below, or the call fails with 422 `TAX_REPORTING_CONVERSION_MISSING` —
+   * `currency`, you should also supply `exchangeRate` or `taxReporting`
+   * below — without one the invoice is still sent with the warning
+   * `MISSING_EXCHANGE_RATE`, except where the authority needs the conversion
+   * (Hungary: `MISSING_EXCHANGE_RATE_REQUIRED`, stored NEEDS_INFO, stops it).
    * Clearvo never fetches or computes an exchange rate itself.
    */
   taxReportingCurrency?: string;
@@ -506,7 +508,8 @@ export interface SubmitInvoiceInput {
    * `currency` -> `taxReportingCurrency` rate, applied uniformly to every
    * total (subtotal, tax-exclusive amount, tax total, grand total). Mutually
    * exclusive with `taxReporting` — 422
-   * `EXCHANGE_RATE_AND_TAX_REPORTING_BOTH_SUPPLIED` if both are sent.
+   * `EXCHANGE_RATE_AND_TAX_REPORTING_BOTH_SUPPLIED` if both are sent. The one
+   * exchange rate field for every country; a null value counts as not sent.
    */
   exchangeRate?: number;
   /**
@@ -610,8 +613,10 @@ export interface SubmitInvoiceInput {
    *   the AEAT VeriFactu system under the same Spanish tax number. Set
    *   `es_tax_territory` on the Spanish registration (see
    *   {@link UpdateRegistrationInput}); Clearvo does not file IGIC returns.
-   * - `hu.exchangeRate` — exchange rate to HUF for this invoice date.
-   *   Required whenever `currency` is not HUF.
+   * - `hu.exchangeRate` — DEPRECATED alias of the top-level `exchangeRate`;
+   *   send `exchangeRate` instead (it wins if both are sent). Hungary still
+   *   needs the rate to HUF whenever `currency` is not HUF
+   *   (`MISSING_EXCHANGE_RATE_REQUIRED`, NEEDS_INFO, if it is missing).
    * - `hu.invoiceAppearance` — one of PAPER/ELECTRONIC/EDI/UNKNOWN, overriding
    *   the default appearance (PAPER for a resolved PRIVATE_PERSON customer,
    *   ELECTRONIC otherwise).
