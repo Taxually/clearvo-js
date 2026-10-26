@@ -600,7 +600,7 @@ export interface SubmitInvoiceInput {
   despatchReference?: string;
   /** BT-15 receiving advice reference. Not written for the Peppol PINT profiles. */
   receivingReference?: string;
-  /** BT-19 the buyer's accounting reference. Not written for the Peppol PINT profiles. */
+  /** BT-19 the customer's accounting reference. Not written for the Peppol PINT profiles. */
   accountingReference?: string;
   /** BG-14 the period the invoice covers (BT-73/74), YYYY-MM-DD. Not written for the Peppol PINT profiles. */
   invoicePeriod?: { start?: string; end?: string };

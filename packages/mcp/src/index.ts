@@ -725,7 +725,7 @@ const TOOLS = [
         projectReference: { type: 'string', description: 'BT-11 — the project the invoice belongs to. Written into UBL invoices and CII documents; a UBL credit note has no element for it. Not written for the Peppol PINT profiles.' },
         despatchReference: { type: 'string', description: 'BT-16 — the despatch advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
         receivingReference: { type: 'string', description: 'BT-15 — the receiving advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
-        accountingReference: { type: 'string', description: 'BT-19 — the buyer\'s accounting reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        accountingReference: { type: 'string', description: 'BT-19 — the customer\'s accounting reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
         invoicePeriod: {
           type: 'object',
           description: 'BG-14 — the period the invoice covers (BT-73 start, BT-74 end). Not written for the Peppol PINT profiles.',
