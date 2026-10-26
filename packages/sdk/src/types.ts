@@ -592,6 +592,18 @@ export interface SubmitInvoiceInput {
    */
   correctsInvoiceId?: string;
   customerReference?: string;
+  /** BT-12 contract reference (at most 200 characters; Italy: 20). Not written for the Peppol PINT profiles (AU, NZ, SG, JP). */
+  contractReference?: string;
+  /** BT-11 project reference. Written into UBL invoices and CII documents, not a UBL credit note or a PINT profile. */
+  projectReference?: string;
+  /** BT-16 despatch advice reference. Not written for the Peppol PINT profiles. */
+  despatchReference?: string;
+  /** BT-15 receiving advice reference. Not written for the Peppol PINT profiles. */
+  receivingReference?: string;
+  /** BT-19 the buyer's accounting reference. Not written for the Peppol PINT profiles. */
+  accountingReference?: string;
+  /** BG-14 the period the invoice covers (BT-73/74), YYYY-MM-DD. Not written for the Peppol PINT profiles. */
+  invoicePeriod?: { start?: string; end?: string };
   /**
    * Country-specific fields, keyed by lowercase ISO country code. Known keys:
    * - `es.duaNumber` — NumeroDUA (Documento Único Administrativo), required

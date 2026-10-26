@@ -721,6 +721,16 @@ const TOOLS = [
             ksefNumber: { type: 'string', description: 'Poland only: the original\'s KSeF number (NrFaKorygowanej). Required for a Polish credit note whose original is not stored in Clearvo.' },
           },
         },
+        contractReference: { type: 'string', description: 'BT-12 — the contract the invoice is issued under (at most 200 characters; Italy 20). Not written for the Peppol PINT profiles (Australia, New Zealand, Singapore, Japan).' },
+        projectReference: { type: 'string', description: 'BT-11 — the project the invoice belongs to. Written into UBL invoices and CII documents; a UBL credit note has no element for it. Not written for the Peppol PINT profiles.' },
+        despatchReference: { type: 'string', description: 'BT-16 — the despatch advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        receivingReference: { type: 'string', description: 'BT-15 — the receiving advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        accountingReference: { type: 'string', description: 'BT-19 — the buyer\'s accounting reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        invoicePeriod: {
+          type: 'object',
+          description: 'BG-14 — the period the invoice covers (BT-73 start, BT-74 end). Not written for the Peppol PINT profiles.',
+          properties: { start: { type: 'string', description: 'First day, YYYY-MM-DD.' }, end: { type: 'string', description: 'Last day, YYYY-MM-DD.' } },
+        },
         correctsInvoiceId: {
           type: 'string',
           description: 'Id (from a prior submit_invoice response) of a REJECTED, UNROUTABLE or NEEDS_INFO invoice this submission re-attempts (a plain resubmission). Do not use it for a credit_note/debit_note: reference the original with originalInvoiceRef. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
