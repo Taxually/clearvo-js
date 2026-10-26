@@ -189,6 +189,10 @@ export interface SendResult {
   reason?: UnmappedTaxCodeReason;
   /** Echoed back only when the request set dryRun: true — no record was persisted. */
   dryRun?: boolean;
+  /** A dryRun only: the auto-corrections the real send would apply. */
+  corrections?: Array<{ ruleCode: string; ruleVersion: number; tier: string; fieldPath: string; before: string; after: string; description: string }>;
+  /** A dryRun only: the ruleset the invoice was checked against. */
+  rulesetVersion?: number;
   /**
    * Germany: the generated document format. `UBL_PEPPOL_BIS` when the resolved
    * `de.invoiceFormat` is `PEPPOL` — the invoice goes over the Peppol network,
@@ -568,7 +572,9 @@ export interface SubmitInvoiceInput {
    * Preview the resolved per-line tax decision without creating a record,
    * generating XML, or enqueueing anything to an authority. The response
    * echoes dryRun: true plus `lines[]` (including a would-be
-   * HELD_UNMAPPED_TAX_CODE outcome).
+   * HELD_UNMAPPED_TAX_CODE outcome). It also runs the validation a real
+   * send runs, for every country and format: `errors[]`, `warnings[]`,
+   * `corrections[]` and `rulesetVersion`, each finding with a `fix`.
    */
   dryRun?: boolean;
   /** Amount already paid (BT-113). Without `statedPayableAmount`, the payable amount is the total less this. */
@@ -1670,6 +1676,64 @@ export interface CountryRequirements {
   authority?: string;
   authorityPortal?: string;
   notes?: string;
+  /** What an invoice for this country must or should carry, from the invoice-content registry. */
+  invoiceContent?: { requirements: InvoiceContentRequirement[] | null; unavailable?: boolean };
+}
+
+/** Where a value is supplied: the invoice, the supplier's business profile, the customer's record (or the invoice's customer block), or nowhere because Clearvo derives it. */
+export type FixWhere = 'invoice' | 'supplier_profile' | 'customer_record' | 'automatic';
+
+/** How to describe and collect the value a finding or requirement asks for. */
+export interface FindingField {
+  key: string;
+  label: string;
+  type: 'string' | 'select' | 'multiselect' | 'boolean' | 'text' | 'date' | 'number';
+  /** Present for `select` and `multiselect`. */
+  options?: Array<{ value: string; label: string }>;
+  placeholder?: string;
+  helpText?: string;
+  /** The EN 16931 business term the value is carried in, when there is one (for example `BT-10`). */
+  btRef?: string;
+}
+
+/** Where and how to fix a validation finding. */
+export interface FindingFix {
+  where: FixWhere;
+  /** RFC 6901 JSON Pointer of the value to supply (the first missing one when several are). */
+  path: string;
+  /** The invoice-content requirement the finding comes from, when it comes from one (see getRequirements). */
+  requirementKey?: string;
+  field?: FindingField;
+}
+
+/**
+ * One thing an invoice for a country must or should carry. `obligationClass`: `format_authority` (the format, the tax
+ * authority or the mandate rejects the invoice without it; the only class that blocks), `legal_content` (national invoice or
+ * company law the format accepts the invoice without; a warning the business can switch off) or `presentation` (layout only).
+ */
+export interface InvoiceContentRequirement {
+  key: string;
+  obligationClass: 'format_authority' | 'legal_content' | 'presentation' | null;
+  kind: 'FIELD' | 'DISCLOSURE_TEXT' | 'STATUTORY_WORDING';
+  mode: 'REQUIRED' | 'FORBIDDEN';
+  /** ERROR blocks the invoice, WARNING reports it and sends on, NONE is layout only. */
+  enforcement: 'ERROR' | 'WARNING' | 'NONE';
+  mandate: string | null;
+  /** An ISO 3166-1 alpha-2 code, or `ALL` for a requirement every country shares. */
+  country: string;
+  /** The closed predicate saying when the requirement applies (`type` plus keys that depend on it). */
+  appliesWhen: { type: string; [k: string]: unknown };
+  /** JSON Pointers of the values that must be present; null for a FORBIDDEN requirement or one with no value of its own. */
+  requiredPaths: string[] | null;
+  requiredMode: 'ANY' | 'ALL' | null;
+  capture: 'profile' | 'invoice' | 'jurisdiction' | 'derived' | 'customer' | null;
+  where: FixWhere | null;
+  field: FindingField | null;
+  presentation: { label: string | null; section: string | null; channels: Array<'pdf' | 'page' | 'email'> | null; format: string | null } | null;
+  btRef: string | null;
+  source: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
 }
 
 export type ProductTier = 'CONFIRMED' | 'STANDARD_MAPPING' | 'AI_CLASSIFIED' | 'UNCLASSIFIED';
@@ -4251,6 +4315,14 @@ export interface SendRejectionEntry {
   source?: 'rule';
   /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or NEEDS_INFO (a required fact is missing; resend the corrected document to POST /v1/send with the same invoice number). */
   clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  /** Why the finding exists: `format_authority` blocks (the format, the tax authority or the mandate rejects the invoice without it); `legal_content` and `business_policy` warn at most. */
+  obligationClass?: 'format_authority' | 'legal_content' | 'business_policy';
+  /** True when the business may switch this warning off for itself (`ruleId` for a rule, `ruleCode` for a validation rule). Never true for an error. */
+  suppressible?: boolean;
+  ruleCode?: string;
+  ruleId?: string;
+  /** Where and how to fix it: where the value lives and, when known, its label, type and options. Present on a finding about one value. */
+  fix?: FindingFix;
   [key: string]: unknown;
 }
 

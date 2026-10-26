@@ -535,7 +535,7 @@ export function createProgram(): Command {
   // ── clearvo requirements ─────────────────────────────────────────────────────
   program
     .command('requirements')
-    .description('Get e-invoicing and tax requirements for a country')
+    .description('Get e-invoicing and tax requirements for a country, including what an invoice for it must or should carry (invoiceContent.requirements)')
     .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 country code (e.g. IT, PL, DE)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { country: string; pretty?: boolean }) => {
