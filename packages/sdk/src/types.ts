@@ -1731,7 +1731,8 @@ export interface InvoiceContentRequirement {
   field: FindingField | null;
   presentation: { label: string | null; section: string | null; channels: Array<'pdf' | 'page' | 'email'> | null; format: string | null } | null;
   btRef: string | null;
-  source: string;
+  /** The statute or format rule the requirement rests on; null for a presentation requirement. */
+  source: string | null;
   effectiveFrom: string;
   effectiveTo: string | null;
 }
