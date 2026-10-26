@@ -14,8 +14,9 @@ const _options: Array<{ value: string; label: string }> | undefined = _fix?.fiel
 const _badWhere: FixWhere = 'elsewhere';
 
 declare const _country: CountryRequirements;
-const _requirements: InvoiceContentRequirement[] | null | undefined = _country.invoiceContent?.requirements;
+const _requirements: InvoiceContentRequirement[] | undefined = _country.invoiceContent?.requirements;
+const _total: number | undefined = _country.invoiceContent?.total;
 const _enforcement: 'ERROR' | 'WARNING' | 'NONE' | undefined = _requirements?.[0]?.enforcement;
 const _paths: string[] | null | undefined = _requirements?.[0]?.requiredPaths;
 
-void [_class, _suppressible, _where, _label, _options, _badWhere, _enforcement, _paths];
+void [_total, _class, _suppressible, _where, _label, _options, _badWhere, _enforcement, _paths];

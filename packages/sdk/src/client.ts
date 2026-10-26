@@ -569,8 +569,9 @@ export class ClearvoClient {
 
   // ── Requirements ──────────────────────────────────────────────────────────────
 
-  getRequirements(country: string): Promise<CountryRequirements> {
-    return this.request('GET', `/requirements?country=${encodeURIComponent(country)}`);
+  getRequirements(country: string, filter: { class?: 'format_authority' | 'legal_content' | 'presentation'; mandate?: string } = {}): Promise<CountryRequirements> {
+    const query = new URLSearchParams({ country, ...(filter.class ? { class: filter.class } : {}), ...(filter.mandate ? { mandate: filter.mandate } : {}) });
+    return this.request('GET', `/requirements?${query.toString()}`);
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────

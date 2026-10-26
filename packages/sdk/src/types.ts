@@ -572,9 +572,11 @@ export interface SubmitInvoiceInput {
    * Preview the resolved per-line tax decision without creating a record,
    * generating XML, or enqueueing anything to an authority. The response
    * echoes dryRun: true plus `lines[]` (including a would-be
-   * HELD_UNMAPPED_TAX_CODE outcome). It also runs the validation a real
-   * send runs, for every country and format: `errors[]`, `warnings[]`,
-   * `corrections[]` and `rulesetVersion`, each finding with a `fix`.
+   * HELD_UNMAPPED_TAX_CODE outcome). It also runs every rule phase of a real
+   * send for every country and format, with no side effects: `errors[]`,
+   * `warnings[]`, `corrections[]` and `rulesetVersion`, each finding with a
+   * `fix`. A document a real send would reject is `ok: false` (it used to
+   * answer `ok: true`).
    */
   dryRun?: boolean;
   /** Amount already paid (BT-113). Without `statedPayableAmount`, the payable amount is the total less this. */
@@ -1677,7 +1679,7 @@ export interface CountryRequirements {
   authorityPortal?: string;
   notes?: string;
   /** What an invoice for this country must or should carry, from the invoice-content registry. */
-  invoiceContent?: { requirements: InvoiceContentRequirement[] | null; unavailable?: boolean };
+  invoiceContent?: { requirements: InvoiceContentRequirement[]; total: number; truncated?: boolean };
 }
 
 /** Where a value is supplied: the invoice, the supplier's business profile, the customer's record (or the invoice's customer block), or nowhere because Clearvo derives it. */
