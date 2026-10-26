@@ -740,12 +740,12 @@ const TOOLS = [
         },
                 shipFrom: {
           type: 'object',
-          description: 'France e-reporting, own-goods stock transfers only (a client tax code with movement "own_goods_movement"). Where the goods leave: for an outbound transfer (sale) the French origin; for an inbound transfer (purchase) the origin member state. Send one entry per movement, on the French leg only. Optional and ignored for every other transaction; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country.',
+          description: 'Where the goods leave from (optional). Used to decide the reporting country when you send no country (a ship-from in one of your registered countries is used) and the movement for sales of goods (local, intra-community or export). Still required for a France e-reporting own-goods stock transfer (a client tax code with movement "own_goods_movement"): for an outbound transfer (sale) the French origin, for an inbound transfer (purchase) the origin member state, used to find your own VAT registration in the other member state; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country (fixable with the needs-info PATCH).',
           properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         shipTo: {
           type: 'object',
-          description: 'France e-reporting, own-goods stock transfers only. Where the goods arrive. Needed only for an outbound transfer (shipFrom in France) to name the destination member state; ignored otherwise.',
+          description: 'Where the goods arrive (optional). Still required for an outbound France e-reporting own-goods stock transfer (shipFrom in France) to name the destination member state.',
           properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         accountingDate: {
