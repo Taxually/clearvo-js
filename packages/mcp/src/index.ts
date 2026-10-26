@@ -495,8 +495,9 @@ const TOOLS = [
       'formatted one; any of these being missing or malformed is stored with the error ' +
       '(MISSING_HU_SUPPLIER_TAX_NUMBER, MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_CUSTOMER_TAX_NUMBER, ' +
       'MISSING_HU_CUSTOMER_ADDRESS) rather than a silent NEEDS_INFO hold. A non-HUF Hungarian ' +
-      'invoice additionally requires countrySpecific.hu.exchangeRate (error ' +
-      'MISSING_HU_EXCHANGE_RATE if omitted, INVALID_HU_EXCHANGE_RATE if not a positive number); ' +
+      'invoice additionally requires the top-level exchangeRate to HUF (error ' +
+      'MISSING_EXCHANGE_RATE_REQUIRED if omitted, INVALID_EXCHANGE_RATE if not a positive number; ' +
+      'countrySpecific.hu.exchangeRate is a deprecated alias of exchangeRate); ' +
       'countrySpecific.hu.invoiceAppearance, if supplied, must be one of PAPER/ELECTRONIC/EDI/' +
       'UNKNOWN (error INVALID_HU_INVOICE_APPEARANCE otherwise) and otherwise defaults to PAPER for ' +
       'a private-individual customer, ELECTRONIC for every other customer. ' +
@@ -554,7 +555,7 @@ const TOOLS = [
         companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
-        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the invoice is stored with the error TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you should also supply exchangeRate or taxReporting below — without one the invoice is still sent with the warning MISSING_EXCHANGE_RATE, except where the authority needs the conversion (Hungary: MISSING_EXCHANGE_RATE_REQUIRED stops it). Clearvo never fetches or computes an exchange rate itself.' },
         exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReporting — supply one or the other, never both.' },
         taxReporting: {
           type: 'object',
