@@ -1889,16 +1889,19 @@ export interface ListSuppliersResponse {
 
 // ── Bank Account Master Data ─────────────────────────────────────────────────
 //
-// Entity-owned IBAN/BIC master data, one row per currency plus an optional
-// entity-wide DEFAULT (currency omitted). When an invoice's payment.means[].iban is
-// omitted, submitInvoice/calculateTax's send step falls back to the account
-// matching the invoice's own currency, then to the DEFAULT account, in that
-// order — a payment.means[].iban given directly on the invoice always wins outright.
+// Entity-owned IBAN/BIC master data. Exactly one account is the default
+// (`isDefault`): the first account added is the default automatically. When an
+// invoice's payment.means[].iban is omitted, submitInvoice/calculateTax's send step
+// uses the account for the invoice's own currency if there is one, otherwise the
+// default account — a payment.means[].iban given directly on the invoice always
+// wins outright.
 
 export interface BankAccount {
   id: string;
-  /** ISO 4217 alpha-3, or null for the entity-wide default/fallback account. */
+  /** ISO 4217 alpha-3 this account is used for, or null if it is not tied to a currency. Optional; it no longer means "default". */
   currency: string | null;
+  /** True for the one account used when no account matches the invoice currency. Exactly one account is the default. */
+  isDefault: boolean;
   iban: string;
   bic?: string | null;
   accountHolderName?: string | null;
@@ -1907,8 +1910,10 @@ export interface BankAccount {
 }
 
 export interface CreateBankAccountInput {
-  /** Omit to make this the entity-wide DEFAULT account. */
+  /** ISO 4217 alpha-3 currency this account is used for. Optional. */
   currency?: string;
+  /** true makes this the default account (the previous default is demoted). The first account is the default automatically. */
+  isDefault?: boolean;
   /** Format/checksum-validated before storing. */
   iban: string;
   bic?: string;
@@ -1918,8 +1923,10 @@ export interface CreateBankAccountInput {
 }
 
 export interface UpdateBankAccountInput {
-  /** null moves this back to the entity-wide DEFAULT (no-currency) slot. */
+  /** Currency this account is used for; null clears it. */
   currency?: string | null;
+  /** true makes this the default account. false is refused (422 DEFAULT_BANK_ACCOUNT_REQUIRED): make another account the default instead. */
+  isDefault?: true;
   /** Re-validated (format/checksum) if provided. */
   iban?: string;
   bic?: string | null;
