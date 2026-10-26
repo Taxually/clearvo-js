@@ -2,6 +2,9 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Command } from 'commander';
+import { mkdtempSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createProgram } from '../src/program';
 
 function sub(program: Command, ...path: string[]): Command {
@@ -133,5 +136,38 @@ describe('clearvo tests', () => {
     await sub(createProgram(), 'tests', 'cases', 'archive').parseAsync(['c1'], { from: 'user' });
     expect(f.mock.calls[0][0]).toBe('http://x/v1/test-cases/c1');
     expect(f.mock.calls[0][1].method).toBe('DELETE');
+  });
+
+  it('skip and unskip PUT /test-cases/{id}/skip with the boolean body and print the result', async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(res({ caseId: 'a/b', skipped: true }))
+      .mockResolvedValueOnce(res({ caseId: 'a/b', skipped: false }));
+    global.fetch = f as unknown as typeof fetch;
+    await sub(createProgram(), 'tests', 'skip').parseAsync(['a/b'], { from: 'user' });
+    await sub(createProgram(), 'tests', 'unskip').parseAsync(['a/b'], { from: 'user' });
+    expect(f.mock.calls[0][0]).toBe('http://x/v1/test-cases/a%2Fb/skip');
+    expect(f.mock.calls[0][1].method).toBe('PUT');
+    expect(JSON.parse(f.mock.calls[0][1].body)).toEqual({ skipped: true });
+    expect(JSON.parse(f.mock.calls[1][1].body)).toEqual({ skipped: false });
+    expect(logSpy.mock.calls.flat().join('\n')).toContain('"skipped"');
+  });
+
+  it('export GETs /test-runs/{id}/export with the id encoded and prints the record', async () => {
+    const record = { format: 'test-run-record', version: 1, cases: [] };
+    const f = vi.fn().mockResolvedValue(res(record));
+    global.fetch = f as unknown as typeof fetch;
+    await sub(createProgram(), 'tests', 'export').parseAsync(['a/b'], { from: 'user' });
+    expect(f.mock.calls[0][0]).toBe('http://x/v1/test-runs/a%2Fb/export');
+    expect(f.mock.calls[0][1].method).toBe('GET');
+    expect(JSON.parse(logSpy.mock.calls.flat().join('\n'))).toEqual(record);
+  });
+
+  it('export --out writes the record to the file and prints only the path', async () => {
+    const record = { format: 'test-run-record', version: 1, cases: [] };
+    global.fetch = vi.fn().mockResolvedValue(res(record)) as unknown as typeof fetch;
+    const file = join(mkdtempSync(join(tmpdir(), 'clearvo-export-')), 'record.json');
+    await sub(createProgram(), 'tests', 'export').parseAsync(['r1', '--out', file], { from: 'user' });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(record);
+    expect(logSpy.mock.calls.flat().join('\n')).toBe(file);
   });
 });

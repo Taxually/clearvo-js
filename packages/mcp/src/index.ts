@@ -1902,6 +1902,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'export_test_run',
+    description:
+      'Export the record of one test run to keep: for every test, what it expected, what was actually observed and whether the two matched, with the version of the test, the ids behind each result and a digest of the content. ' +
+      'No request or document bodies are kept. A test marked done by hand says so and never counts towards a pass.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { runId: { type: 'string', description: 'The runId returned by start_test_run or list_test_runs' } },
+      required: ['runId'],
+    },
+  },
+  {
     name: 'list_test_runs',
     description: 'List your recent test runs, newest first (up to 50), each with its status and counts.' + TEST_DISCLAIMER,
     inputSchema: { type: 'object' as const, properties: {} },
@@ -1934,6 +1945,26 @@ const TOOLS = [
   {
     name: 'archive_test_case',
     description: 'Remove one of your own tests from new runs. Past runs keep showing it. Standard tests cannot be removed.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'skip_test_case',
+    description:
+      'Skip a test you do not need, for example a sale at a reduced rate when you sell at none. A skipped test is not run, counts nowhere and never blocks a result, ' +
+      'and every run and export lists it as skipped so a pass always says what was left out. Undo it with unskip_test_case.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'unskip_test_case',
+    description: 'Put a skipped test back, so new runs include it again.' + TEST_DISCLAIMER,
     inputSchema: {
       type: 'object' as const,
       properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
@@ -4418,6 +4449,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_test_run':
       return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}`);
 
+    case 'export_test_run':
+      return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}/export`);
+
     case 'list_test_runs':
       return callApi('GET', '/test-runs');
 
@@ -4429,6 +4463,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'archive_test_case':
       return callApi('DELETE', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}`);
+
+    case 'skip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: true });
+
+    case 'unskip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: false });
 
     case 'get_test_case_catalogue':
       return callApi('GET', '/test-cases/catalogue');

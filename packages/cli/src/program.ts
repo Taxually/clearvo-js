@@ -1112,6 +1112,21 @@ export function createProgram(): Command {
       else printRunSummary(run);
     });
 
+  tests
+    .command('export <runId>')
+    .description('Export the record of one test run to keep (JSON): what each test expected, what was observed, the test version and a content digest')
+    .option('--out <file>', 'Write the record to this file instead of printing it')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (runId: string, opts: { out?: string; pretty?: boolean }) => {
+      const record = await api('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
+      if (opts.out) {
+        writeFileSync(opts.out, JSON.stringify(record, null, 2));
+        console.log(opts.out);
+      } else {
+        print(record, !!opts.pretty);
+      }
+    });
+
   const testCases = tests.command('cases').description('The tests you can run: standard ones and your own');
 
   testCases
@@ -1143,6 +1158,22 @@ export function createProgram(): Command {
         process.exit(1);
       }
       print(await api('POST', '/test-cases', body), !!opts.pretty);
+    });
+
+  tests
+    .command('skip <caseId>')
+    .description('Skip a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true }), !!opts.pretty);
+    });
+
+  tests
+    .command('unskip <caseId>')
+    .description('Put a skipped test back so new runs include it again')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false }), !!opts.pretty);
     });
 
   testCases
