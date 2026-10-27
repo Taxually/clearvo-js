@@ -879,9 +879,9 @@ export function createProgram(): Command {
     });
 
   // ── clearvo bank-accounts ───────────────────────────────────────────────────
-  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
-  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // an invoice's own payment.means[].iban always wins outright; this is a fallback.
+  // Entity-owned IBAN/BIC master data (exactly one account is the default) so it
+  // doesn't need to be resent on every invoice. An invoice uses its own
+  // payment.means[].iban if sent, else the account for its currency, else the default.
   const bankAccounts = program.command('bank-accounts').description('Manage bank-account master data');
 
   bankAccounts
@@ -898,7 +898,8 @@ export function createProgram(): Command {
     .command('create')
     .description('Store a bank account')
     .requiredOption('--iban <iban>', 'IBAN — format/checksum-validated before storing')
-    .option('--currency <code>', 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.')
+    .option('--currency <code>', 'ISO 4217 alpha-3 currency this account is used for (optional)')
+    .option('--default', 'Make this the default account (the first account is the default automatically)')
     .option('--bic <bic>', 'BIC')
     .option('--account-holder-name <name>', 'Name of the account holder. Printed as the payee account name (BT-85) on invoices that use this account when the caller sends no iban')
     .option('--entity <entityId>', 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.')
@@ -906,13 +907,15 @@ export function createProgram(): Command {
     .action(async (opts: {
       iban: string;
       currency?: string;
+      default?: boolean;
       bic?: string;
       accountHolderName?: string;
       entity?: string;
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = { iban: opts.iban };
+      const body: Record<string, string | boolean> = { iban: opts.iban };
       if (opts.currency) body.currency = opts.currency;
+      if (opts.default) body.isDefault = true;
       if (opts.bic) body.bic = opts.bic;
       if (opts.accountHolderName) body.accountHolderName = opts.accountHolderName;
       const result = await api('POST', '/bank-accounts', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
@@ -922,7 +925,8 @@ export function createProgram(): Command {
   bankAccounts
     .command('update <id>')
     .description('Update a bank account')
-    .option('--currency <code>', 'Updated currency, or the literal string "null" to move it back to the entity-wide DEFAULT slot')
+    .option('--currency <code>', 'Updated currency, or the literal string "null" to clear it')
+    .option('--default', 'Make this the default account (to change the default, make another account the default)')
     .option('--iban <iban>', 'Updated IBAN — re-validated (format/checksum)')
     .option('--bic <bic>', 'Updated BIC, or the literal string "null" to clear it')
     .option('--account-holder-name <name>', 'Updated account holder name, or the literal string "null" to clear it')
@@ -930,6 +934,7 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
       currency?: string;
+      default?: boolean;
       iban?: string;
       bic?: string;
       accountHolderName?: string;
@@ -938,6 +943,7 @@ export function createProgram(): Command {
     }) => {
       const body: Record<string, unknown> = {};
       if (opts.currency !== undefined) body.currency = opts.currency === 'null' ? null : opts.currency;
+      if (opts.default) body.isDefault = true;
       if (opts.iban) body.iban = opts.iban;
       if (opts.bic !== undefined) body.bic = opts.bic === 'null' ? null : opts.bic;
       if (opts.accountHolderName !== undefined) body.accountHolderName = opts.accountHolderName === 'null' ? null : opts.accountHolderName;

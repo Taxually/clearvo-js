@@ -4,6 +4,12 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — bank accounts have an explicit default (backend change deploys with the next release)
+
+- Every bank account has `isDefault`; exactly one is the default. The first account added is the default automatically. An invoice with no IBAN uses the account for its currency if there is one, otherwise the default; an IBAN sent on the invoice always wins. An account's `currency` stays optional but no longer means "default".
+- Create takes `isDefault: true` to make the new account the default (the old one is demoted). Update takes `isDefault: true` only; `false` is refused with 422 `DEFAULT_BANK_ACCOUNT_REQUIRED` (make another account the default instead). Deleting the default makes the oldest remaining account the default.
+- SDK: `BankAccount.isDefault`, `CreateBankAccountInput.isDefault`, `UpdateBankAccountInput.isDefault`. MCP: `create_bank_account` and `update_bank_account` take `isDefault`; descriptions updated. CLI: `bank-accounts create` and `update` take `--default`.
+
 ## Unreleased — one exchange rate field for every country (backend change deploys with the next release)
 
 - An invoice whose currency differs from the currency its tax is reported in is no longer stopped with `TAX_REPORTING_CONVERSION_MISSING`. Without `exchangeRate` or `taxReporting` it is sent with the warning `MISSING_EXCHANGE_RATE` (raised only when a line carries tax). Hungary still needs the rate for a non-HUF invoice: `MISSING_EXCHANGE_RATE_REQUIRED`, stored NEEDS_INFO.

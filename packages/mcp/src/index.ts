@@ -3211,10 +3211,9 @@ const TOOLS = [
   {
     name: 'list_bank_accounts',
     description:
-      'List an entity\'s stored bank-account master data (IBAN/BIC), one per currency plus an optional ' +
-      'entity-wide DEFAULT (no currency). When a call to submit_invoice/send_invoice omits payment.means[].iban, this ' +
-      'master data is used as a fallback: the account matching the invoice\'s own currency first, then the ' +
-      'DEFAULT account, in that order. A payment.means[].iban given directly on the invoice always wins outright.',
+      'List an entity\'s stored bank accounts (IBAN/BIC). Each has isDefault; exactly one account is the default. ' +
+      'When submit_invoice/send_invoice omits payment.means[].iban, the account for the invoice currency is used if ' +
+      'there is one, otherwise the default account. An IBAN sent on the invoice always wins.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3226,12 +3225,13 @@ const TOOLS = [
     name: 'create_bank_account',
     description:
       'Store a bank account (IBAN/BIC) as entity master data, so it does not need to be resent on every ' +
-      'invoice. At most one account per currency, and at most one DEFAULT (currency omitted) account, per ' +
-      'entity — a duplicate is rejected.',
+      'invoice. The first account you add is the default automatically. Send isDefault: true to make a later ' +
+      'account the default (the old default stops being the default). At most one account per currency.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        currency: { type: 'string', description: 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.' },
+        currency: { type: 'string', description: 'ISO 4217 alpha-3 currency this account is used for. Optional.' },
+        isDefault: { type: 'boolean', description: 'true makes this the default account and the previous default stops being the default. The first account is the default automatically.' },
         iban: { type: 'string', description: 'IBAN — format/checksum-validated before storing.' },
         bic: { type: 'string' },
         accountHolderName: { type: 'string', description: 'Name of the account holder. Printed as the payee account name (BT-85) on invoices that use this account when the caller sends no iban.' },
@@ -3242,12 +3242,13 @@ const TOOLS = [
   },
   {
     name: 'update_bank_account',
-    description: 'Update a stored bank account. Passing currency: null moves it back to the entity-wide DEFAULT slot.',
+    description: 'Update a stored bank account. Send isDefault: true to make it the default account. isDefault: false is refused (422 DEFAULT_BANK_ACCOUNT_REQUIRED): to change the default, make another account the default.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         bankAccountId: { type: 'string', description: 'The bank account ID to update (from list_bank_accounts or create_bank_account)' },
-        currency: { type: ['string', 'null'], description: 'null sets this back to the entity-wide DEFAULT (no-currency) slot.' },
+        currency: { type: ['string', 'null'], description: 'Currency this account is used for. null clears it.' },
+        isDefault: { type: 'boolean', description: 'Only true is accepted: makes this the default account. false is refused with 422 DEFAULT_BANK_ACCOUNT_REQUIRED.' },
         iban: { type: 'string', description: 'Re-validated (format/checksum) if provided.' },
         bic: { type: ['string', 'null'] },
         accountHolderName: { type: ['string', 'null'] },
@@ -3258,7 +3259,7 @@ const TOOLS = [
   },
   {
     name: 'delete_bank_account',
-    description: 'Soft-delete a stored bank account.',
+    description: 'Soft-delete a stored bank account. If it was the default, the oldest remaining account becomes the default.',
     inputSchema: {
       type: 'object' as const,
       properties: {

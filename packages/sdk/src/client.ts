@@ -534,9 +534,9 @@ export class ClearvoClient {
   }
 
   // ── Bank Account Master Data ─────────────────────────────────────────────────
-  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
-  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // see BankAccount's own doc comment (types.ts) for the fallback precedence.
+  // Entity-owned IBAN/BIC master data (exactly one account is the default) so it
+  // doesn't need to be resent on every invoice — see BankAccount's own doc comment
+  // (types.ts) for the precedence.
 
   /** GET /bank-accounts responds 200 with `{ bankAccounts }`. */
   listBankAccounts(entityId?: string): Promise<ListBankAccountsResponse> {
