@@ -529,7 +529,7 @@ const TOOLS = [
       'VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes cannot go over Peppol for Singapore, Japan or the UAE; ' +
       'Germany and the other Peppol countries support them, and a credit note must reverse a previously accepted invoice in full). ' +
       'Self-billed German invoices cannot use PEPPOL: DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). ' +
-      'dryRun=true on a German PEPPOL invoice runs the real content rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
+      'dryRun=true runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, and answers what the real send would decide: the same errors/warnings (each with a fix: where the value lives and, when known, its label, type and options), the corrections it would apply and the ruleset version. It does not generate or submit the document; a German PEPPOL invoice also gets the buyer reachability check. A dryRun that used to answer ok:true for an invoice a real send would reject now answers ok:false. ' +
       'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
       'a failure is answered HTTP 200 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
       'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
@@ -737,7 +737,7 @@ const TOOLS = [
         },
         dryRun: {
           type: 'boolean',
-          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting.',
+          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting. It also runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, returning the same errors[], warnings[], corrections[] (the auto-corrections it would apply) and rulesetVersion; each finding carries a fix (where the value lives: invoice, supplier_profile or customer_record, and when known its label, type and options). Tax number checks are format-only. It does not generate or submit the document.',
         },
         notifyCustomer: {
           type: 'boolean',
@@ -1620,11 +1620,18 @@ const TOOLS = [
       'Returns: whether e-invoicing is mandatory and from when, supported invoice document types (invoice, credit note), ' +
       'Peppol scheme ID for that country, VAT number format description and validation regex, ' +
       'the name and portal URL of the relevant tax authority, and any important notes. ' +
+      'It also returns invoiceContent.requirements: what an invoice for that country must or should carry, read from the invoice-content registry. ' +
+      'Each entry has a key, an obligationClass (format_authority: the format or tax authority rejects the invoice without it, the only class that blocks; ' +
+      'legal_content: national invoice or company law, a warning the business can switch off; presentation: layout only), its enforcement (ERROR | WARNING | NONE), ' +
+      'when it applies (appliesWhen), the invoice paths that must be present (requiredPaths), where the value is supplied (where: invoice | supplier_profile | customer_record | automatic) ' +
+      'and a field description (label, type, options, help text) when the registry has one. Filter with class and mandate; the list is capped at 500. ' +
       'Call this before submitting invoices to a new country to understand what is required and avoid rejections.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code (e.g. "IT", "PL", "DE", "FR")' },
+        class: { type: 'string', enum: ['format_authority', 'legal_content', 'presentation'], description: 'Keep only the invoice content requirements of this obligation class.' },
+        mandate: { type: 'string', description: 'Keep ordinary per-country requirements and those of this compliance mandate only.' },
       },
       required: ['country'],
     },
@@ -4397,7 +4404,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'get_requirements': {
       const country = args.country as string;
-      return callApi('GET', `/requirements?country=${encodeURIComponent(country)}`);
+      return callApi('GET', `/requirements?country=${encodeURIComponent(country)}${args.class ? `&class=${encodeURIComponent(String(args.class))}` : ''}${args.mandate ? `&mandate=${encodeURIComponent(String(args.mandate))}` : ''}`);
     }
 
     case 'list_invoices': {

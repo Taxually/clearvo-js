@@ -535,11 +535,14 @@ export function createProgram(): Command {
   // ── clearvo requirements ─────────────────────────────────────────────────────
   program
     .command('requirements')
-    .description('Get e-invoicing and tax requirements for a country')
+    .description('Get e-invoicing and tax requirements for a country, including what an invoice for it must or should carry (invoiceContent.requirements)')
     .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 country code (e.g. IT, PL, DE)')
+    .option('--class <class>', 'Keep only invoice content requirements of this obligation class (format_authority, legal_content, presentation)')
+    .option('--mandate <code>', 'Keep ordinary per-country requirements and those of this compliance mandate only')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { country: string; pretty?: boolean }) => {
-      const result = await api('GET', `/requirements?country=${encodeURIComponent(opts.country)}`);
+    .action(async (opts: { country: string; class?: string; mandate?: string; pretty?: boolean }) => {
+      const query = new URLSearchParams({ country: opts.country, ...(opts.class ? { class: opts.class } : {}), ...(opts.mandate ? { mandate: opts.mandate } : {}) });
+      const result = await api('GET', `/requirements?${query.toString()}`);
       print(result, !!opts.pretty);
     });
   
