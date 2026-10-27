@@ -727,14 +727,18 @@ export interface SubmitInvoiceInput {
    */
   transactionDirection?: 'sale' | 'purchase';
   /**
-   * France e-reporting, own-goods stock transfers only (client tax code with
-   * movement `own_goods_movement`). Where the goods leave: the French origin for an
-   * outbound transfer (`transactionDirection: 'sale'`), the origin member state for
-   * an inbound one (`'purchase'`). Send ONE entry per movement, on the French leg
-   * only. Ignored for every other transaction; a transfer without it parks NEEDS_INFO.
+   * Where the goods leave from (optional). Used to decide the reporting country
+   * when you send no `country` (a ship-from in one of your registered countries is
+   * used) and the movement for sales of goods (local, intra-community or export).
+   * Still required for a France e-reporting own-goods stock transfer (a client tax
+   * code with movement `own_goods_movement`): for an outbound transfer (sale) the
+   * French origin, for an inbound transfer (purchase) the origin member state, used
+   * to find your own VAT registration in the other member state; an own-goods
+   * transfer without it parks NEEDS_INFO naming shipFrom.country (fixable with the
+   * needs-info PATCH).
    */
   shipFrom?: { country: string };
-  /** France e-reporting, own-goods stock transfers only. Where the goods arrive; needed for an outbound transfer (shipFrom in France) to name the destination member state. */
+  /** Where the goods arrive (optional). Still required for an outbound France e-reporting own-goods stock transfer (shipFrom in France) to name the destination member state. */
   shipTo?: { country: string };
   /**
    * PURCHASE documents only, Spain SII, YYYY-MM-DD. The accounting-entry date
