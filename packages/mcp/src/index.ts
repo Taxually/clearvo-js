@@ -504,9 +504,8 @@ const TOOLS = [
       'Germany (DE) generates ZUGFeRD (a PDF/A-3 hybrid, platform default) or XRechnung (a bare ' +
       'UBL XML) depending on this entity\'s own format setup — XRechnung additionally requires a ' +
       'Leitweg-ID or customer reference (BT-10: buyerReference, or countrySpecific.de.leitwegId) plus ' +
-      'a seller contact name/phone/email, and forbids a BIC/SWIFT code; any of these being missing ' +
-      'or malformed for a resolved-XRechnung invoice is stored with the error (MISSING_LEITWEG_ID, ' +
-      'MISSING_DE_XRECHNUNG_SELLER_CONTACT, DE_XRECHNUNG_BIC_FORBIDDEN) rather than a silent NEEDS_INFO hold. ' +
+      'a seller contact name/phone/email; either being missing for a resolved-XRechnung invoice is ' +
+      'stored with the error (MISSING_LEITWEG_ID, MISSING_DE_XRECHNUNG_SELLER_CONTACT) rather than a silent NEEDS_INFO hold. ' +
       'XRechnung and Peppol also need a customer electronic address (BT-49), taken from the first available of: ' +
       'customer.electronicAddress (value + schemeId), the Leitweg-ID (only if it is a valid Leitweg-ID, not a free-text reference), customer.contact.email, the customer\'s German VAT ID ' +
       '(none of these: error MISSING_CUSTOMER_ELECTRONIC_ADDRESS). ' +
@@ -685,7 +684,7 @@ const TOOLS = [
                 properties: {
                   method: { type: 'string', enum: ['bank_transfer', 'direct_debit', 'credit_card', 'cash', 'check', 'other'], description: '"direct_debit" renders SEPA payment means (UBL/CII PaymentMeansCode 59) and REQUIRES mandateReference (BT-89) — Germany also requires creditorId and debitedIban (BT-90/91). Omit for a plain credit-transfer invoice (bank_transfer, the default).' },
                   iban: { type: 'string', description: 'Seller\'s IBAN for a bank_transfer invoice.' },
-                  bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the invoice is stored with the error DE_XRECHNUNG_BIC_FORBIDDEN.' },
+                  bic: { type: 'string', description: 'BIC/SWIFT code.' },
                   accountName: { type: 'string', description: 'Payee account name / account holder (BT-85), max 140 characters. When omitted and no iban is sent, the entity\'s stored bank account supplies iban, bic and its holder name; with a per-invoice iban the stored holder is never used.' },
                   reference: { type: 'string', description: 'Payment reference/remittance information.' },
                   mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the invoice is stored with the error MANDATE_REFERENCE_TOO_LONG.' },

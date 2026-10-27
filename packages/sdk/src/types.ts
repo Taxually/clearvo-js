@@ -413,7 +413,7 @@ export interface PaymentMeansInput {
   method?: 'bank_transfer' | 'direct_debit' | 'credit_card' | 'cash' | 'check' | 'other';
   /** Seller's IBAN for a `bank_transfer` invoice. */
   iban?: string;
-  /** BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit for DE or the call fails 422 `DE_XRECHNUNG_BIC_FORBIDDEN`. */
+  /** BIC/SWIFT code. Accepted for every country; a German XRechnung does not carry it. */
   bic?: string;
   /** BT-85. Payee account name (account holder), max 140 characters. When no `iban` is sent, the entity's stored bank account supplies iban, bic and its holder name; with a per-invoice `iban` the stored holder is never used. */
   accountName?: string;
