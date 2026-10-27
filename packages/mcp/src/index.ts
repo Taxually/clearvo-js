@@ -138,6 +138,7 @@ const TEST_DISCLAIMER =
   ' These results show how your integration handled simulated scenarios in the sandbox; nothing is sent to any tax authority, network or supplier, and this is not a certification.';
 
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
+const MAX_TEMPLATE_ASSET_BYTES = 3 * 1024 * 1024;
 
 // Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
 // POST /v1/send/bulk's synchronous ceiling (Taxually-Einvoicing lib/mcp/tools.ts). The public API
@@ -552,6 +553,7 @@ const TOOLS = [
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 destination country (e.g. "IT", "PL", "DE")' },
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
+        invoiceTemplate: { type: 'string', description: 'Optional invoice template that lays out the PDF: the template key (or id) from the entity\'s invoice templates (list_invoice_templates), matched without regard to case. Omit it to use the entity\'s default template, else the standard layout. An unknown, another entity\'s or archived template is stored as NEEDS_INFO with the error INVOICE_TEMPLATE_UNKNOWN or INVOICE_TEMPLATE_ARCHIVED (also on a dryRun); it never falls back silently. Presentation only: it is not part of the invoice identity, changes no invoice data and no structured XML, and a changed value on an already accepted invoice is refused as IDEMPOTENT_BODY_MISMATCH. The template used is echoed on the result as invoiceTemplate {key, name, version, source: request | entity_default}, null for the standard layout.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
         taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you should also supply exchangeRate or taxReporting below — without one the invoice is still sent with the warning MISSING_EXCHANGE_RATE, except where the authority needs the conversion (Hungary: MISSING_EXCHANGE_RATE_REQUIRED stops it). Clearvo never fetches or computes an exchange rate itself.' },
@@ -1649,6 +1651,7 @@ const TOOLS = [
       'NOT_VALIDATED), validation (what was checked against which rule set and version, with error/warning counts and a summary; ' +
       'the findings are on get_invoice), attachments (the supplier\'s supporting documents, listed only, never the bytes), ' +
       'rendition (original | generated | none: how the PDF read answers) and supersededBy. ' +
+      'invoiceTemplate ({key, name, version, source: request | entity_default}; null for the standard layout) names the invoice template the PDF was laid out with. ' +
       'Paginate using the nextCursor / prevCursor values returned in each response: pass nextCursor as after_id to advance forward.',
     inputSchema: {
       type: 'object' as const,
@@ -3321,6 +3324,130 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_invoice_templates',
+    description:
+      'List an entity\'s invoice templates (archived ones included). A template is a named PDF layout (block order, fonts, colours, labels) the customer-facing invoice PDF is drawn with; ' +
+      'it changes presentation only, so every party, number, amount and legal wording is still printed from the invoice itself. Exactly one active template can be the default; ' +
+      'with none, invoices use the standard layout. A send names a template with its invoiceTemplate field (key or id).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        status: { type: 'string', enum: ['active'], description: "Pass 'active' to leave archived templates out." },
+        entityId: { type: 'string', description: 'Entity to list templates for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'get_invoice_template',
+    description:
+      'Get one invoice template: its id, key, name, status, default flag, and one version\'s definition, images and validation findings (the current version unless version is given), plus the list of its versions.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        templateId: { type: 'string', description: 'The template id or key (from list_invoice_templates).' },
+        version: { type: 'integer', minimum: 1, description: 'A specific version number. Omit for the current version.' },
+        entityId: { type: 'string', description: 'Entity the template belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['templateId'],
+    },
+  },
+  {
+    name: 'create_invoice_template',
+    description:
+      'Create an invoice template (version 1) from a definition. The definition is a closed JSON document: { schemaVersion: 1, fontFamily?, fontSize?, colors?, margins?, background?: { asset: <image role>, pages?: "first"|"all", fit?: "page"|"width" }, header?, footer?, body: [blocks], labels? } ' +
+      'over the blocks the invoice-content registry knows (sections, single data points, structural blocks, spacers, columns, and the system blocks logo, copy_notice, statutory_wording, custom_fields, verification_qr). ' +
+      'Anything the template leaves out that the country requires is added by the system, and legal wording and the verification QR cannot be removed, resized or relabelled. ' +
+      'The definition is validated by rendering sample invoices for the entity\'s countries; any error fails with 422 "invoice_template_invalid" and a findings list, and nothing is saved. ' +
+      'A key never changes and is compared without regard to case (409 "invoice_template_key_exists"). A letterhead is a PNG or JPEG (RGB) uploaded first with upload_invoice_template_asset: pass its assetId in assetIds under a role (e.g. { "letterhead": "<assetId>" }) and name that role in definition.background.asset; it prints behind every page (or the first only). A background naming an image the version does not carry fails with ASSET_NOT_CARRIED.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        key: { type: 'string', description: 'The template\'s identity as callers write it, e.g. "VW-STANDARD". Letters, digits, dot, dash and underscore; at most 40 characters.' },
+        name: { type: 'string', description: 'Display name, e.g. "Volkswagen standard layout".' },
+        definition: { type: 'object', description: 'The template definition document (see the description above).' },
+        assetIds: {
+          description: 'Optional image ids from upload_invoice_template_asset: a list, or an object naming each image\'s role. At most 4 images.',
+          anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'object', additionalProperties: { type: 'string' } }],
+        },
+        isDefault: { type: 'boolean', description: 'true makes this the entity\'s default template (clearing the previous default).' },
+        entityId: { type: 'string', description: 'Entity to create the template for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['key', 'name', 'definition'],
+    },
+  },
+  {
+    name: 'update_invoice_template',
+    description:
+      'Rename an invoice template, archive or reactivate it, and/or set or clear the entity default. isDefault true makes it the default and clears the previous one; false clears it so the standard layout is used. ' +
+      'Archiving the default template is refused (409 "invoice_template_is_default"): choose another default, or set isDefault false, first. A template is never deleted and its key never changes. ' +
+      'To change the layout itself use update_invoice_template_definition.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        templateId: { type: 'string', description: 'The template id or key (from list_invoice_templates).' },
+        name: { type: 'string', description: 'New display name.' },
+        status: { type: 'string', enum: ['active', 'archived'], description: "'archived' stops new sends using it; invoices already issued with it still re-render with it." },
+        isDefault: { type: 'boolean', description: 'true = make this the default, false = clear the default.' },
+        entityId: { type: 'string', description: 'Entity the template belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['templateId'],
+    },
+  },
+  {
+    name: 'update_invoice_template_definition',
+    description:
+      'Publish a new version of an invoice template from a full definition. Versions are immutable: earlier versions are never changed, so an invoice already issued keeps re-rendering with the version it was issued with, and a new send uses the new current version. ' +
+      'Validated like create_invoice_template (422 "invoice_template_invalid" with findings, nothing saved); an archived template fails 409 "invoice_template_archived". Images belong to a version: pass assetIds again to keep them.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        templateId: { type: 'string', description: 'The template id or key.' },
+        definition: { type: 'object', description: 'The complete new definition document.' },
+        assetIds: {
+          description: 'Optional image ids from upload_invoice_template_asset: a list, or an object naming each image\'s role.',
+          anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'object', additionalProperties: { type: 'string' } }],
+        },
+        entityId: { type: 'string', description: 'Entity the template belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['templateId', 'definition'],
+    },
+  },
+  {
+    name: 'upload_invoice_template_asset',
+    description:
+      'Upload an image for an invoice template ahead of the version that uses it. PNG or JPEG only, RGB (a CMYK JPEG is refused), up to 3 MiB, 16 to 4000 pixels per side. ' +
+      'Returns { assetId, sha256, contentType, bytes, width, height }; the id is content-addressed, so the same bytes always give the same id. Pass it in assetIds to create_invoice_template or update_invoice_template_definition.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        imageBase64: { type: 'string', description: 'Base64-encoded image file content, with no data: URI prefix or whitespace.' },
+        contentType: { type: 'string', enum: ['image/png', 'image/jpeg'], description: 'The image\'s actual MIME type; it must match the file\'s real signature.' },
+        entityId: { type: 'string', description: 'Entity to upload the image for. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['imageBase64', 'contentType'],
+    },
+  },
+  {
+    name: 'preview_invoice_template',
+    description:
+      'Render an invoice template on synthetic sample data and return it as a PDF (base64), every page watermarked "SAMPLE - NOT AN INVOICE"; nothing is stored or sent. ' +
+      'Give templateId to preview a saved template (optionally a version), or definition to preview an unsaved one. The sample\'s seller is the entity\'s own profile. ' +
+      '"appended" lists the blocks the system added because the template left them out. Returns { contentType, bytes, pdfBase64, appended }.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        templateId: { type: 'string', description: 'A saved template id or key. Give this or definition.' },
+        version: { type: 'integer', minimum: 1, description: 'With templateId: a specific version. Omit for the current one.' },
+        definition: { type: 'object', description: 'An unsaved definition document to preview. Give this or templateId.' },
+        assetIds: { description: 'With definition: image ids from upload_invoice_template_asset, a list or an object naming each image\'s role, so an unsaved definition\'s background prints.', anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'object', additionalProperties: { type: 'string' } }] },
+        country: { type: 'string', description: 'Two-letter country of the sample invoice. Defaults to the entity\'s own country.' },
+        documentType: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Default invoice.' },
+        scenario: { type: 'string', enum: ['standard', 'exempt'], description: 'Tax scenario of the sample. Default standard.' },
+        entityId: { type: 'string', description: 'Entity whose profile and logo the sample uses. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'list_client_tax_codes',
     description:
       'List the client tax codes configured for an entity. A client tax code maps your own ERP tax code ' +
@@ -4788,6 +4915,60 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'update_company_code': {
       const { companyCodeId, entityId, ...updates } = args as { companyCodeId: string; entityId?: string } & Record<string, unknown>;
       return callApi('PATCH', `/company-codes/${encodeURIComponent(companyCodeId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'list_invoice_templates': {
+      const { entityId, status } = args as { entityId?: string; status?: string };
+      return callApi('GET', `/invoice-templates${status === 'active' ? '?status=active' : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'get_invoice_template': {
+      const { templateId, version, entityId } = args as { templateId: string; version?: number; entityId?: string };
+      return callApi('GET', `/invoice-templates/${encodeURIComponent(templateId)}${version ? `?version=${encodeURIComponent(String(version))}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'create_invoice_template': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/invoice-templates', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'update_invoice_template': {
+      const { templateId, entityId, ...updates } = args as { templateId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/invoice-templates/${encodeURIComponent(templateId)}`, updates, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'update_invoice_template_definition': {
+      const { templateId, entityId, ...rest } = args as { templateId: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PUT', `/invoice-templates/${encodeURIComponent(templateId)}/definition`, rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'upload_invoice_template_asset': {
+      const { imageBase64, contentType, entityId } = args as { imageBase64: string; contentType: string; entityId?: string };
+      if (contentType !== 'image/png' && contentType !== 'image/jpeg') {
+        throw new Error('contentType must be image/png or image/jpeg.');
+      }
+      const buffer = Buffer.from(imageBase64, 'base64');
+      if (buffer.length > MAX_TEMPLATE_ASSET_BYTES) {
+        throw new Error(`imageBase64 decodes to ${buffer.length} bytes, exceeding the ${MAX_TEMPLATE_ASSET_BYTES / (1024 * 1024)}MB limit for invoice template images.`);
+      }
+      // Buffer.from(..., 'base64') is lenient: check the magic bytes so a bad payload fails loudly here, not as a generic API error.
+      const magic = contentType === 'image/png' ? [0x89, 0x50, 0x4e, 0x47] : [0xff, 0xd8, 0xff];
+      if (!magic.every((b, i) => buffer[i] === b)) {
+        throw new Error(`imageBase64 does not decode to a valid ${contentType} file (magic-byte check failed). Check the value is base64-encoded image file content with no surrounding data: URI prefix or whitespace.`);
+      }
+      const formData = new FormData();
+      formData.append('file', new Blob([buffer], { type: contentType }), `template-image.${contentType.split('/')[1]}`);
+      return callApi('POST', '/invoice-templates/assets', formData, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'preview_invoice_template': {
+      const { templateId, version, definition, assetIds, country, documentType, scenario, entityId } = args as {
+        templateId?: string; version?: number; definition?: Record<string, unknown>; assetIds?: unknown; country?: string; documentType?: string; scenario?: string; entityId?: string;
+      };
+      if (!templateId && !definition) throw new Error('Give either templateId (a saved template) or definition (an unsaved one).');
+      if (templateId && definition) throw new Error('Give either templateId or definition, not both.');
+      const query = new URLSearchParams({ format: 'base64' });
+      if (version && templateId) query.set('version', String(version));
+      if (country) query.set('country', country);
+      if (documentType) query.set('documentType', documentType);
+      if (scenario) query.set('scenario', scenario);
+      const headers = entityId ? { 'x-entity-id': String(entityId) } : undefined;
+      return templateId
+        ? callApi('GET', `/invoice-templates/${encodeURIComponent(templateId)}/preview?${query}`, undefined, headers)
+        : callApi('POST', `/invoice-templates/preview?${query}`, { definition, ...(assetIds ? { assetIds } : {}) }, headers);
     }
     case 'create_bank_account': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
