@@ -123,6 +123,8 @@ export interface PeppolCustomerUnreachableResponse {
  */
 export interface SendResult {
   referenceId: string;
+  /** The invoice template the PDF is laid out with (`{ key, name, version, source }`); `null` means the standard layout. */
+  invoiceTemplate?: InvoiceTemplateEcho | null;
   /**
    * Derived from the status alone: false for REJECTED, NEEDS_INFO (including UNROUTABLE), SETUP_NEEDED and HELD_PLATFORM_FAULT (or a dry run that would be
    * one), true for everything else (accepted, in flight, other holds, accumulated, PROCESSING). A replay of the same
@@ -491,6 +493,14 @@ export interface SubmitInvoiceInput {
    * a plan without company codes is a 403 `company_codes_not_included`.
    */
   companyCode?: string;
+  /**
+   * The invoice template that lays out this document's PDF (Enterprise invoice templates): the template's `key` or its `id`
+   * (`listInvoiceTemplates()`). Omitted: the entity's default template, else the standard layout. An unknown, another
+   * entity's or archived template is a stored NEEDS_INFO document with `INVOICE_TEMPLATE_UNKNOWN` / `INVOICE_TEMPLATE_ARCHIVED`.
+   * Presentation only: never part of the document's identity, never sent to an authority, and the invoice data and XML are
+   * the same with or without it.
+   */
+  invoiceTemplate?: string;
   issueDate: string;
   dueDate?: string;
   currency: string;
@@ -911,6 +921,8 @@ export interface ReceivedInvoiceFields {
 
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
 export interface InvoiceRecordTimestamps {
+  /** The invoice template the PDF is laid out with (`{ key, name, version, source }`); `null` means the standard layout. */
+  invoiceTemplate?: InvoiceTemplateEcho | null;
   /**
    * Null while the invoice is held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE): the tax code decides the tax treatment and the
    * treatment decides the mandate, so until the code is mapped the invoice has no country. The `country` filter on listInvoices never matches it.
@@ -2018,6 +2030,254 @@ export interface UpdateBankAccountInput {
 
 export interface ListBankAccountsResponse {
   bankAccounts: BankAccount[];
+}
+
+// ── Invoice templates ────────────────────────────────────────────────────────
+// A customer-uploaded invoice template is a named PDF layout (block order, fonts,
+// colours, margins, labels, an optional letterhead image) the customer-facing
+// invoice PDF is drawn with. It changes presentation only: every party, number,
+// amount and legal wording still comes from the invoice itself, and anything the
+// template leaves out that the country requires is added by the system. Versions
+// are immutable; a stored invoice keeps re-rendering with the version it was
+// issued with. A send names a template with `invoiceTemplate` (key or id).
+
+/** Where the template of a document came from: named on the request, or the entity default. */
+export type InvoiceTemplateSource = 'request' | 'entity_default';
+
+/** The `invoiceTemplate` echo on a send result and on a stored invoice. `null` there means the standard layout. */
+export interface InvoiceTemplateEcho {
+  key: string;
+  name: string;
+  version: number;
+  source: InvoiceTemplateSource;
+}
+
+export type InvoiceTemplateStatus = 'active' | 'archived';
+
+/** The images a template version carries: a list (roles asset_1, asset_2, ...) or an object naming each image's role. At most 4 images. */
+export type InvoiceTemplateAssetIds = string[] | Record<string, string>;
+
+/** A body entry of a template definition: a registry section, one data point, a structural block, a spacer, or two columns of sections/items. */
+export type InvoiceTemplateBodyEntry =
+  | { kind: 'section'; section: string; align?: 'left' | 'right' }
+  | { kind: 'item'; key: string; align?: 'left' | 'right' }
+  | { kind: 'structural'; name: string }
+  | { kind: 'system'; name: 'logo' | 'copy_notice' | 'statutory_wording' | 'custom_fields' | 'verification_qr' }
+  | { kind: 'spacer'; height: number }
+  | {
+      kind: 'columns';
+      left: Array<{ kind: 'section'; section: string; align?: 'left' | 'right' } | { kind: 'item'; key: string; align?: 'left' | 'right' }>;
+      right: Array<{ kind: 'section'; section: string; align?: 'left' | 'right' } | { kind: 'item'; key: string; align?: 'left' | 'right' }>;
+    };
+
+/** A band repeated on every page: the entity logo and up to a few data points. The legal footer and page numbers are added by the system. */
+export interface InvoiceTemplateBand {
+  logo?: boolean;
+  items?: string[];
+}
+
+/**
+ * A letterhead or background image printed behind the content. `asset` names the role of an image the version carries
+ * (upload it with uploadInvoiceTemplateAsset, then pass its id in `assetIds` under that role); a background naming an
+ * image the version does not carry fails with ASSET_NOT_CARRIED.
+ */
+export interface InvoiceTemplateBackground {
+  /** Role of the image: lowercase letters, digits and underscore, 1 to 40 characters. */
+  asset: string;
+  /** 'first' prints on the first page only; 'all' on every page. */
+  pages?: 'first' | 'all';
+  /** 'page' stretches to the page; 'width' fits the page width. */
+  fit?: 'page' | 'width';
+}
+
+/** The closed, schema-versioned template definition. Unknown keys and blocks are refused with 422 invoice_template_invalid. */
+export interface InvoiceTemplateDefinition {
+  schemaVersion: 1;
+  /** A bundled font family; an uploaded font is never accepted. */
+  fontFamily?: 'Roboto' | 'NotoSans';
+  /** 8 to 12. */
+  fontSize?: number;
+  /** #RRGGBB; a colour too light to read on white paper (contrast under 4.5:1) is refused. */
+  colors?: { text?: string; muted?: string; accent?: string };
+  /** 20 to 120 each. */
+  margins?: { left?: number; right?: number; top?: number; bottom?: number };
+  background?: InvoiceTemplateBackground;
+  header?: InvoiceTemplateBand;
+  footer?: InvoiceTemplateBand;
+  /** At most 60 entries. Legal wording and the verification QR cannot be removed, resized or relabelled. */
+  body: InvoiceTemplateBodyEntry[];
+  /** Registry data-point key to display label (at most 80 characters). A statutory label cannot be changed. */
+  labels?: Record<string, string>;
+}
+
+export interface InvoiceTemplate {
+  id: string;
+  /** The identity callers write (e.g. "VW-STANDARD"); never changes and is compared without regard to case. */
+  key: string;
+  name: string;
+  status: InvoiceTemplateStatus;
+  /** Exactly one active template can be the entity default; with none, invoices use the standard layout. */
+  isDefault: boolean;
+  currentVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceTemplateAsset {
+  role: string;
+  sha256: string;
+  contentType: string;
+  bytes: number;
+  width: number;
+  height: number;
+}
+
+/** One validation finding from rendering sample invoices for the entity's countries. An error fails the write with 422. */
+export interface InvoiceTemplateFinding {
+  severity: 'error' | 'warning' | 'info';
+  code: string;
+  /** The block the finding is about, when it is about one. */
+  block?: string;
+  message: string;
+}
+
+/** One entry of a template's version list (newest first). */
+export interface InvoiceTemplateVersionSummary {
+  version: number;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+export interface InvoiceTemplateVersion {
+  version: number;
+  definition: InvoiceTemplateDefinition;
+  assets: InvoiceTemplateAsset[];
+  findings: InvoiceTemplateFinding[];
+  createdAt: string;
+}
+
+export interface ListInvoiceTemplatesParams {
+  /** 'active' leaves archived templates out. */
+  status?: 'active';
+  /** Entity to list templates for. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface ListInvoiceTemplatesResponse {
+  templates: InvoiceTemplate[];
+  /** The documentType values previewInvoiceTemplate accepts. */
+  sampleDocumentTypes: string[];
+  /** The scenario values previewInvoiceTemplate accepts. */
+  sampleScenarios: string[];
+}
+
+/** GET /invoice-templates/{id}: the template, one version (the current one unless `version` is given) and the list of its versions. */
+export interface InvoiceTemplateDetail {
+  template: InvoiceTemplate;
+  version: InvoiceTemplateVersion;
+  /** Every version the template has, newest first. */
+  versions: InvoiceTemplateVersionSummary[];
+}
+
+export interface CreateInvoiceTemplateInput {
+  /** Letters, digits, dot, dash and underscore; at most 40 characters. Never changes. 409 invoice_template_key_exists if taken. */
+  key: string;
+  name: string;
+  definition: InvoiceTemplateDefinition;
+  /** Image ids from uploadInvoiceTemplateAsset, named by role when an object. */
+  assetIds?: InvoiceTemplateAssetIds;
+  /** true makes this the entity default (clearing the previous default). */
+  isDefault?: boolean;
+  /** Entity to create the template for. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface UpdateInvoiceTemplateInput {
+  name?: string;
+  /** 'archived' stops new sends using it; invoices already issued with it still re-render with it. Archiving the default is refused (409 invoice_template_is_default). */
+  status?: InvoiceTemplateStatus;
+  /** true makes it the default and clears the previous one; false clears the default so the standard layout is used. */
+  isDefault?: boolean;
+  /** Entity the template belongs to. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface UpdateInvoiceTemplateDefinitionInput {
+  /** The complete new definition. */
+  definition: InvoiceTemplateDefinition;
+  /** Images belong to a version: pass them again to keep them. */
+  assetIds?: InvoiceTemplateAssetIds;
+  /** Entity the template belongs to. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+/** Response of create (201) and of publishing a new version (200). */
+export interface InvoiceTemplateWriteResponse {
+  template: InvoiceTemplate;
+  version: InvoiceTemplateVersion;
+  findings: InvoiceTemplateFinding[];
+}
+
+/** Response of PATCH /invoice-templates/{id}. */
+export interface InvoiceTemplateUpdateResponse {
+  template: InvoiceTemplate;
+}
+
+/** A staged image, ready to be named in `assetIds`. The id is content-addressed: the same bytes always give the same id. */
+export interface InvoiceTemplateStagedAsset {
+  assetId: string;
+  sha256: string;
+  contentType: string;
+  bytes: number;
+  width: number;
+  height: number;
+}
+
+export interface UploadInvoiceTemplateAssetInput {
+  /** The image file: PNG or JPEG only (WEBP is refused), up to 3 MiB, 16 to 4000 pixels per side, RGB (a CMYK JPEG is refused). */
+  file: Blob | ArrayBuffer | Uint8Array;
+  /** The image's actual MIME type; it must match the file's real signature. */
+  contentType: 'image/png' | 'image/jpeg';
+  /** Name for the multipart part; default `template-image.<ext>`. */
+  filename?: string;
+  /** Entity to upload the image for. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+/** Sample-document options shared by both preview calls. */
+export interface InvoiceTemplatePreviewOptions {
+  /** Two-letter country of the sample invoice. Defaults to the entity's own country. */
+  country?: string;
+  /** Default 'invoice'. */
+  documentType?: 'invoice' | 'credit_note';
+  /** Tax scenario of the sample. Default 'standard'. */
+  scenario?: 'standard' | 'exempt';
+  /** Entity whose profile and logo the sample uses. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+/** Preview of a saved template: its `templateId` (id or key), optionally one `version` (default: the current one). */
+export interface PreviewSavedInvoiceTemplateInput extends InvoiceTemplatePreviewOptions {
+  templateId: string;
+  version?: number;
+}
+
+/** Preview of an unsaved definition. Pass `assetIds` so its background image prints. */
+export interface PreviewUnsavedInvoiceTemplateInput extends InvoiceTemplatePreviewOptions {
+  definition: InvoiceTemplateDefinition;
+  assetIds?: InvoiceTemplateAssetIds;
+}
+
+export type PreviewInvoiceTemplateInput = PreviewSavedInvoiceTemplateInput | PreviewUnsavedInvoiceTemplateInput;
+
+/** A watermarked ("SAMPLE - NOT AN INVOICE") PDF rendered on synthetic data; nothing is stored or sent. */
+export interface InvoiceTemplatePreview {
+  contentType: 'application/pdf';
+  bytes: number;
+  /** The PDF, base64-encoded. */
+  pdfBase64: string;
+  /** The blocks the system added because the template left them out. */
+  appended: string[];
 }
 
 // ── Company codes (Enterprise) ───────────────────────────────────────────────

@@ -48,6 +48,18 @@ import type {
   CreateFieldMappingInput,
   CreateFieldMappingResponse,
   ListBankAccountsResponse,
+  ListInvoiceTemplatesParams,
+  ListInvoiceTemplatesResponse,
+  InvoiceTemplateDetail,
+  CreateInvoiceTemplateInput,
+  UpdateInvoiceTemplateInput,
+  UpdateInvoiceTemplateDefinitionInput,
+  InvoiceTemplateWriteResponse,
+  InvoiceTemplateUpdateResponse,
+  InvoiceTemplateStagedAsset,
+  UploadInvoiceTemplateAssetInput,
+  PreviewInvoiceTemplateInput,
+  InvoiceTemplatePreview,
   Webhook,
   CreateWebhookInput,
   TestWebhookInput,
@@ -565,6 +577,66 @@ export class ClearvoClient {
   /** DELETE /bank-accounts/{id} responds 204 with no body. */
   deleteBankAccount(bankAccountId: string, entityId?: string): Promise<void> {
     return this.request('DELETE', `/bank-accounts/${encodeURIComponent(bankAccountId)}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── Invoice templates ─────────────────────────────────────────────────────────
+  // Customer-uploaded PDF layouts (presentation only). A send names one with its
+  // `invoiceTemplate` field (key or id); see InvoiceTemplate's doc comment (types.ts).
+
+  /** GET /invoice-templates responds 200 with `{ templates, sampleDocumentTypes, sampleScenarios }` (archived templates included unless `status: 'active'`). */
+  listInvoiceTemplates(params: ListInvoiceTemplatesParams = {}): Promise<ListInvoiceTemplatesResponse> {
+    const { entityId, status } = params;
+    return this.request('GET', `/invoice-templates${status === 'active' ? '?status=active' : ''}`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** GET /invoice-templates/{id} (id or key) responds 200 with `{ template, version, versions }`; `version` selects a version, default the current one. */
+  getInvoiceTemplate(templateId: string, opts: { version?: number; entityId?: string } = {}): Promise<InvoiceTemplateDetail> {
+    const query = opts.version ? `?version=${encodeURIComponent(String(opts.version))}` : '';
+    return this.request('GET', `/invoice-templates/${encodeURIComponent(templateId)}${query}`, undefined, opts.entityId ? { 'x-entity-id': opts.entityId } : undefined);
+  }
+
+  /** POST /invoice-templates responds 201 with `{ template, version, findings }`. A definition that fails validation is a 422 `invoice_template_invalid` with `findings`; nothing is saved. */
+  createInvoiceTemplate(input: CreateInvoiceTemplateInput): Promise<InvoiceTemplateWriteResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/invoice-templates', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** PATCH /invoice-templates/{id} — rename, archive or reactivate, or set/clear the entity default. A template is never deleted and its key never changes. */
+  updateInvoiceTemplate(templateId: string, input: UpdateInvoiceTemplateInput): Promise<InvoiceTemplateUpdateResponse> {
+    const { entityId, ...body } = input;
+    return this.request('PATCH', `/invoice-templates/${encodeURIComponent(templateId)}`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** PUT /invoice-templates/{id}/definition publishes a new immutable version from a full definition and responds 200 with `{ template, version, findings }`. */
+  updateInvoiceTemplateDefinition(templateId: string, input: UpdateInvoiceTemplateDefinitionInput): Promise<InvoiceTemplateWriteResponse> {
+    const { entityId, ...body } = input;
+    return this.request('PUT', `/invoice-templates/${encodeURIComponent(templateId)}/definition`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** POST /invoice-templates/assets (multipart) stages an image for a template version and responds 201 with `{ assetId, sha256, contentType, bytes, width, height }`. */
+  uploadInvoiceTemplateAsset(input: UploadInvoiceTemplateAssetInput): Promise<InvoiceTemplateStagedAsset> {
+    const formData = new FormData();
+    formData.append('file', new Blob([input.file as ArrayBuffer], { type: input.contentType }), input.filename ?? `template-image.${input.contentType.split('/')[1]}`);
+    return this.request('POST', '/invoice-templates/assets', formData, input.entityId ? { 'x-entity-id': input.entityId } : undefined);
+  }
+
+  /**
+   * Renders a template on synthetic sample data and returns the PDF as base64 (every page watermarked "SAMPLE - NOT AN INVOICE";
+   * nothing is stored or sent). Pass `templateId` (GET /invoice-templates/{id}/preview) for a saved template, or `definition`
+   * (POST /invoice-templates/preview) for an unsaved one.
+   */
+  previewInvoiceTemplate(input: PreviewInvoiceTemplateInput): Promise<InvoiceTemplatePreview> {
+    const query = new URLSearchParams({ format: 'base64' });
+    if (input.country) query.set('country', input.country);
+    if (input.documentType) query.set('documentType', input.documentType);
+    if (input.scenario) query.set('scenario', input.scenario);
+    const headers = input.entityId ? { 'x-entity-id': input.entityId } : undefined;
+    if ('templateId' in input && input.templateId) {
+      if (input.version) query.set('version', String(input.version));
+      return this.request('GET', `/invoice-templates/${encodeURIComponent(input.templateId)}/preview?${query.toString()}`, undefined, headers);
+    }
+    const { definition, assetIds } = input as { definition: unknown; assetIds?: unknown };
+    return this.request('POST', `/invoice-templates/preview?${query.toString()}`, { definition, ...(assetIds ? { assetIds } : {}) }, headers);
   }
 
   // ── Requirements ──────────────────────────────────────────────────────────────

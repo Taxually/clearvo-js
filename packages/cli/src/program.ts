@@ -172,13 +172,15 @@ export function createProgram(): Command {
     .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the outcome is in the body. PROCESSING means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the outcome is REJECTED or NEEDS_INFO (which includes an unroutable recipient; errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on outcome yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
+    .option('--invoice-template <keyOrId>', 'Invoice template (key or id, see `clearvo invoice-templates list`) that lays out this document\'s PDF; overrides invoiceTemplate in the file. Without one the entity default template applies, else the standard layout. Presentation only')
     .option('--no-throw-on-rejected', 'Exit 0 when the stored outcome is REJECTED or NEEDS_INFO (default: exit 1)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string; throwOnRejected?: boolean }) => {
+    .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string; invoiceTemplate?: string; throwOnRejected?: boolean }) => {
       const raw = readFileSync(file, 'utf8');
       const body = JSON.parse(raw) as Record<string, unknown>;
       if (opts.dryRun) body.dryRun = true;
       if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
+      if (opts.invoiceTemplate) body.invoiceTemplate = opts.invoiceTemplate;
       // x-idempotency-key is optional: the API generates its own identity key from the invoice
       // (type, country, invoice number) and answers 409 IDEMPOTENT_BODY_MISMATCH if the same invoice
       // is re-sent with changed content. A 200 means the document is STORED: read outcome, clearanceStatus,
@@ -971,8 +973,176 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo invoice-templates ───────────────────────────────────────────────
+  // Customer-uploaded PDF layouts (presentation only; versions are immutable). A send
+  // names one with `clearvo send --invoice-template <key>` or an `invoiceTemplate`
+  // field in the invoice JSON. MCP twins: list_invoice_templates, get_invoice_template,
+  // create_invoice_template, update_invoice_template, update_invoice_template_definition,
+  // upload_invoice_template_asset, preview_invoice_template.
+  const invoiceTemplates = program.command('invoice-templates').description('Manage invoice templates: the PDF layout your invoices are drawn with (presentation only; legal wording is always system-added)');
+  const entityHeader = (entity?: string): Record<string, string> | undefined => (entity ? { 'x-entity-id': entity } : undefined);
+  const collectAsset = (val: string, prev: string[]): string[] => [...prev, val];
+  const ENTITY_DESC = 'Entity the template belongs to. Required for account-scoped keys; omit for entity-scoped keys.';
+  const ASSET_DESC = 'An uploaded image for the template as role=assetId (from `invoice-templates upload-asset`), e.g. letterhead=ab12.png. Repeatable, at most 4. A definition.background.asset names a role';
+
+  /** Reads a JSON file, exiting with a clear message when it is not valid JSON. */
+  function readJsonFile(file: string): Record<string, unknown> {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    } catch (e) {
+      console.error(`Error: ${file} could not be read as JSON: ${(e as Error).message}`);
+      process.exit(1);
+    }
+  }
+
+  /** Turns repeated role=assetId flags into the API's assetIds object (undefined when none). */
+  function parseAssetFlags(values: string[]): Record<string, string> | undefined {
+    if (values.length === 0) return undefined;
+    const out: Record<string, string> = {};
+    for (const v of values) {
+      const i = v.indexOf('=');
+      if (i < 1 || i === v.length - 1) {
+        console.error(`Error: invalid --asset "${v}". Expected role=assetId, e.g. letterhead=ab12.png`);
+        process.exit(1);
+      }
+      out[v.slice(0, i)] = v.slice(i + 1);
+    }
+    return out;
+  }
+
+  invoiceTemplates
+    .command('list')
+    .description('List invoice templates (archived ones included unless --active)')
+    .option('--active', 'Leave archived templates out')
+    .option('--entity <entityId>', 'Entity to list templates for. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { active?: boolean; entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/invoice-templates${opts.active ? '?status=active' : ''}`, undefined, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  invoiceTemplates
+    .command('get <idOrKey>')
+    .description('Get one template: its definition, images and validation findings (the current version unless --version), plus its list of versions')
+    .option('--template-version <n>', 'A specific version number (default: the current version)')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (idOrKey: string, opts: { templateVersion?: string; entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/invoice-templates/${encodeURIComponent(idOrKey)}${opts.templateVersion ? `?version=${encodeURIComponent(opts.templateVersion)}` : ''}`, undefined, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  invoiceTemplates
+    .command('create')
+    .description('Create a template (version 1) from a definition JSON file. The definition is validated by rendering sample invoices: an error fails with 422 invoice_template_invalid and nothing is saved')
+    .requiredOption('--key <key>', 'The identity callers write, e.g. VW-STANDARD (letters, digits, dot, dash, underscore; at most 40 characters; never changes)')
+    .requiredOption('--name <name>', 'Display name')
+    .requiredOption('--definition-file <file>', 'JSON file holding the template definition ({ "schemaVersion": 1, "body": [...], ... })')
+    .option('--asset <role=assetId>', ASSET_DESC, collectAsset, [] as string[])
+    .option('--default', 'Make this the entity default template (clears the previous default)')
+    .option('--entity <entityId>', 'Entity to create the template for. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { key: string; name: string; definitionFile: string; asset: string[]; default?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { key: opts.key, name: opts.name, definition: readJsonFile(opts.definitionFile) };
+      const assetIds = parseAssetFlags(opts.asset);
+      if (assetIds) body.assetIds = assetIds;
+      if (opts.default) body.isDefault = true;
+      const result = await api('POST', '/invoice-templates', body, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  invoiceTemplates
+    .command('update <idOrKey>')
+    .description('Rename a template, archive or reactivate it, and/or set or clear the entity default (a template is never deleted and its key never changes). To change the layout use `invoice-templates definition`')
+    .option('--name <name>', 'New display name')
+    .option('--archive', 'Set status=archived (refused for the default template: 409 invoice_template_is_default)')
+    .option('--activate', 'Set status=active')
+    .option('--default', 'Make this the default template (clears the previous default)')
+    .option('--no-default', 'Clear the default so the standard layout is used')
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (idOrKey: string, opts: { name?: string; archive?: boolean; activate?: boolean; default?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.name) body.name = opts.name;
+      if (opts.archive) body.status = 'archived';
+      if (opts.activate) body.status = 'active';
+      // commander gives default === undefined when neither --default nor --no-default was passed.
+      if (opts.default !== undefined) body.isDefault = opts.default;
+      const result = await api('PATCH', `/invoice-templates/${encodeURIComponent(idOrKey)}`, body, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  invoiceTemplates
+    .command('definition <idOrKey>')
+    .description('Publish a new version of a template from a full definition JSON file (versions are immutable: invoices already issued keep the version they were issued with). Images belong to a version: pass --asset again to keep them')
+    .requiredOption('--definition-file <file>', 'JSON file holding the complete new definition')
+    .option('--asset <role=assetId>', ASSET_DESC, collectAsset, [] as string[])
+    .option('--entity <entityId>', ENTITY_DESC)
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (idOrKey: string, opts: { definitionFile: string; asset: string[]; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { definition: readJsonFile(opts.definitionFile) };
+      const assetIds = parseAssetFlags(opts.asset);
+      if (assetIds) body.assetIds = assetIds;
+      const result = await api('PUT', `/invoice-templates/${encodeURIComponent(idOrKey)}/definition`, body, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  invoiceTemplates
+    .command('upload-asset <file>')
+    .description('Upload an image (PNG or JPEG; up to 3 MiB; 16 to 4000 pixels per side; RGB, not CMYK) for a template, e.g. a letterhead. Prints { assetId, ... }: pass the id as --asset role=assetId')
+    .option('--content-type <type>', 'image/png or image/jpeg (default: from the file extension)')
+    .option('--entity <entityId>', 'Entity to upload the image for. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { contentType?: string; entity?: string; pretty?: boolean }) => {
+      const byExt: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+      const contentType = opts.contentType ?? byExt[(file.split('.').pop() ?? '').toLowerCase()];
+      if (!contentType || !Object.values(byExt).includes(contentType)) {
+        console.error('Error: the image must be PNG or JPEG. Pass --content-type image/png|image/jpeg if the file name has no such extension.');
+        process.exit(1);
+      }
+      const formData = new FormData();
+      formData.append('file', new Blob([readFileSync(file)], { type: contentType }), basename(file));
+      const result = await api('POST', '/invoice-templates/assets', formData, entityHeader(opts.entity));
+      print(result, !!opts.pretty);
+    });
+
+  invoiceTemplates
+    .command('preview [idOrKey]')
+    .description('Render a template on synthetic sample data to a PDF (every page watermarked "SAMPLE - NOT AN INVOICE"; nothing is stored or sent). Give a saved template, or --definition-file for an unsaved one')
+    .option('--template-version <n>', 'With a saved template: a specific version (default: the current one)')
+    .option('--definition-file <file>', 'Preview an unsaved definition from this JSON file instead of a saved template')
+    .option('--asset <role=assetId>', 'With --definition-file: an uploaded image as role=assetId so its background prints. Repeatable', collectAsset, [] as string[])
+    .option('--country <code>', 'Two-letter country of the sample invoice (default: the entity\'s own country)')
+    .option('--document-type <type>', 'invoice (default) or credit_note')
+    .option('--scenario <scenario>', 'standard (default) or exempt')
+    .option('--out <file>', 'Write the PDF here', 'invoice-template-preview.pdf')
+    .option('--entity <entityId>', 'Entity whose profile and logo the sample uses. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print the JSON summary')
+    .action(async (idOrKey: string | undefined, opts: { templateVersion?: string; definitionFile?: string; asset: string[]; country?: string; documentType?: string; scenario?: string; out: string; entity?: string; pretty?: boolean }) => {
+      if (!idOrKey && !opts.definitionFile) {
+        console.error('Error: give a saved template (id or key) or --definition-file for an unsaved one.');
+        process.exit(1);
+      }
+      if (idOrKey && opts.definitionFile) {
+        console.error('Error: give either a saved template or --definition-file, not both.');
+        process.exit(1);
+      }
+      const query = new URLSearchParams({ format: 'base64' });
+      if (opts.templateVersion && idOrKey) query.set('version', opts.templateVersion);
+      if (opts.country) query.set('country', opts.country);
+      if (opts.documentType) query.set('documentType', opts.documentType);
+      if (opts.scenario) query.set('scenario', opts.scenario);
+      const assetIds = parseAssetFlags(opts.asset);
+      const result = (idOrKey
+        ? await api('GET', `/invoice-templates/${encodeURIComponent(idOrKey)}/preview?${query}`, undefined, entityHeader(opts.entity))
+        : await api('POST', `/invoice-templates/preview?${query}`, { definition: readJsonFile(opts.definitionFile as string), ...(assetIds ? { assetIds } : {}) }, entityHeader(opts.entity))
+      ) as { contentType: string; bytes: number; pdfBase64: string; appended: string[] };
+      writeFileSync(opts.out, Buffer.from(result.pdfBase64, 'base64'));
+      print({ file: opts.out, contentType: result.contentType, bytes: result.bytes, appended: result.appended }, !!opts.pretty);
+    });
+
   // ── clearvo webhooks ────────────────────────────────────────────────────────
-  const webhooks = program.command('webhooks').description('Manage webhook endpoints');
+  const webhooks =program.command('webhooks').description('Manage webhook endpoints');
   
   webhooks
     .command('list')
