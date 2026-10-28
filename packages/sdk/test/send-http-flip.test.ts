@@ -27,13 +27,13 @@ const rejected = {
   rejectionSource: 'PRE_SUBMISSION_CHECK',
   terminal: true,
   issues: [],
-  buyerResponse: null,
+  customerResponse: null,
   nextStep: { actor: 'merchant', message: 'Fix the customer address', fixUrl: 'https://app.clearvo.io/x' },
   error: { code: 'MISSING_CUSTOMER_ADDRESS', message: 'Customer address is required', fixUrl: 'https://app.clearvo.io/x', isMerchantResolvable: true, retryable: false },
   errors: [{ errorCode: 'MISSING_CUSTOMER_ADDRESS', severity: 'ERROR', path: '/customer/address', message: 'Customer address is required' }],
 };
 const needsInfo = { ...rejected, status: 'WAITING_FOR_YOU', reason: 'NEEDS_INFO', rejectionSource: undefined, terminal: false };
-const cleared = { ok: true, id: 'EI-IT-2', referenceId: 'EI-IT-2', status: 'PENDING', stage: 'awaiting_authority', reason: 'PENDING', terminal: false, issues: [], buyerResponse: null, nextStep: null };
+const cleared = { ok: true, id: 'EI-IT-2', referenceId: 'EI-IT-2', status: 'PENDING', stage: 'awaiting_authority', reason: 'PENDING', terminal: false, issues: [], customerResponse: null, nextStep: null };
 
 describe('submitInvoice RECEIVED / WAITING_FOR_PLATFORM / UNROUTABLE', () => {
   it('returns RECEIVED and UNDELIVERED (WAITING_FOR_PLATFORM) bodies without throwing', async () => {

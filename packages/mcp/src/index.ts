@@ -442,7 +442,7 @@ const TOOLS = [
       '(no upgradeUrl; nothing is submitted) unless a reporting obligation already owed is open. Tell the user to contact us to add it, and check ' +
       'solutionAccess in get_setup_status. ' +
       'Returns a referenceId — call poll_status to track the outcome. Every ' +
-      'response also carries `status` (one of ten: RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]`, `buyerResponse`, ' +
+      'response also carries `status` (one of ten: RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]`, `customerResponse`, ' +
       '`mandate`, `reviewRequired` and `nextStep`. A 200 means the document is STORED, not that it was accepted: ' +
       'a well-formed document is always stored first, and a validation failure, a missing setup or a not-yet-supported country becomes a status on the stored record, not a lost request. ' +
       'Read `status`, `stage`, `reason` and `terminal`. `status` says who has to move it: RECEIVED and PENDING (stage queued or awaiting_authority) and ACCUMULATED: Clearvo or the authority is working on it, wait; WAITING_FOR_YOU: you or the user can fix it, and it never expires; WAITING_FOR_PLATFORM: Clearvo resolves it, nothing for you to do; COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED, CANCELLED, SKIPPED and NOT_APPLICABLE: finished. `reason` is the specific cause (for example NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION). ' +
@@ -462,7 +462,7 @@ const TOOLS = [
       'gets a real AEAT answer (see get_invoice\'s own siiDetail). ' +
       'The issuing company on a sale is this entity and is never supplied by the caller: omit `supplier` entirely and its name, tax ID, address and contact come from the Business Profile (on a purchase the entity is the customer and `supplier` is the vendor you pass). ' +
       'If the profile is incomplete the document is stored WAITING_FOR_YOU with reason NEEDS_INFO (HTTP 200) and error MISSING_SUPPLIER_DATA and a fixUrl — ask the user to complete the Business Profile; do not invent or copy an address. ' +
-      'A PENDING status means sent or queued for the authority, not final: always follow with poll_status, which carries the authority\'s own answer. RECEIVED is not an answer: keep the `id` and poll. `ok` is false for REJECTED and for WAITING_FOR_YOU with reason NEEDS_INFO, UNROUTABLE or SETUP_NEEDED, and for WAITING_FOR_PLATFORM with reason HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. An UNROUTABLE document is WAITING_FOR_YOU: it is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is WAITING_FOR_PLATFORM. `issues[]` carries warnings or errors an authority reported on a document it took (a Spain SII answer with errors is WAITING_FOR_YOU, reason REGISTERED_WITH_ERRORS: amend it, never resubmit). `buyerResponse` is the buyer\'s separate decision (in_review, approved, partially_approved, disputed, refused) and never changes `status`. ' +
+      'A PENDING status means sent or queued for the authority, not final: always follow with poll_status, which carries the authority\'s own answer. RECEIVED is not an answer: keep the `id` and poll. `ok` is false for REJECTED and for WAITING_FOR_YOU with reason NEEDS_INFO, UNROUTABLE or SETUP_NEEDED, and for WAITING_FOR_PLATFORM with reason HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. An UNROUTABLE document is WAITING_FOR_YOU: it is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is WAITING_FOR_PLATFORM. `issues[]` carries warnings or errors an authority reported on a document it took (a Spain SII answer with errors is WAITING_FOR_YOU, reason REGISTERED_WITH_ERRORS: amend it, never resubmit). `customerResponse` is the buyer\'s separate decision (in_review, approved, partially_approved, disputed, refused) and never changes `status`. ' +
       'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
       'resolved country is applied automatically (an entity can hold registrations in more than ' +
       'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
@@ -904,12 +904,12 @@ const TOOLS = [
     name: 'poll_status',
     description:
       'Check the status of a document previously submitted via submit_invoice. Reads the stored status only: it never calls the authority, so it is safe to repeat. ' +
-      'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns `status` (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]` and `buyerResponse`. `status` says who the document is waiting for: ' +
+      'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns `status` (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]` and `customerResponse`. `status` says who the document is waiting for: ' +
       'RECEIVED (stored, still processing), PENDING (stage queued: not sent yet; awaiting_authority: sent, wait for the answer), ACCUMULATED (in a periodic report, not yet filed): wait, do nothing; ' +
       'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
       'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
       'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_DISCARDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
-      '`buyerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
+      '`customerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resend the corrected document to POST /v1/send with the same invoice number. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
@@ -1618,8 +1618,8 @@ const TOOLS = [
     name: 'list_invoices',
     description:
       'List invoices previously submitted through Clearvo. ' +
-      'Filter by country, status, reason, buyer response, or date. ' +
-      'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), and per invoice `status`, `stage`, `reason`, `statusLabel`, `terminal`, `issues[]`, `buyerResponse` and authority reference numbers. ' +
+      'Filter by country, status, reason, customer response, or date. ' +
+      'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), and per invoice `status`, `stage`, `reason`, `statusLabel`, `terminal`, `issues[]`, `customerResponse` and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING or WAITING_FOR_YOU, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
       'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
@@ -1772,7 +1772,7 @@ const TOOLS = [
       'payload authenticity via HMAC-SHA256. ' +
       'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
       'invoice.pending, product.classification_changed, ' +
-      'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, status, stage, reasonCode, terminal, issues, buyerResponse, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
+      'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, status, stage, reasonCode, terminal, issues, customerResponse, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
       'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
       'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +

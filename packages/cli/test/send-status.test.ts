@@ -38,7 +38,7 @@ const stderr = () => errSpy.mock.calls.map((c) => c.join(' ')).join('\n');
 const stdout = () => logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
 
 const rejected = {
-  ok: false, id: 'EI-IT-1', status: 'REJECTED', stage: null, reason: 'REJECTED', terminal: true, issues: [], buyerResponse: null,
+  ok: false, id: 'EI-IT-1', status: 'REJECTED', stage: null, reason: 'REJECTED', terminal: true, issues: [], customerResponse: null,
   nextStep: { actor: 'merchant', message: 'Fix the customer address', fixUrl: 'https://app.clearvo.io/x' },
   error: { code: 'MISSING_CUSTOMER_ADDRESS', message: 'Customer address is required' },
   errors: [{ errorCode: 'MISSING_CUSTOMER_ADDRESS', severity: 'ERROR', path: '/customer/address', message: 'Customer address is required' }],
@@ -123,10 +123,10 @@ describe('clearvo send outcome', () => {
 });
 
 describe('clearvo invoices list', () => {
-  it('sends status, reason and the buyer-response filter as businessStatus', async () => {
+  it('sends status, reason and the customer-response filter as businessStatus', async () => {
     reply({ invoices: [] });
     const exit = exitThrows();
-    await createProgram().parseAsync(['invoices', 'list', '--status', 'WAITING_FOR_YOU', '--reason', 'NEEDS_INFO', '--buyer-response', 'refused', '--country', 'DE'], { from: 'user' });
+    await createProgram().parseAsync(['invoices', 'list', '--status', 'WAITING_FOR_YOU', '--reason', 'NEEDS_INFO', '--customer-response', 'refused', '--country', 'DE'], { from: 'user' });
     expect(exit).not.toHaveBeenCalled();
     const url = String((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
     expect(url).toContain('/invoices?');

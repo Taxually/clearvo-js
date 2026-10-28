@@ -169,7 +169,7 @@ export function createProgram(): Command {
   // Invoice responses carry `totalTax` (never `totalVat`).
   program
     .command('send <file>')
-    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the status (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), stage, reason, issues and buyerResponse are in the body. RECEIVED means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the status is REJECTED, or WAITING_FOR_YOU for NEEDS_INFO or UNROUTABLE (errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on status yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
+    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the status (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), stage, reason, issues and customerResponse are in the body. RECEIVED means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the status is REJECTED, or WAITING_FOR_YOU for NEEDS_INFO or UNROUTABLE (errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on status yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE reason) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
     .option('--no-throw-on-rejected', 'Exit 0 when the stored status is REJECTED or WAITING_FOR_YOU for NEEDS_INFO / UNROUTABLE (default: exit 1)')
@@ -403,7 +403,7 @@ export function createProgram(): Command {
   // ── clearvo status <referenceId> ─────────────────────────────────────────────
   program
     .command('status <referenceId>')
-    .description('Poll the status of a submitted invoice: status, stage, reason, issues and buyerResponse')
+    .description('Poll the status of a submitted invoice: status, stage, reason, issues and customerResponse')
     .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 country code of the invoice (e.g. IT, PL)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (referenceId: string, opts: { country: string; pretty?: boolean }) => {
@@ -415,14 +415,14 @@ export function createProgram(): Command {
     });
   
   // ── clearvo invoices list ────────────────────────────────────────────────────
-  // MCP twin: list_invoices (GET /v1/invoices). Each row carries status, stage, reason, issues and buyerResponse.
+  // MCP twin: list_invoices (GET /v1/invoices). Each row carries status, stage, reason, issues and customerResponse.
   const invoices = program.command('invoices').description('List submitted invoices');
   invoices
     .command('list')
-    .description('List invoices with their status, stage, reason, issues and buyerResponse. Filter by status (one of ten), reason (the specific cause) and the buyer\'s decision')
+    .description('List invoices with their status, stage, reason, issues and customerResponse. Filter by status (one of ten), reason (the specific cause) and the buyer\'s decision')
     .option('--status <status>', 'RECEIVED | PENDING | WAITING_FOR_YOU | WAITING_FOR_PLATFORM | ACCUMULATED | COMPLETED | REJECTED | CANCELLED | SKIPPED | NOT_APPLICABLE')
     .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, HELD_UNMAPPED_TAX_CODE, SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED are also accepted)')
-    .option('--buyer-response <value>', 'The buyer\'s decision: in_review | approved | partially_approved | disputed | refused (a regime\'s own native code is also accepted)')
+    .option('--customer-response <value>', 'The buyer\'s decision: in_review | approved | partially_approved | disputed | refused (a regime\'s own native code is also accepted)')
     .option('--country <code>', 'ISO 3166-1 alpha-2 country code')
     .option('--limit <n>', 'Results per page (default 25, max 100)')
     .option('--after-id <id>', 'Cursor: nextCursor from a previous response')
@@ -430,11 +430,11 @@ export function createProgram(): Command {
     .option('--received-after <iso>', 'Only invoices received after this ISO 8601 timestamp')
     .option('--entity <id>', 'Entity id (account-scoped keys only)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { status?: string; reason?: string; buyerResponse?: string; country?: string; limit?: string; afterId?: string; beforeId?: string; receivedAfter?: string; entity?: string; pretty?: boolean }) => {
+    .action(async (opts: { status?: string; reason?: string; customerResponse?: string; country?: string; limit?: string; afterId?: string; beforeId?: string; receivedAfter?: string; entity?: string; pretty?: boolean }) => {
       const qs = new URLSearchParams();
       if (opts.status) qs.set('status', opts.status);
       if (opts.reason) qs.set('reason', opts.reason);
-      if (opts.buyerResponse) qs.set('businessStatus', opts.buyerResponse);
+      if (opts.customerResponse) qs.set('businessStatus', opts.customerResponse);
       if (opts.country) qs.set('country', opts.country);
       if (opts.limit) qs.set('limit', opts.limit);
       if (opts.afterId) qs.set('after_id', opts.afterId);

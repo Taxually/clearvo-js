@@ -1,11 +1,11 @@
-import type { SendResult, StatusChangedWebhookPayload, InvoiceStatus, InvoiceStage, InvoiceReason, BuyerResponse, Issue } from '../src/types.js';
+import type { SendResult, StatusChangedWebhookPayload, InvoiceStatus, InvoiceStage, InvoiceReason, CustomerResponse, Issue } from '../src/types.js';
 
 declare const r: SendResult;
 const status: 'RECEIVED' | 'PENDING' | 'WAITING_FOR_YOU' | 'WAITING_FOR_PLATFORM' | 'ACCUMULATED' | 'COMPLETED' | 'REJECTED' | 'CANCELLED' | 'SKIPPED' | 'NOT_APPLICABLE' = r.status;
 const stage: 'queued' | 'awaiting_authority' | 'generated' | 'reported' | 'cleared' | 'delivered' | 'received' | null = r.stage;
 const reason: InvoiceReason = r.reason;
 const issues: Issue[] = r.issues;
-const buyer: BuyerResponse | null = r.buyerResponse;
+const buyer: CustomerResponse | null = r.customerResponse;
 const terminal: boolean = r.terminal;
 void status;
 void stage;

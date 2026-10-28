@@ -274,10 +274,10 @@ export interface Issue {
 }
 
 /** The buyer's decision on an invoice. Separate from `status`: it never moves an invoice in or out of flight. */
-export type BuyerResponseStatus = 'in_review' | 'approved' | 'partially_approved' | 'disputed' | 'refused';
+export type CustomerResponseStatus = 'in_review' | 'approved' | 'partially_approved' | 'disputed' | 'refused';
 
-export interface BuyerResponse {
-  status: BuyerResponseStatus;
+export interface CustomerResponse {
+  status: CustomerResponseStatus;
   /** The regime's own status code, for example PAYMENT_SENT. */
   native: string;
   label: string;
@@ -303,7 +303,7 @@ export interface InvoiceStatusFields {
   /** Warnings and errors reported on an invoice that was otherwise taken. Empty when there are none. */
   issues: Issue[];
   /** The buyer's decision, null when the regime has none or the buyer has not answered. */
-  buyerResponse: BuyerResponse | null;
+  customerResponse: CustomerResponse | null;
   /** Only on a REJECTED invoice: who said no. */
   rejectionSource?: 'PRE_SUBMISSION_CHECK' | 'AUTHORITY';
 }
@@ -836,7 +836,7 @@ export interface ListInvoicesParams {
   /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. */
   reason?: InvoiceReason;
   /** Filter on the buyer's decision: in_review, approved, partially_approved, disputed or refused. A regime's own native code (for example PAYMENT_SENT) is also accepted. */
-  businessStatus?: BuyerResponseStatus | (string & {});
+  businessStatus?: CustomerResponseStatus | (string & {});
   /** ISO 8601 timestamp — only invoices whose Clearvo-side created_at is strictly after this. A monotonic ingestion cursor, distinct from issueDate; most relevant for Mexico CFDIs given SAT's own multi-day publishing lag. */
   receivedAfter?: string;
 }
@@ -3449,7 +3449,7 @@ export interface UpdateBusinessStatusResponse {
   /** The invoice's new native status value. */
   businessStatus: BusinessStatus;
   /** The buyer's decision in the shared, regime-agnostic vocabulary (`status`), with the native value alongside. */
-  buyerResponse?: BuyerResponse | null;
+  customerResponse?: CustomerResponse | null;
   updatedAt: string;
 }
 
@@ -4260,7 +4260,7 @@ export interface SendRejectionBody {
   nextStep?: NextStep | null;
   terminal?: boolean;
   issues?: Issue[];
-  buyerResponse?: BuyerResponse | null;
+  customerResponse?: CustomerResponse | null;
   rejectionSource?: 'PRE_SUBMISSION_CHECK' | 'AUTHORITY';
   /** The stored record's id. */
   id?: string;
@@ -4423,7 +4423,7 @@ export interface StatusChangedWebhookPayload {
   issues: Issue[];
   terminal: boolean;
   /** The buyer's decision, when the regime has one. */
-  buyerResponse?: BuyerResponse | null;
+  customerResponse?: CustomerResponse | null;
   /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   /** Who and what caused the change. */

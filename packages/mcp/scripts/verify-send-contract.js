@@ -22,17 +22,17 @@ if (!fs.existsSync(SERVER)) {
 }
 
 const REJECTED = {
-  ok: false, id: 'EI-IT-1', referenceId: 'EI-IT-1', status: 'REJECTED', stage: null, reason: 'REJECTED', terminal: true, issues: [], buyerResponse: null,
+  ok: false, id: 'EI-IT-1', referenceId: 'EI-IT-1', status: 'REJECTED', stage: null, reason: 'REJECTED', terminal: true, issues: [], customerResponse: null,
   nextStep: { actor: 'merchant', message: 'Fix the customer address' },
   error: { code: 'MISSING_CUSTOMER_ADDRESS', message: 'Customer address is required' },
   errors: [{ errorCode: 'MISSING_CUSTOMER_ADDRESS', severity: 'ERROR', path: '/customer/address', message: 'Customer address is required' }],
 };
 
 const NEEDS_INFO = { ...REJECTED, id: 'EI-IT-2', referenceId: 'EI-IT-2', status: 'WAITING_FOR_YOU', reason: 'NEEDS_INFO', terminal: false };
-const CLEARED = { ok: true, id: 'EI-IT-3', referenceId: 'EI-IT-3', status: 'PENDING', stage: 'awaiting_authority', reason: 'PENDING', terminal: false, issues: [], buyerResponse: null };
+const CLEARED = { ok: true, id: 'EI-IT-3', referenceId: 'EI-IT-3', status: 'PENDING', stage: 'awaiting_authority', reason: 'PENDING', terminal: false, issues: [], customerResponse: null };
 
-const PROCESSING = { ok: true, id: 'EI-IT-4', referenceId: 'EI-IT-4', status: 'RECEIVED', stage: null, reason: 'RECEIVED', terminal: false, issues: [], buyerResponse: null };
-const UNROUTABLE = { ok: false, id: 'EI-IT-5', referenceId: 'EI-IT-5', status: 'WAITING_FOR_YOU', stage: null, reason: 'UNROUTABLE', terminal: false, issues: [], buyerResponse: null };
+const PROCESSING = { ok: true, id: 'EI-IT-4', referenceId: 'EI-IT-4', status: 'RECEIVED', stage: null, reason: 'RECEIVED', terminal: false, issues: [], customerResponse: null };
+const UNROUTABLE = { ok: false, id: 'EI-IT-5', referenceId: 'EI-IT-5', status: 'WAITING_FOR_YOU', stage: null, reason: 'UNROUTABLE', terminal: false, issues: [], customerResponse: null };
 
 const api = http.createServer((req, res) => {
   let raw = '';
@@ -127,7 +127,7 @@ api.listen(0, '127.0.0.1', async () => {
   const unroutable = await call(8, 'tools/call', { name: 'submit_invoice', arguments: { country: 'IT', invoiceNumber: 'ACT' } });
   if (unroutable.result?.isError !== true) return fail('an UNROUTABLE (WAITING_FOR_YOU) must be flagged isError');
   const desc = tool.description;
-  for (const needle of ['WAITING_FOR_YOU', 'UNROUTABLE', 'SETUP_NEEDED', 'HELD_PLATFORM_FAULT', 'buyerResponse']) {
+  for (const needle of ['WAITING_FOR_YOU', 'UNROUTABLE', 'SETUP_NEEDED', 'HELD_PLATFORM_FAULT', 'customerResponse']) {
     if (!desc.includes(needle)) return fail(`submit_invoice description must mention ${needle}`);
   }
 
