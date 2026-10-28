@@ -70,6 +70,12 @@ Every invoice now has one of ten `status` values plus `stage`, `reason`, `issues
 - CLI: `clearvo send` exits 1 for `REJECTED` or `WAITING_FOR_YOU` (`NEEDS_INFO`, `UNROUTABLE`); new `clearvo invoices list` with `--status`, `--reason` and `--customer-response`.
 - `scripts/generate-from-openapi.mjs` now reads `InvoiceStatus`, `InvoiceStage` and `InvoiceReason` from the public OpenAPI file; regenerate once the marketing repo publishes them.
 
+## Unreleased — credit notes wait for their original invoice (backend change deploys with the next release; backend PR 18648)
+
+- A credit note whose stored original is not yet submittable (reasons NEEDS_INFO, UNROUTABLE, UNDELIVERED, PENDING, RECEIVED, HELD_UNMAPPED_TAX_CODE, HELD_PLATFORM_FAULT, AWAITING_RELEASE) is stored and held: `status` WAITING_FOR_PLATFORM, `reason` `HELD_AWAITING_ORIGINAL`, errorCode `CREDIT_NOTE_AWAITING_ORIGINAL`. Message: "Held until invoice <number> is accepted. Nothing to do on this credit note: it is sent automatically once the original is fixed." It is sent once the original is accepted, delivered or accumulated, and refused if the original ends rejected. Debit notes do not wait.
+- The send answer and the invoice status response carry `originalInvoiceId` for a credit note held for or linked to its original.
+- SDK: `InvoiceReason` and `INVOICE_REASONS` gain `HELD_AWAITING_ORIGINAL` (generated from the OpenAPI document); `SendResult.originalInvoiceId` and `InvoiceStatusResponse.originalInvoiceId`. MCP: `submit_invoice` and `poll_status` descriptions list the new hold under WAITING_FOR_PLATFORM. CLI: no change.
+
 ## Unreleased — bank accounts have an explicit default (backend change deploys with the next release)
 
 - Every bank account has `isDefault`; exactly one is the default. The first account added is the default automatically. An invoice with no IBAN uses the account for its currency if there is one, otherwise the default; an IBAN sent on the invoice always wins. An account's `currency` stays optional but no longer means "default".
