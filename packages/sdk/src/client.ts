@@ -10,6 +10,8 @@ import type {
   InvoiceStatusResponse,
   ListInvoicesParams,
   ListInvoicesResponse,
+  SimulateReceivedInvoicesInput,
+  SimulateReceivedInvoicesResponse,
   TaxCalculateRequest,
   QuoteDutiesInput,
   DutiesResult,
@@ -49,6 +51,17 @@ import type {
   Webhook,
   CreateWebhookInput,
   TestWebhookInput,
+  StartTestRunInput,
+  StartTestRunResponse,
+  TestRun,
+  TestRunRecord,
+  ListTestRunsResponse,
+  ListTestCasesResponse,
+  CreateTestCaseInput,
+  UpdateTestCaseInput,
+  TestCaseWriteResponse,
+  TestCaseSkipResult,
+  TestCaseCatalogue,
   TestWebhookResponse,
   CreateWebhookResponse,
   ListWebhooksResponse,
@@ -325,6 +338,16 @@ export class ClearvoClient {
     );
   }
 
+  /**
+   * Sandbox only (a csk_test_ key; a live key gets 403 SANDBOX_ONLY). Creates sample received invoices or credit notes
+   * from a fictional supplier through the same pipeline as a real received document: stored, archived and announced
+   * with the invoice.received webhook. With no input it creates one invoice for the entity's own country.
+   */
+  simulateReceivedInvoices(input: SimulateReceivedInvoicesInput = {}): Promise<SimulateReceivedInvoicesResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/receive/simulate', body, entityHeaders(entityId));
+  }
+
   listInvoices(params: ListInvoicesParams = {}): Promise<ListInvoicesResponse> {
     const qs = new URLSearchParams();
     if (params.limit    != null) qs.set('limit',     String(params.limit));
@@ -513,9 +536,9 @@ export class ClearvoClient {
   }
 
   // ── Bank Account Master Data ─────────────────────────────────────────────────
-  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
-  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // see BankAccount's own doc comment (types.ts) for the fallback precedence.
+  // Entity-owned IBAN/BIC master data (exactly one account is the default) so it
+  // doesn't need to be resent on every invoice — see BankAccount's own doc comment
+  // (types.ts) for the precedence.
 
   /** GET /bank-accounts responds 200 with `{ bankAccounts }`. */
   listBankAccounts(entityId?: string): Promise<ListBankAccountsResponse> {
@@ -548,8 +571,9 @@ export class ClearvoClient {
 
   // ── Requirements ──────────────────────────────────────────────────────────────
 
-  getRequirements(country: string): Promise<CountryRequirements> {
-    return this.request('GET', `/requirements?country=${encodeURIComponent(country)}`);
+  getRequirements(country: string, filter: { class?: 'format_authority' | 'legal_content' | 'presentation'; mandate?: string } = {}): Promise<CountryRequirements> {
+    const query = new URLSearchParams({ country, ...(filter.class ? { class: filter.class } : {}), ...(filter.mandate ? { mandate: filter.mandate } : {}) });
+    return this.request('GET', `/requirements?${query.toString()}`);
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────
@@ -573,6 +597,61 @@ export class ClearvoClient {
   /** Sends one signed test event to a webhook you registered and reports what your endpoint did. Nothing is stored. */
   testWebhook(input: TestWebhookInput): Promise<TestWebhookResponse> {
     return this.request('POST', '/webhooks/test', input);
+  }
+
+  // ── Integration tests (sandbox only) ───────────────────────────────────────────
+
+  /** Starts a run of your integration tests in the sandbox and returns at once; poll getTestRun(runId). One run at a time (409 RUN_IN_PROGRESS). */
+  startTestRun(input: StartTestRunInput = {}): Promise<StartTestRunResponse> {
+    const { idempotencyKey, ...body } = input;
+    return this.request('POST', '/test-runs', body, idempotencyKey ? { 'x-idempotency-key': idempotencyKey } : undefined);
+  }
+
+  /** One run: status (queued, running, waiting, passed, failed or cancelled), counts and each test's outcome. */
+  getTestRun(runId: string): Promise<TestRun> {
+    return this.request('GET', `/test-runs/${encodeURIComponent(runId)}`);
+  }
+
+  /** The record of one run to keep: per test what was expected, what was observed and whether they matched, with the test version, evidence ids and a content digest. No bodies are kept. */
+  exportTestRun(runId: string): Promise<TestRunRecord> {
+    return this.request('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
+  }
+
+  listTestRuns(): Promise<ListTestRunsResponse> {
+    return this.request('GET', '/test-runs');
+  }
+
+  listTestCases(): Promise<ListTestCasesResponse> {
+    return this.request('GET', '/test-cases');
+  }
+
+  createTestCase(input: CreateTestCaseInput): Promise<TestCaseWriteResponse> {
+    return this.request('POST', '/test-cases', input);
+  }
+
+  /** Changes one of your own tests; this creates a new version. Standard tests cannot be changed. */
+  updateTestCase(caseId: string, input: UpdateTestCaseInput): Promise<TestCaseWriteResponse> {
+    return this.request('PATCH', `/test-cases/${encodeURIComponent(caseId)}`, input);
+  }
+
+  /** Removes one of your own tests from new runs; past runs keep showing it. */
+  archiveTestCase(caseId: string): Promise<{ id: string; archived: true }> {
+    return this.request('DELETE', `/test-cases/${encodeURIComponent(caseId)}`);
+  }
+
+  /** Skips a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped. */
+  skipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true });
+  }
+
+  /** Puts a skipped test back so new runs include it again. */
+  unskipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false });
+  }
+
+  /** The closed choices for adding a test: checks and their settings, who it applies to, and the limits. */
+  getTestCaseCatalogue(): Promise<TestCaseCatalogue> {
+    return this.request('GET', '/test-cases/catalogue');
   }
 
   // ── Batch TIN Validation ──────────────────────────────────────────────────────
@@ -650,9 +729,9 @@ export class ClearvoClient {
   /**
    * Enable/disable regimes. Enabling requires `effectiveFrom` (EFFECTIVE_FROM_REQUIRED
    * otherwise) and, for es_sii/fr_ereporting, a current registration in that country
-   * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii and
-   * fr_ereporting accept submissionMode 'immediate' | 'batch_auto' | 'batch_review'
-   * (default 'batch_review'). Disabling es_sii while a batch is open / ready_for_review /
+   * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii accepts
+   * submissionMode 'immediate' | 'batch_auto' | 'batch_review'; fr_ereporting accepts 'batch_review' | 'batch_auto'
+   * (a batch_auto period you have not confirmed is sent the day before its filing deadline). Default 'batch_review'. Disabling es_sii while a batch is open / ready_for_review /
    * overdue is refused 409 OBLIGATION_HAS_PENDING_BATCH unless `force: true`.
    */
   updateReportingObligations(input: UpdateReportingObligationsInput): Promise<UpdateReportingObligationsResponse> {
