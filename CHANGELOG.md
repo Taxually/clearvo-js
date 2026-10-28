@@ -4,6 +4,12 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — credit notes wait for their original invoice (backend change deploys with the next release; backend PR 18648)
+
+- A credit note whose stored original is not yet submittable (NEEDS_INFO, UNROUTABLE, UNDELIVERED, PENDING, RECEIVED, HELD_UNMAPPED_TAX_CODE, HELD_PLATFORM_FAULT, AWAITING_RELEASE) is stored and held as `HELD_AWAITING_ORIGINAL` (outcome HELD, statusClass WAIT_PLATFORM, errorCode `CREDIT_NOTE_AWAITING_ORIGINAL`). Message: "Held until invoice <number> is accepted. Nothing to do on this credit note: it is sent automatically once the original is fixed." It is sent once the original is ACCEPTED, DELIVERED or ACCUMULATED, and refused if the original ends REJECTED. Debit notes do not wait.
+- The send answer and invoice detail carry `originalInvoiceId` for a credit note held for or linked to its original.
+- SDK: `ClearanceStatus` and `CLEARANCE_STATUSES` gain `HELD_AWAITING_ORIGINAL`; `SendResult.originalInvoiceId` and `InvoiceStatusResponse.originalInvoiceId`. The generated contract file was edited by hand because the OpenAPI source does not contain the change yet; regenerate once it does. MCP: send and status descriptions list the new hold. CLI: no change (it maps no statuses).
+
 ## Unreleased — bank accounts have an explicit default (backend change deploys with the next release)
 
 - Every bank account has `isDefault`; exactly one is the default. The first account added is the default automatically. An invoice with no IBAN uses the account for its currency if there is one, otherwise the default; an IBAN sent on the invoice always wins. An account's `currency` stays optional but no longer means "default".
