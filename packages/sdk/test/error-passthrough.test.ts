@@ -75,6 +75,50 @@ describe('field errors', () => {
   });
 });
 
+describe('normalised v1 error bodies', () => {
+  const invalidTax = { ok: false, error: 'INVALID_TAX_NUMBER', code: 'INVALID_TAX_NUMBER', field: 'taxNumber', detail: 'DE123 is not a valid German VAT number', hint: 'Check the number', message: 'DE123 is not a valid German VAT number', retryable: false };
+
+  it('INVALID_TAX_NUMBER: the headline is the sentence, not the bare code; field, hint, code and retryable come through', async () => {
+    mockSeq(json(invalidTax, 422));
+    const err = await fail(client().listFilings());
+    expect(err.message).toBe('DE123 is not a valid German VAT number');
+    expect(err.code).toBe('INVALID_TAX_NUMBER');
+    expect(err.field).toBe('taxNumber');
+    expect(err.hint).toBe('Check the number');
+    expect(err.retryable).toBe(false);
+  });
+
+  it('without message the sentence in detail still beats a bare code in error', async () => {
+    const { message: _m, ...noMessage } = invalidTax;
+    mockSeq(json(noMessage, 422));
+    expect((await fail(client().listFilings())).message).toBe('DE123 is not a valid German VAT number');
+  });
+
+  it('a bare code with no message or detail is kept as it is', async () => {
+    mockSeq(json({ error: 'INVALID_TAX_NUMBER' }, 422));
+    const err = await fail(client().listFilings());
+    expect(err.message).toBe('INVALID_TAX_NUMBER');
+  });
+
+  it('an older body without message, code or retryable still reads as before, with the status-based retryable', async () => {
+    mockSeq(json({ error: 'Not found' }, 404));
+    const a = await fail(client().listFilings());
+    expect(a.message).toBe('Not found');
+    expect(a.code).toBeUndefined();
+    expect(a.retryable).toBe(false);
+    mockSeq(json({ error: 'busy' }, 503));
+    expect((await fail(client().listFilings())).retryable).toBe(true);
+  });
+
+  it('top-level code wins over error.code, and the body retryable wins over the status', async () => {
+    mockSeq(json({ ok: false, code: 'TOP', message: 'Top message', error: { code: 'INNER', message: 'Inner message' }, retryable: true }, 400));
+    const err = await fail(client().listFilings());
+    expect(err.code).toBe('TOP');
+    expect(err.message).toBe('Top message');
+    expect(err.retryable).toBe(true);
+  });
+});
+
 describe('non-JSON and odd bodies', () => {
   it('a 504 HTML page says the request may have been processed and keeps rawBody (500 chars)', async () => {
     mockSeq(text(`<html>${'x'.repeat(2000)}</html>`, 504));

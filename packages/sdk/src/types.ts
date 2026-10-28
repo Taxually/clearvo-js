@@ -4367,6 +4367,7 @@ export class ClearvoError extends Error {
     this.issues = extra.issues;
     this.requestId = extra.requestId;
     this.retryAfter = extra.retryAfter;
+    this.retryableFromBody = extra.retryable;
     this.idempotencyKey = extra.idempotencyKey;
     this.rawBody = extra.rawBody;
   }
@@ -4379,6 +4380,7 @@ export class ClearvoError extends Error {
   readonly requestId?: string;
   /** Seconds to wait, from the `Retry-After` response header. */
   readonly retryAfter?: number;
+  private readonly retryableFromBody?: boolean;
   /** The `X-Idempotency-Key` response header (or body field) when the API returned one. */
   readonly idempotencyKey?: string;
   /** The first 500 characters of the response when it was not JSON (a gateway HTML page, a plain-text 413, ...). */
@@ -4394,6 +4396,8 @@ export class ClearvoError extends Error {
    * may mean the request WAS processed: re-send writes with the same idempotency key, or check status first.
    */
   get retryable(): boolean {
+    // The API's own `retryable` flag wins when the body carried one; otherwise the status decides.
+    if (typeof this.retryableFromBody === 'boolean') return this.retryableFromBody;
     return this.status === 0 || isRetryableStatus(this.status);
   }
 }
@@ -4404,6 +4408,8 @@ export interface ClearvoErrorExtra {
   issues?: Array<{ path?: string; message: string }>;
   requestId?: string;
   retryAfter?: number;
+  /** The body's own `retryable` flag; overrides the status-based default of {@link ClearvoError.retryable}. */
+  retryable?: boolean;
   idempotencyKey?: string;
   rawBody?: string;
   cause?: unknown;

@@ -326,7 +326,7 @@ export class ClearvoClient {
       p.code,
       p.errors as SendRejectionEntry[] | undefined,
       p.body && Object.keys(p.body).length > 0 ? p.body as ClearvoErrorBody : undefined,
-      { details: p.details, issues: p.issues, requestId: p.requestId, retryAfter: p.retryAfter, idempotencyKey: p.idempotencyKey, rawBody: p.rawBody },
+      { details: p.details, issues: p.issues, requestId: p.requestId, retryAfter: p.retryAfter, retryable: p.retryable, idempotencyKey: p.idempotencyKey, rawBody: p.rawBody },
     );
   }
 

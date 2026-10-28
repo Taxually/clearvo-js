@@ -69,6 +69,17 @@ describe('failure text', () => {
     expect(stderr()).not.toContain('countrySpecific: Invalid input');
   });
 
+  it('INVALID_TAX_NUMBER prints the sentence, code, field, hint and retryable (exit 4)', async () => {
+    reply(json({ ok: false, error: 'INVALID_TAX_NUMBER', code: 'INVALID_TAX_NUMBER', field: 'taxNumber', detail: 'DE123 is not valid', hint: 'Check it', message: 'DE123 is not valid', retryable: false }, 422));
+    await expect(run('send', file)).rejects.toThrow('exit 4');
+    const out = stderr();
+    expect(out).toContain('HTTP 422: DE123 is not valid');
+    expect(out).toContain('Code: INVALID_TAX_NUMBER');
+    expect(out).toContain('Field: taxNumber');
+    expect(out).toContain('Hint: Check it');
+    expect(out).toContain('Retryable: no');
+  });
+
   it('a 504 HTML page says the request may have been processed and exits 5', async () => {
     reply(html('<html><body>Gateway Timeout</body></html>', 504));
     await expect(run('send', file)).rejects.toThrow('exit 5');

@@ -93,6 +93,16 @@ api.listen(0, '127.0.0.1', async () => {
     expect(r.text.includes(s), `a 400 must say "${s}": ${r.text}`);
   }
 
+  // 1b. Normalised v1 error: the sentence is the headline, not the bare code.
+  r = await tool('get_bulk_upload_status', { batchId: 'b1' }, {
+    status: 422, body: json({ ok: false, error: 'INVALID_TAX_NUMBER', code: 'INVALID_TAX_NUMBER', field: 'taxNumber', detail: 'DE123 is not valid', hint: 'Check it', message: 'DE123 is not valid', retryable: false }),
+  });
+  for (const s of ['HTTP 422: DE123 is not valid', 'Code: INVALID_TAX_NUMBER', 'Field: taxNumber', 'Hint: Check it', 'Retryable: no']) {
+    expect(r.text.includes(s), `INVALID_TAX_NUMBER must say "${s}": ${r.text}`);
+  }
+  r = await tool('get_bulk_upload_status', { batchId: 'b1' }, { status: 404, body: json({ error: 'Not found' }) });
+  expect(r.text.includes('HTTP 404: Not found') && !r.text.includes('Retryable'), `an older body must read as before: ${r.text}`);
+
   // 2. issues[] with full dotted paths win over the top-level key.
   r = await tool('get_bulk_upload_status', { batchId: 'b1' }, {
     status: 422, body: json({ error: 'Invalid request body', details: { fieldErrors: { countrySpecific: ['Invalid input'] } }, issues: [{ path: 'countrySpecific.de.invoiceFormat', message: 'Invalid enum value' }] }),

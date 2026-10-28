@@ -29,6 +29,8 @@ export interface ParsedError {
   /** Seconds, from the Retry-After header. */
   retryAfter?: number;
   idempotencyKey?: string;
+  /** The body's own `retryable` flag (the backend's central normaliser sets it on every v1 error), when present. */
+  retryable?: boolean;
   /** First 500 characters of the body when it was not JSON (an HTML gateway page, a plain-text 413, ...). */
   rawBody?: string;
   /** The parsed JSON body, when it was a JSON object. */
@@ -240,11 +242,14 @@ export function parseErrorResponse(res: ResponseLike, body: { text: string; json
   const filingsCode = !errObj && typeof data.error === 'string' && (typeof data.message === 'string' || typeof data.detail === 'string') ? data.error : undefined;
   const errors = Array.isArray(data.errors) ? data.errors.filter(isRecord) : undefined;
 
+  // Headline: the top-level `message` (every v1 error carries one now); else `error.message`; else the sentence in `detail`
+  // (an `error` that is a bare code like INVALID_TAX_NUMBER is not a sentence); else `error` as it is, even a bare code.
   let message: string;
-  if (errObj) message = String(errObj.message ?? errObj.code ?? `HTTP ${status}`);
-  else if (filingsCode) message = String(data.message ?? data.detail);
+  if (typeof data.message === 'string' && data.message) message = data.message;
+  else if (errObj) message = String(errObj.message ?? errObj.code ?? `HTTP ${status}`);
+  else if (typeof data.error === 'string' && data.error && typeof data.detail === 'string' && data.detail) message = data.detail;
   else if (typeof data.error === 'string' && data.error) message = data.error;
-  else if (typeof data.message === 'string' && data.message) message = data.message;
+  else if (typeof data.detail === 'string' && data.detail) message = data.detail;
   else if (errors?.length && typeof errors[0].message === 'string') message = errors[0].message as string;
   else message = `HTTP ${status}`;
 
@@ -260,7 +265,8 @@ export function parseErrorResponse(res: ResponseLike, body: { text: string; json
     message,
     code: typeof data.code === 'string' ? data.code : typeof errObj?.code === 'string' ? errObj.code : filingsCode,
     hint: typeof data.hint === 'string' ? data.hint : typeof errObj?.hint === 'string' ? errObj.hint : undefined,
-    field: typeof data.field === 'string' ? data.field : undefined,
+    field: typeof data.field === 'string' ? data.field : typeof errObj?.field === 'string' ? errObj.field : undefined,
+    retryable: typeof data.retryable === 'boolean' ? data.retryable : typeof errObj?.retryable === 'boolean' ? errObj.retryable : undefined,
     details: data.details,
     issues: toIssues(data.issues).length > 0 ? toIssues(data.issues) : undefined,
     errors: errors && errors.length > 0 ? errors : undefined,
@@ -310,6 +316,7 @@ export function formatErrorLines(e: ParsedError): string[] {
   if (e.code) out.push(`Code: ${e.code}`);
   if (e.field) out.push(`Field: ${e.field}`);
   if (e.hint) out.push(`Hint: ${e.hint}`);
+  if (e.retryable !== undefined) out.push(`Retryable: ${e.retryable ? 'yes' : 'no'}`);
   // Field errors are already in the message (up to 25): not printed a second time.
   const entries = errorEntryLines(e.errors);
   if (entries.length > 0) {
@@ -335,6 +342,7 @@ export function errorToJson(e: ParsedError): Record<string, unknown> {
     errors: e.errors,
     requestId: e.requestId,
     retryAfter: e.retryAfter,
+    retryable: e.retryable,
     rawBody: e.rawBody,
     // The whole parsed body, so a piped caller loses nothing (existingId, reason, filesWithErrors, contactUrl, currentVersion, ...).
     body: e.body,
