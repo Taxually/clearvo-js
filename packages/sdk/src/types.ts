@@ -194,12 +194,21 @@ export interface SendResult {
    */
   warnings?: Array<{ code: string; message?: string; [k: string]: unknown }>;
   message?: string;
+  /**
+   * The country the document was routed to. Null for HELD_UNMAPPED_TAX_CODE (also on an idempotent replay): a held document has no
+   * tax treatment, so no mandate and no country until its tax code is mapped.
+   */
+  country?: string | null;
   /** Present only when status is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
   errorCode?: string;
   /** Present only when status is HELD_UNMAPPED_TAX_CODE — the machine-readable diagnostic for which code wasn't configured and where to fix it. */
   reason?: UnmappedTaxCodeReason;
   /** Echoed back only when the request set dryRun: true — no record was persisted. */
   dryRun?: boolean;
+  /** A dryRun only: the auto-corrections the real send would apply. */
+  corrections?: Array<{ ruleCode: string; ruleVersion: number; tier: string; fieldPath: string; before: string; after: string; description: string }>;
+  /** A dryRun only: the ruleset the invoice was checked against. */
+  rulesetVersion?: number;
   /**
    * Germany: the generated document format. `UBL_PEPPOL_BIS` when the resolved
    * `de.invoiceFormat` is `PEPPOL` — the invoice goes over the Peppol network,
@@ -421,8 +430,10 @@ export interface PaymentMeansInput {
   method?: 'bank_transfer' | 'direct_debit' | 'credit_card' | 'cash' | 'check' | 'other';
   /** Seller's IBAN for a `bank_transfer` invoice. */
   iban?: string;
-  /** BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit for DE or the call fails 422 `DE_XRECHNUNG_BIC_FORBIDDEN`. */
+  /** BIC/SWIFT code. Accepted for every country; a German XRechnung does not carry it. */
   bic?: string;
+  /** BT-85. Payee account name (account holder), max 140 characters. When no `iban` is sent, the entity's stored bank account supplies iban, bic and its holder name; with a per-invoice `iban` the stored holder is never used. */
+  accountName?: string;
   /** Payment reference / remittance information (BT-83). */
   reference?: string;
   /** BT-89. SEPA mandate reference identifier. Required whenever `method` is `'direct_debit'` — max 35 characters, or 422 `MANDATE_REFERENCE_TOO_LONG`. */
@@ -507,8 +518,10 @@ export interface SubmitInvoiceInput {
    * transaction whose jurisdiction reports in RON). Omit to let it resolve
    * automatically from the transaction's own tax jurisdiction; only set it to
    * override that. When the resolved reporting currency differs from
-   * `currency`, you must also supply `exchangeRate` or `taxReporting`
-   * below, or the call fails with 422 `TAX_REPORTING_CONVERSION_MISSING` —
+   * `currency`, you should also supply `exchangeRate` or `taxReporting`
+   * below — without one the invoice is still sent with the warning
+   * `MISSING_EXCHANGE_RATE`, except where the authority needs the conversion
+   * (Hungary: `MISSING_EXCHANGE_RATE_REQUIRED`, stored NEEDS_INFO, stops it).
    * Clearvo never fetches or computes an exchange rate itself.
    */
   taxReportingCurrency?: string;
@@ -516,7 +529,8 @@ export interface SubmitInvoiceInput {
    * `currency` -> `taxReportingCurrency` rate, applied uniformly to every
    * total (subtotal, tax-exclusive amount, tax total, grand total). Mutually
    * exclusive with `taxReporting` — 422
-   * `EXCHANGE_RATE_AND_TAX_REPORTING_BOTH_SUPPLIED` if both are sent.
+   * `EXCHANGE_RATE_AND_TAX_REPORTING_BOTH_SUPPLIED` if both are sent. The one
+   * exchange rate field for every country; a null value counts as not sent.
    */
   exchangeRate?: number;
   /**
@@ -575,7 +589,11 @@ export interface SubmitInvoiceInput {
    * Preview the resolved per-line tax decision without creating a record,
    * generating XML, or enqueueing anything to an authority. The response
    * echoes dryRun: true plus `lines[]` (including a would-be
-   * HELD_UNMAPPED_TAX_CODE outcome).
+   * HELD_UNMAPPED_TAX_CODE outcome). It also runs every rule phase of a real
+   * send for every country and format, with no side effects: `errors[]`,
+   * `warnings[]`, `corrections[]` and `rulesetVersion`, each finding with a
+   * `fix`. A document a real send would reject is `ok: false` (it used to
+   * answer `ok: true`).
    */
   dryRun?: boolean;
   /** Amount already paid (BT-113). Without `statedPayableAmount`, the payable amount is the total less this. */
@@ -599,6 +617,18 @@ export interface SubmitInvoiceInput {
    */
   correctsInvoiceId?: string;
   customerReference?: string;
+  /** BT-12 contract reference (at most 200 characters; Italy: 20). Not written for the Peppol PINT profiles (AU, NZ, SG, JP). */
+  contractReference?: string;
+  /** BT-11 project reference. Written into UBL invoices and CII documents, not a UBL credit note or a PINT profile. */
+  projectReference?: string;
+  /** BT-16 despatch advice reference. Not written for the Peppol PINT profiles. */
+  despatchReference?: string;
+  /** BT-15 receiving advice reference. Not written for the Peppol PINT profiles. */
+  receivingReference?: string;
+  /** BT-19 the customer's accounting reference. Not written for the Peppol PINT profiles. */
+  accountingReference?: string;
+  /** BG-14 the period the invoice covers (BT-73/74), YYYY-MM-DD. Not written for the Peppol PINT profiles. */
+  invoicePeriod?: { start?: string; end?: string };
   /**
    * Country-specific fields, keyed by lowercase ISO country code. Known keys:
    * - `es.duaNumber` — NumeroDUA (Documento Único Administrativo), required
@@ -620,8 +650,10 @@ export interface SubmitInvoiceInput {
    *   the AEAT VeriFactu system under the same Spanish tax number. Set
    *   `es_tax_territory` on the Spanish registration (see
    *   {@link UpdateRegistrationInput}); Clearvo does not file IGIC returns.
-   * - `hu.exchangeRate` — exchange rate to HUF for this invoice date.
-   *   Required whenever `currency` is not HUF.
+   * - `hu.exchangeRate` — DEPRECATED alias of the top-level `exchangeRate`;
+   *   send `exchangeRate` instead (it wins if both are sent). Hungary still
+   *   needs the rate to HUF whenever `currency` is not HUF
+   *   (`MISSING_EXCHANGE_RATE_REQUIRED`, NEEDS_INFO, if it is missing).
    * - `hu.invoiceAppearance` — one of PAPER/ELECTRONIC/EDI/UNKNOWN, overriding
    *   the default appearance (PAPER for a resolved PRIVATE_PERSON customer,
    *   ELECTRONIC otherwise).
@@ -712,14 +744,18 @@ export interface SubmitInvoiceInput {
    */
   transactionDirection?: 'sale' | 'purchase';
   /**
-   * France e-reporting, own-goods stock transfers only (client tax code with
-   * movement `own_goods_movement`). Where the goods leave: the French origin for an
-   * outbound transfer (`transactionDirection: 'sale'`), the origin member state for
-   * an inbound one (`'purchase'`). Send ONE entry per movement, on the French leg
-   * only. Ignored for every other transaction; a transfer without it parks NEEDS_INFO.
+   * Where the goods leave from (optional). Used to decide the reporting country
+   * when you send no `country` (a ship-from in one of your registered countries is
+   * used) and the movement for sales of goods (local, intra-community or export).
+   * Still required for a France e-reporting own-goods stock transfer (a client tax
+   * code with movement `own_goods_movement`): for an outbound transfer (sale) the
+   * French origin, for an inbound transfer (purchase) the origin member state, used
+   * to find your own VAT registration in the other member state; an own-goods
+   * transfer without it parks NEEDS_INFO naming shipFrom.country (fixable with the
+   * needs-info PATCH).
    */
   shipFrom?: { country: string };
-  /** France e-reporting, own-goods stock transfers only. Where the goods arrive; needed for an outbound transfer (shipFrom in France) to name the destination member state. */
+  /** Where the goods arrive (optional). Still required for an outbound France e-reporting own-goods stock transfer (shipFrom in France) to name the destination member state. */
   shipTo?: { country: string };
   /**
    * PURCHASE documents only, Spain SII, YYYY-MM-DD. The accounting-entry date
@@ -787,6 +823,10 @@ export interface UnmappedTaxCodeReason {
   direction: 'sale' | 'purchase' | null;
   /** Dashboard deep link, pre-filled, for configuring this code. */
   deepLink: string;
+  /** The name the source system shows for the code (Xero: the tax rate's name, e.g. 'Poland VAT'). Absent when the connector cannot name it. */
+  codeName?: string | null;
+  /** The rate in percent (23 for 23%) the source system holds for the code. Absent when unknown. */
+  codeRate?: number | null;
 }
 
 /** IN_FLIGHT: Clearvo is working on it. WAIT_MERCHANT: you can fix it (never expires). WAIT_PLATFORM: Clearvo resolves it. DONE_OK / DONE_REJECTED / DONE_NA: finished. */
@@ -888,6 +928,13 @@ export interface ReceivedInvoiceFields {
 
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
 export interface InvoiceRecordTimestamps {
+  /**
+   * Null while the invoice is held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE): the tax code decides the tax treatment and the
+   * treatment decides the mandate, so until the code is mapped the invoice has no country. The `country` filter on listInvoices never matches it.
+   */
+  country?: string | null;
+  /** Parent compliance-mandate transaction id; null until one is resolved, and always null while the invoice is held for an unmapped tax code. */
+  transactionId?: string | null;
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
@@ -1664,6 +1711,65 @@ export interface CountryRequirements {
   authority?: string;
   authorityPortal?: string;
   notes?: string;
+  /** What an invoice for this country must or should carry, from the invoice-content registry. */
+  invoiceContent?: { requirements: InvoiceContentRequirement[]; total: number; truncated?: boolean };
+}
+
+/** Where a value is supplied: the invoice, the supplier's business profile, the customer's record (or the invoice's customer block), or nowhere because Clearvo derives it. */
+export type FixWhere = 'invoice' | 'supplier_profile' | 'customer_record' | 'automatic';
+
+/** How to describe and collect the value a finding or requirement asks for. */
+export interface FindingField {
+  key: string;
+  label: string;
+  type: 'string' | 'select' | 'multiselect' | 'boolean' | 'text' | 'date' | 'number';
+  /** Present for `select` and `multiselect`. */
+  options?: Array<{ value: string; label: string }>;
+  placeholder?: string;
+  helpText?: string;
+  /** The EN 16931 business term the value is carried in, when there is one (for example `BT-10`). */
+  btRef?: string;
+}
+
+/** Where and how to fix a validation finding. */
+export interface FindingFix {
+  where: FixWhere;
+  /** RFC 6901 JSON Pointer of the value to supply (the first missing one when several are). */
+  path: string;
+  /** The invoice-content requirement the finding comes from, when it comes from one (see getRequirements). */
+  requirementKey?: string;
+  field?: FindingField;
+}
+
+/**
+ * One thing an invoice for a country must or should carry. `obligationClass`: `format_authority` (the format, the tax
+ * authority or the mandate rejects the invoice without it; the only class that blocks), `legal_content` (national invoice or
+ * company law the format accepts the invoice without; a warning the business can switch off) or `presentation` (layout only).
+ */
+export interface InvoiceContentRequirement {
+  key: string;
+  obligationClass: 'format_authority' | 'legal_content' | 'presentation' | null;
+  kind: 'FIELD' | 'DISCLOSURE_TEXT' | 'STATUTORY_WORDING';
+  mode: 'REQUIRED' | 'FORBIDDEN';
+  /** ERROR blocks the invoice, WARNING reports it and sends on, NONE is layout only. */
+  enforcement: 'ERROR' | 'WARNING' | 'NONE';
+  mandate: string | null;
+  /** An ISO 3166-1 alpha-2 code, or `ALL` for a requirement every country shares. */
+  country: string;
+  /** The closed predicate saying when the requirement applies (`type` plus keys that depend on it). */
+  appliesWhen: { type: string; [k: string]: unknown };
+  /** JSON Pointers of the values that must be present; null for a FORBIDDEN requirement or one with no value of its own. */
+  requiredPaths: string[] | null;
+  requiredMode: 'ANY' | 'ALL' | null;
+  capture: 'profile' | 'invoice' | 'jurisdiction' | 'derived' | 'customer' | null;
+  where: FixWhere | null;
+  field: FindingField | null;
+  presentation: { label: string | null; section: string | null; channels: Array<'pdf' | 'page' | 'email'> | null; format: string | null } | null;
+  btRef: string | null;
+  /** The statute or format rule the requirement rests on; null for a presentation requirement. */
+  source: string | null;
+  effectiveFrom: string;
+  effectiveTo: string | null;
 }
 
 export type ProductTier = 'CONFIRMED' | 'STANDARD_MAPPING' | 'AI_CLASSIFIED' | 'UNCLASSIFIED';
@@ -1883,16 +1989,19 @@ export interface ListSuppliersResponse {
 
 // ── Bank Account Master Data ─────────────────────────────────────────────────
 //
-// Entity-owned IBAN/BIC master data, one row per currency plus an optional
-// entity-wide DEFAULT (currency omitted). When an invoice's payment.means[].iban is
-// omitted, submitInvoice/calculateTax's send step falls back to the account
-// matching the invoice's own currency, then to the DEFAULT account, in that
-// order — a payment.means[].iban given directly on the invoice always wins outright.
+// Entity-owned IBAN/BIC master data. Exactly one account is the default
+// (`isDefault`): the first account added is the default automatically. When an
+// invoice's payment.means[].iban is omitted, submitInvoice/calculateTax's send step
+// uses the account for the invoice's own currency if there is one, otherwise the
+// default account — a payment.means[].iban given directly on the invoice always
+// wins outright.
 
 export interface BankAccount {
   id: string;
-  /** ISO 4217 alpha-3, or null for the entity-wide default/fallback account. */
+  /** ISO 4217 alpha-3 this account is used for, or null if it is not tied to a currency. Optional; it no longer means "default". */
   currency: string | null;
+  /** True for the one account used when no account matches the invoice currency. Exactly one account is the default. */
+  isDefault: boolean;
   iban: string;
   bic?: string | null;
   accountHolderName?: string | null;
@@ -1901,8 +2010,10 @@ export interface BankAccount {
 }
 
 export interface CreateBankAccountInput {
-  /** Omit to make this the entity-wide DEFAULT account. */
+  /** ISO 4217 alpha-3 currency this account is used for. Optional. */
   currency?: string;
+  /** true makes this the default account (the previous default is demoted). The first account is the default automatically. */
+  isDefault?: boolean;
   /** Format/checksum-validated before storing. */
   iban: string;
   bic?: string;
@@ -1912,8 +2023,10 @@ export interface CreateBankAccountInput {
 }
 
 export interface UpdateBankAccountInput {
-  /** null moves this back to the entity-wide DEFAULT (no-currency) slot. */
+  /** Currency this account is used for; null clears it. */
   currency?: string | null;
+  /** true makes this the default account. false is refused (422 DEFAULT_BANK_ACCOUNT_REQUIRED): make another account the default instead. */
+  isDefault?: true;
   /** Re-validated (format/checksum) if provided. */
   iban?: string;
   bic?: string | null;
@@ -4288,6 +4401,14 @@ export interface SendRejectionEntry {
   source?: 'rule';
   /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or NEEDS_INFO (a required fact is missing; resend the corrected document to POST /v1/send with the same invoice number). */
   clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  /** Why the finding exists: `format_authority` blocks (the format, the tax authority or the mandate rejects the invoice without it); `legal_content` and `business_policy` warn at most. */
+  obligationClass?: 'format_authority' | 'legal_content' | 'business_policy';
+  /** True when the business may switch this warning off for itself (`ruleId` for a rule, `ruleCode` for a validation rule). Never true for an error. */
+  suppressible?: boolean;
+  ruleCode?: string;
+  ruleId?: string;
+  /** Where and how to fix it: where the value lives and, when known, its label, type and options. Present on a finding about one value. */
+  fix?: FindingFix;
   [key: string]: unknown;
 }
 
@@ -5509,6 +5630,8 @@ export interface TestRunSummary {
   selfAttested: number;
   required: number;
   requiredPassed: number;
+  requiredExcluded: number;
+  skipped: number;
 }
 
 export interface TestRunCaseResult {
@@ -5542,6 +5665,52 @@ export interface TestRun {
   disclaimer: string;
 }
 
+export type TestRunComparison = 'match' | 'mismatch' | 'undecided';
+
+export interface TestRunRecordCase {
+  caseId: string;
+  caseVersion: number;
+  /** sha256 hex of the test's definition. */
+  definitionHash: string;
+  title: string;
+  group: string;
+  scope: TestCaseScope;
+  required: boolean;
+  expected: string;
+  actual: string;
+  comparison: TestRunComparison;
+  outcome: 'passed' | 'failed' | 'waiting' | 'not_run';
+  verification: TestCaseVerification;
+  reasonCode: string | null;
+  attempt: number;
+  firedAt: string | null;
+  resolvedAt: string | null;
+  /** Ids and metadata only. */
+  evidence: Record<string, unknown>;
+}
+
+/** The record of one test run to keep (GET /test-runs/{id}/export). */
+export interface TestRunRecord {
+  format: 'test-run-record';
+  version: number;
+  environment: 'sandbox';
+  run: {
+    runId: string;
+    name: string;
+    status: TestRunStatus;
+    startedAt: string | null;
+    completedAt: string | null;
+    summary: TestRunSummary;
+  };
+  cases: TestRunRecordCase[];
+  notApplicable: Array<{ caseId: string; title: string; reason: string }>;
+  disclaimer: string;
+  bodiesNote: string;
+  /** sha256 hex of the record's content. */
+  contentDigest: string;
+  exportedAt: string;
+}
+
 export interface ListTestRunsResponse {
   runs: Array<Partial<TestRun> & { runId: string; name: string; status: TestRunStatus }>;
   disclaimer?: string;
@@ -5555,12 +5724,19 @@ export interface TestCase {
   scope: TestCaseScope;
   required: boolean;
   tags: string[];
+  /** True when you skipped this test: it is not run and counts nowhere. */
+  skipped: boolean;
   applicable: boolean;
   notApplicableReason: string | null;
   /** `auto` = the platform checks it; `attest_only` = you mark it done by hand in the dashboard. */
   verifiability: 'auto' | 'attest_only';
   steps: string[];
   expected: string;
+}
+
+export interface TestCaseSkipResult {
+  caseId: string;
+  skipped: boolean;
 }
 
 export interface ListTestCasesResponse {

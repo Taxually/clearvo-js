@@ -54,11 +54,13 @@ import type {
   StartTestRunInput,
   StartTestRunResponse,
   TestRun,
+  TestRunRecord,
   ListTestRunsResponse,
   ListTestCasesResponse,
   CreateTestCaseInput,
   UpdateTestCaseInput,
   TestCaseWriteResponse,
+  TestCaseSkipResult,
   TestCaseCatalogue,
   TestWebhookResponse,
   CreateWebhookResponse,
@@ -581,9 +583,9 @@ export class ClearvoClient {
   }
 
   // ── Bank Account Master Data ─────────────────────────────────────────────────
-  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
-  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // see BankAccount's own doc comment (types.ts) for the fallback precedence.
+  // Entity-owned IBAN/BIC master data (exactly one account is the default) so it
+  // doesn't need to be resent on every invoice — see BankAccount's own doc comment
+  // (types.ts) for the precedence.
 
   /** GET /bank-accounts responds 200 with `{ bankAccounts }`. */
   listBankAccounts(entityId?: string): Promise<ListBankAccountsResponse> {
@@ -616,8 +618,9 @@ export class ClearvoClient {
 
   // ── Requirements ──────────────────────────────────────────────────────────────
 
-  getRequirements(country: string): Promise<CountryRequirements> {
-    return this.request('GET', `/requirements?country=${encodeURIComponent(country)}`);
+  getRequirements(country: string, filter: { class?: 'format_authority' | 'legal_content' | 'presentation'; mandate?: string } = {}): Promise<CountryRequirements> {
+    const query = new URLSearchParams({ country, ...(filter.class ? { class: filter.class } : {}), ...(filter.mandate ? { mandate: filter.mandate } : {}) });
+    return this.request('GET', `/requirements?${query.toString()}`);
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────
@@ -656,6 +659,11 @@ export class ClearvoClient {
     return this.request('GET', `/test-runs/${encodeURIComponent(runId)}`);
   }
 
+  /** The record of one run to keep: per test what was expected, what was observed and whether they matched, with the test version, evidence ids and a content digest. No bodies are kept. */
+  exportTestRun(runId: string): Promise<TestRunRecord> {
+    return this.request('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
+  }
+
   listTestRuns(): Promise<ListTestRunsResponse> {
     return this.request('GET', '/test-runs');
   }
@@ -676,6 +684,16 @@ export class ClearvoClient {
   /** Removes one of your own tests from new runs; past runs keep showing it. */
   archiveTestCase(caseId: string): Promise<{ id: string; archived: true }> {
     return this.request('DELETE', `/test-cases/${encodeURIComponent(caseId)}`);
+  }
+
+  /** Skips a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped. */
+  skipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true });
+  }
+
+  /** Puts a skipped test back so new runs include it again. */
+  unskipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false });
   }
 
   /** The closed choices for adding a test: checks and their settings, who it applies to, and the limits. */

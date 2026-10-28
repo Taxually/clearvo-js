@@ -19,6 +19,28 @@ A failed call used to lose the field errors, the hint of a gateway page and, for
 - New checks: `npm run test:error-passthrough` (MCP), SDK and CLI vitest suites (`error-passthrough.test.ts`); CI now runs them. `error-format.ts` is shared by copy across the three packages (the SDK test fails if a copy drifts).
 - Backend follow-up (not in this repo): hosted `lib/mcp/tools.ts` still has the 500-row bulk pre-check and `res.json().catch(() => ({}))`; not done here: SDK `createCustomer` / `updateCustomer` / `upsertCustomerByRef` / delete (the SDK has no customer methods and the repo's codegen only covers the tax-code contract, so it is hand-written work, not a mechanical sync).
 
+## Unreleased — bank accounts have an explicit default (backend change deploys with the next release)
+
+- Every bank account has `isDefault`; exactly one is the default. The first account added is the default automatically. An invoice with no IBAN uses the account for its currency if there is one, otherwise the default; an IBAN sent on the invoice always wins. An account's `currency` stays optional but no longer means "default".
+- Create takes `isDefault: true` to make the new account the default (the old one is demoted). Update takes `isDefault: true` only; `false` is refused with 422 `DEFAULT_BANK_ACCOUNT_REQUIRED` (make another account the default instead). Deleting the default makes the oldest remaining account the default.
+- SDK: `BankAccount.isDefault`, `CreateBankAccountInput.isDefault`, `UpdateBankAccountInput.isDefault`. MCP: `create_bank_account` and `update_bank_account` take `isDefault`; descriptions updated. CLI: `bank-accounts create` and `update` take `--default`.
+
+## Unreleased — one exchange rate field for every country (backend change deploys with the next release)
+
+- An invoice whose currency differs from the currency its tax is reported in is no longer stopped with `TAX_REPORTING_CONVERSION_MISSING`. Without `exchangeRate` or `taxReporting` it is sent with the warning `MISSING_EXCHANGE_RATE` (raised only when a line carries tax). Hungary still needs the rate for a non-HUF invoice: `MISSING_EXCHANGE_RATE_REQUIRED`, stored NEEDS_INFO.
+- `countrySpecific.hu.exchangeRate` is a deprecated alias of the top-level `exchangeRate` (the top-level value wins). `MISSING_HU_EXCHANGE_RATE` and `INVALID_HU_EXCHANGE_RATE` are retired; a non-positive rate fails `INVALID_EXCHANGE_RATE`. A null `exchangeRate` counts as not sent.
+- SDK: doc comments on `SubmitInvoiceInput.taxReportingCurrency`, `exchangeRate` and `countrySpecific` updated. MCP: `submit_invoice` description updated. CLI: no change (bulk CSV already uses the generic `exchangeRate` column).
+
+## Unreleased — held-for-unmapped-tax-code invoices have no country (backend change deploys with the next release)
+
+- A document held for an unmapped tax code (`HELD_UNMAPPED_TAX_CODE`) has no tax treatment, so no mandate and no country: `country` (and `transactionId` on list and detail) is `null` until the code is mapped, on `/v1/send`, on an idempotent replay, and on `listInvoices`/`getInvoice`; the `country` filter never matches it.
+- SDK: `SendResult.country` and the typed `InvoiceRecordTimestamps` fields `country`/`transactionId` are `string | null`; `UnmappedTaxCodeReason` gains optional `codeName` (e.g. `Poland VAT`) and `codeRate` (percent, e.g. `23`), filled when the source system can name the code (Xero tax rates).
+- MCP: `list_invoices` and `submit_invoice` descriptions say the same. CLI: no change (it prints the JSON as returned).
+
+## Unreleased — rule outcome `clearanceStatus` (backend change deploys with the next release)
+
+- CLI: `rules create` and `rules update` take `--clearance-status REJECTED|NEEDS_INFO|EXCLUDED` (what a matched ERROR rule makes of the document; EXCLUDED skips it). The MCP tool schemas for `create_rule`/`update_rule` list it too.
+
 ## Unreleased — integration tests (backend routes ship with the Integration Passport Stage 3 release)
 
 - SDK: `startTestRun`, `getTestRun`, `listTestRuns`, `listTestCases`, `createTestCase`, `updateTestCase`, `archiveTestCase`, `getTestCaseCatalogue` (`/v1/test-runs`, `/v1/test-cases`, sandbox key only).

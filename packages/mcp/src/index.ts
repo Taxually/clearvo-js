@@ -520,17 +520,17 @@ const TOOLS = [
       'formatted one; any of these being missing or malformed is stored with the error ' +
       '(MISSING_HU_SUPPLIER_TAX_NUMBER, MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_CUSTOMER_TAX_NUMBER, ' +
       'MISSING_HU_CUSTOMER_ADDRESS) rather than a silent NEEDS_INFO hold. A non-HUF Hungarian ' +
-      'invoice additionally requires countrySpecific.hu.exchangeRate (error ' +
-      'MISSING_HU_EXCHANGE_RATE if omitted, INVALID_HU_EXCHANGE_RATE if not a positive number); ' +
+      'invoice additionally requires the top-level exchangeRate to HUF (error ' +
+      'MISSING_EXCHANGE_RATE_REQUIRED if omitted, INVALID_EXCHANGE_RATE if not a positive number; ' +
+      'countrySpecific.hu.exchangeRate is a deprecated alias of exchangeRate); ' +
       'countrySpecific.hu.invoiceAppearance, if supplied, must be one of PAPER/ELECTRONIC/EDI/' +
       'UNKNOWN (error INVALID_HU_INVOICE_APPEARANCE otherwise) and otherwise defaults to PAPER for ' +
       'a private-individual customer, ELECTRONIC for every other customer. ' +
       'Germany (DE) generates ZUGFeRD (a PDF/A-3 hybrid, platform default) or XRechnung (a bare ' +
       'UBL XML) depending on this entity\'s own format setup — XRechnung additionally requires a ' +
       'Leitweg-ID or customer reference (BT-10: buyerReference, or countrySpecific.de.leitwegId) plus ' +
-      'a seller contact name/phone/email, and forbids a BIC/SWIFT code; any of these being missing ' +
-      'or malformed for a resolved-XRechnung invoice is stored with the error (MISSING_LEITWEG_ID, ' +
-      'MISSING_DE_XRECHNUNG_SELLER_CONTACT, DE_XRECHNUNG_BIC_FORBIDDEN) rather than a silent NEEDS_INFO hold. ' +
+      'a seller contact name/phone/email; either being missing for a resolved-XRechnung invoice is ' +
+      'stored with the error (MISSING_LEITWEG_ID, MISSING_DE_XRECHNUNG_SELLER_CONTACT) rather than a silent NEEDS_INFO hold. ' +
       'XRechnung and Peppol also need a customer electronic address (BT-49), taken from the first available of: ' +
       'customer.electronicAddress (value + schemeId), the Leitweg-ID (only if it is a valid Leitweg-ID, not a free-text reference), customer.contact.email, the customer\'s German VAT ID ' +
       '(none of these: error MISSING_CUSTOMER_ELECTRONIC_ADDRESS). ' +
@@ -553,7 +553,7 @@ const TOOLS = [
       'VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes cannot go over Peppol for Singapore, Japan or the UAE; ' +
       'Germany and the other Peppol countries support them, and a credit note must reverse a previously accepted invoice in full). ' +
       'Self-billed German invoices cannot use PEPPOL: DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). ' +
-      'dryRun=true on a German PEPPOL invoice runs the real content rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
+      'dryRun=true runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, and answers what the real send would decide: the same errors/warnings (each with a fix: where the value lives and, when known, its label, type and options), the corrections it would apply and the ruleset version. It does not generate or submit the document; a German PEPPOL invoice also gets the buyer reachability check. A dryRun that used to answer ok:true for an invoice a real send would reject now answers ok:false. ' +
       'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
       'a failure is answered HTTP 200 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
       'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
@@ -568,7 +568,8 @@ const TOOLS = [
       '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held NEEDS_INFO ' +
       'asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode. An unrecognised ' +
       'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
-      'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
+      'machine-readable reason until the code is configured; such a held document has no mandate and no country yet, so `country` is null on the response ' +
+      '(and on a replay) and `reason` carries optional `codeName` and `codeRate` (percent) when the source system can name the code, e.g. a Xero tax rate. Set dryRun=true to preview each line\'s resolved ' +
       'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
     inputSchema: {
       type: 'object' as const,
@@ -578,7 +579,7 @@ const TOOLS = [
         companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
-        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the invoice is stored with the error TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you should also supply exchangeRate or taxReporting below — without one the invoice is still sent with the warning MISSING_EXCHANGE_RATE, except where the authority needs the conversion (Hungary: MISSING_EXCHANGE_RATE_REQUIRED stops it). Clearvo never fetches or computes an exchange rate itself.' },
         exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReporting — supply one or the other, never both.' },
         taxReporting: {
           type: 'object',
@@ -708,7 +709,8 @@ const TOOLS = [
                 properties: {
                   method: { type: 'string', enum: ['bank_transfer', 'direct_debit', 'credit_card', 'cash', 'check', 'other'], description: '"direct_debit" renders SEPA payment means (UBL/CII PaymentMeansCode 59) and REQUIRES mandateReference (BT-89) — Germany also requires creditorId and debitedIban (BT-90/91). Omit for a plain credit-transfer invoice (bank_transfer, the default).' },
                   iban: { type: 'string', description: 'Seller\'s IBAN for a bank_transfer invoice.' },
-                  bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the invoice is stored with the error DE_XRECHNUNG_BIC_FORBIDDEN.' },
+                  bic: { type: 'string', description: 'BIC/SWIFT code.' },
+                  accountName: { type: 'string', description: 'Payee account name / account holder (BT-85), max 140 characters. When omitted and no iban is sent, the entity\'s stored bank account supplies iban, bic and its holder name; with a per-invoice iban the stored holder is never used.' },
                   reference: { type: 'string', description: 'Payment reference/remittance information.' },
                   mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the invoice is stored with the error MANDATE_REFERENCE_TOO_LONG.' },
                   creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
@@ -743,13 +745,23 @@ const TOOLS = [
             ksefNumber: { type: 'string', description: 'Poland only: the original\'s KSeF number (NrFaKorygowanej). Required for a Polish credit note whose original is not stored in Clearvo.' },
           },
         },
+        contractReference: { type: 'string', description: 'BT-12 — the contract the invoice is issued under (at most 200 characters; Italy 20). Not written for the Peppol PINT profiles (Australia, New Zealand, Singapore, Japan).' },
+        projectReference: { type: 'string', description: 'BT-11 — the project the invoice belongs to. Written into UBL invoices and CII documents; a UBL credit note has no element for it. Not written for the Peppol PINT profiles.' },
+        despatchReference: { type: 'string', description: 'BT-16 — the despatch advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        receivingReference: { type: 'string', description: 'BT-15 — the receiving advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        accountingReference: { type: 'string', description: 'BT-19 — the customer\'s accounting reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        invoicePeriod: {
+          type: 'object',
+          description: 'BG-14 — the period the invoice covers (BT-73 start, BT-74 end). Not written for the Peppol PINT profiles.',
+          properties: { start: { type: 'string', description: 'First day, YYYY-MM-DD.' }, end: { type: 'string', description: 'Last day, YYYY-MM-DD.' } },
+        },
         correctsInvoiceId: {
           type: 'string',
           description: 'Id (from a prior submit_invoice response) of a REJECTED, UNROUTABLE or NEEDS_INFO invoice this submission re-attempts (a plain resubmission). Do not use it for a credit_note/debit_note: reference the original with originalInvoiceRef. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
         },
         dryRun: {
           type: 'boolean',
-          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting.',
+          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting. It also runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, returning the same errors[], warnings[], corrections[] (the auto-corrections it would apply) and rulesetVersion; each finding carries a fix (where the value lives: invoice, supplier_profile or customer_record, and when known its label, type and options). Tax number checks are format-only. It does not generate or submit the document.',
         },
         notifyCustomer: {
           type: 'boolean',
@@ -762,12 +774,12 @@ const TOOLS = [
         },
                 shipFrom: {
           type: 'object',
-          description: 'France e-reporting, own-goods stock transfers only (a client tax code with movement "own_goods_movement"). Where the goods leave: for an outbound transfer (sale) the French origin; for an inbound transfer (purchase) the origin member state. Send one entry per movement, on the French leg only. Optional and ignored for every other transaction; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country.',
+          description: 'Where the goods leave from (optional). Used to decide the reporting country when you send no country (a ship-from in one of your registered countries is used) and the movement for sales of goods (local, intra-community or export). Still required for a France e-reporting own-goods stock transfer (a client tax code with movement "own_goods_movement"): for an outbound transfer (sale) the French origin, for an inbound transfer (purchase) the origin member state, used to find your own VAT registration in the other member state; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country (fixable with the needs-info PATCH).',
           properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         shipTo: {
           type: 'object',
-          description: 'France e-reporting, own-goods stock transfers only. Where the goods arrive. Needed only for an outbound transfer (shipFrom in France) to name the destination member state; ignored otherwise.',
+          description: 'Where the goods arrive (optional). Still required for an outbound France e-reporting own-goods stock transfer (shipFrom in France) to name the destination member state.',
           properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         accountingDate: {
@@ -1632,11 +1644,18 @@ const TOOLS = [
       'Returns: whether e-invoicing is mandatory and from when, supported invoice document types (invoice, credit note), ' +
       'Peppol scheme ID for that country, VAT number format description and validation regex, ' +
       'the name and portal URL of the relevant tax authority, and any important notes. ' +
+      'It also returns invoiceContent.requirements: what an invoice for that country must or should carry, read from the invoice-content registry. ' +
+      'Each entry has a key, an obligationClass (format_authority: the format or tax authority rejects the invoice without it, the only class that blocks; ' +
+      'legal_content: national invoice or company law, a warning the business can switch off; presentation: layout only), its enforcement (ERROR | WARNING | NONE), ' +
+      'when it applies (appliesWhen), the invoice paths that must be present (requiredPaths), where the value is supplied (where: invoice | supplier_profile | customer_record | automatic) ' +
+      'and a field description (label, type, options, help text) when the registry has one. Filter with class and mandate; the list is capped at 500. ' +
       'Call this before submitting invoices to a new country to understand what is required and avoid rejections.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code (e.g. "IT", "PL", "DE", "FR")' },
+        class: { type: 'string', enum: ['format_authority', 'legal_content', 'presentation'], description: 'Keep only the invoice content requirements of this obligation class.' },
+        mandate: { type: 'string', description: 'Keep ordinary per-country requirements and those of this compliance mandate only.' },
       },
       required: ['country'],
     },
@@ -1646,6 +1665,7 @@ const TOOLS = [
     description:
       'List invoices previously submitted through Clearvo. ' +
       'Filter by country, clearance status, or date. ' +
+      'An invoice held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
       'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), clearance status labels, and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
@@ -1924,6 +1944,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'export_test_run',
+    description:
+      'Export the record of one test run to keep: for every test, what it expected, what was actually observed and whether the two matched, with the version of the test, the ids behind each result and a digest of the content. ' +
+      'No request or document bodies are kept. A test marked done by hand says so and never counts towards a pass.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { runId: { type: 'string', description: 'The runId returned by start_test_run or list_test_runs' } },
+      required: ['runId'],
+    },
+  },
+  {
     name: 'list_test_runs',
     description: 'List your recent test runs, newest first (up to 50), each with its status and counts.' + TEST_DISCLAIMER,
     inputSchema: { type: 'object' as const, properties: {} },
@@ -1956,6 +1987,26 @@ const TOOLS = [
   {
     name: 'archive_test_case',
     description: 'Remove one of your own tests from new runs. Past runs keep showing it. Standard tests cannot be removed.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'skip_test_case',
+    description:
+      'Skip a test you do not need, for example a sale at a reduced rate when you sell at none. A skipped test is not run, counts nowhere and never blocks a result, ' +
+      'and every run and export lists it as skipped so a pass always says what was left out. Undo it with unskip_test_case.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'unskip_test_case',
+    description: 'Put a skipped test back, so new runs include it again.' + TEST_DISCLAIMER,
     inputSchema: {
       type: 'object' as const,
       properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
@@ -3184,10 +3235,9 @@ const TOOLS = [
   {
     name: 'list_bank_accounts',
     description:
-      'List an entity\'s stored bank-account master data (IBAN/BIC), one per currency plus an optional ' +
-      'entity-wide DEFAULT (no currency). When a call to submit_invoice/send_invoice omits payment.means[].iban, this ' +
-      'master data is used as a fallback: the account matching the invoice\'s own currency first, then the ' +
-      'DEFAULT account, in that order. A payment.means[].iban given directly on the invoice always wins outright.',
+      'List an entity\'s stored bank accounts (IBAN/BIC). Each has isDefault; exactly one account is the default. ' +
+      'When submit_invoice/send_invoice omits payment.means[].iban, the account for the invoice currency is used if ' +
+      'there is one, otherwise the default account. An IBAN sent on the invoice always wins.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3199,15 +3249,16 @@ const TOOLS = [
     name: 'create_bank_account',
     description:
       'Store a bank account (IBAN/BIC) as entity master data, so it does not need to be resent on every ' +
-      'invoice. At most one account per currency, and at most one DEFAULT (currency omitted) account, per ' +
-      'entity — a duplicate is rejected.',
+      'invoice. The first account you add is the default automatically. Send isDefault: true to make a later ' +
+      'account the default (the old default stops being the default). At most one account per currency.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        currency: { type: 'string', description: 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.' },
+        currency: { type: 'string', description: 'ISO 4217 alpha-3 currency this account is used for. Optional.' },
+        isDefault: { type: 'boolean', description: 'true makes this the default account and the previous default stops being the default. The first account is the default automatically.' },
         iban: { type: 'string', description: 'IBAN — format/checksum-validated before storing.' },
         bic: { type: 'string' },
-        accountHolderName: { type: 'string', description: 'Dashboard display only — never rendered onto an invoice.' },
+        accountHolderName: { type: 'string', description: 'Name of the account holder. Printed as the payee account name (BT-85) on invoices that use this account when the caller sends no iban.' },
         entityId: { type: 'string', description: 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['iban'],
@@ -3215,12 +3266,13 @@ const TOOLS = [
   },
   {
     name: 'update_bank_account',
-    description: 'Update a stored bank account. Passing currency: null moves it back to the entity-wide DEFAULT slot.',
+    description: 'Update a stored bank account. Send isDefault: true to make it the default account. isDefault: false is refused (422 DEFAULT_BANK_ACCOUNT_REQUIRED): to change the default, make another account the default.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         bankAccountId: { type: 'string', description: 'The bank account ID to update (from list_bank_accounts or create_bank_account)' },
-        currency: { type: ['string', 'null'], description: 'null sets this back to the entity-wide DEFAULT (no-currency) slot.' },
+        currency: { type: ['string', 'null'], description: 'Currency this account is used for. null clears it.' },
+        isDefault: { type: 'boolean', description: 'Only true is accepted: makes this the default account. false is refused with 422 DEFAULT_BANK_ACCOUNT_REQUIRED.' },
         iban: { type: 'string', description: 'Re-validated (format/checksum) if provided.' },
         bic: { type: ['string', 'null'] },
         accountHolderName: { type: ['string', 'null'] },
@@ -3231,7 +3283,7 @@ const TOOLS = [
   },
   {
     name: 'delete_bank_account',
-    description: 'Soft-delete a stored bank account.',
+    description: 'Soft-delete a stored bank account. If it was the default, the oldest remaining account becomes the default.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -4377,7 +4429,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'get_requirements': {
       const country = args.country as string;
-      return callApi('GET', `/requirements?country=${encodeURIComponent(country)}`);
+      return callApi('GET', `/requirements?country=${encodeURIComponent(country)}${args.class ? `&class=${encodeURIComponent(String(args.class))}` : ''}${args.mandate ? `&mandate=${encodeURIComponent(String(args.mandate))}` : ''}`);
     }
 
     case 'list_invoices': {
@@ -4440,6 +4492,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_test_run':
       return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}`);
 
+    case 'export_test_run':
+      return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}/export`);
+
     case 'list_test_runs':
       return callApi('GET', '/test-runs');
 
@@ -4451,6 +4506,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'archive_test_case':
       return callApi('DELETE', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}`);
+
+    case 'skip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: true });
+
+    case 'unskip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: false });
 
     case 'get_test_case_catalogue':
       return callApi('GET', '/test-cases/catalogue');

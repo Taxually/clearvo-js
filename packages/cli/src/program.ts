@@ -661,11 +661,14 @@ export function createProgram(): Command {
   // ── clearvo requirements ─────────────────────────────────────────────────────
   program
     .command('requirements')
-    .description('Get e-invoicing and tax requirements for a country')
+    .description('Get e-invoicing and tax requirements for a country, including what an invoice for it must or should carry (invoiceContent.requirements)')
     .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 country code (e.g. IT, PL, DE)')
+    .option('--class <class>', 'Keep only invoice content requirements of this obligation class (format_authority, legal_content, presentation)')
+    .option('--mandate <code>', 'Keep ordinary per-country requirements and those of this compliance mandate only')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { country: string; pretty?: boolean }) => {
-      const result = await api('GET', `/requirements?country=${encodeURIComponent(opts.country)}`);
+    .action(async (opts: { country: string; class?: string; mandate?: string; pretty?: boolean }) => {
+      const query = new URLSearchParams({ country: opts.country, ...(opts.class ? { class: opts.class } : {}), ...(opts.mandate ? { mandate: opts.mandate } : {}) });
+      const result = await api('GET', `/requirements?${query.toString()}`);
       print(result, !!opts.pretty);
     });
   
@@ -1002,9 +1005,9 @@ export function createProgram(): Command {
     });
 
   // ── clearvo bank-accounts ───────────────────────────────────────────────────
-  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
-  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // an invoice's own payment.means[].iban always wins outright; this is a fallback.
+  // Entity-owned IBAN/BIC master data (exactly one account is the default) so it
+  // doesn't need to be resent on every invoice. An invoice uses its own
+  // payment.means[].iban if sent, else the account for its currency, else the default.
   const bankAccounts = program.command('bank-accounts').description('Manage bank-account master data');
 
   bankAccounts
@@ -1021,21 +1024,24 @@ export function createProgram(): Command {
     .command('create')
     .description('Store a bank account')
     .requiredOption('--iban <iban>', 'IBAN — format/checksum-validated before storing')
-    .option('--currency <code>', 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.')
+    .option('--currency <code>', 'ISO 4217 alpha-3 currency this account is used for (optional)')
+    .option('--default', 'Make this the default account (the first account is the default automatically)')
     .option('--bic <bic>', 'BIC')
-    .option('--account-holder-name <name>', 'Dashboard display only — never rendered onto an invoice')
+    .option('--account-holder-name <name>', 'Name of the account holder. Printed as the payee account name (BT-85) on invoices that use this account when the caller sends no iban')
     .option('--entity <entityId>', 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
       iban: string;
       currency?: string;
+      default?: boolean;
       bic?: string;
       accountHolderName?: string;
       entity?: string;
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = { iban: opts.iban };
+      const body: Record<string, string | boolean> = { iban: opts.iban };
       if (opts.currency) body.currency = opts.currency;
+      if (opts.default) body.isDefault = true;
       if (opts.bic) body.bic = opts.bic;
       if (opts.accountHolderName) body.accountHolderName = opts.accountHolderName;
       const result = await api('POST', '/bank-accounts', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
@@ -1045,7 +1051,8 @@ export function createProgram(): Command {
   bankAccounts
     .command('update <id>')
     .description('Update a bank account')
-    .option('--currency <code>', 'Updated currency, or the literal string "null" to move it back to the entity-wide DEFAULT slot')
+    .option('--currency <code>', 'Updated currency, or the literal string "null" to clear it')
+    .option('--default', 'Make this the default account (to change the default, make another account the default)')
     .option('--iban <iban>', 'Updated IBAN — re-validated (format/checksum)')
     .option('--bic <bic>', 'Updated BIC, or the literal string "null" to clear it')
     .option('--account-holder-name <name>', 'Updated account holder name, or the literal string "null" to clear it')
@@ -1053,6 +1060,7 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
       currency?: string;
+      default?: boolean;
       iban?: string;
       bic?: string;
       accountHolderName?: string;
@@ -1061,6 +1069,7 @@ export function createProgram(): Command {
     }) => {
       const body: Record<string, unknown> = {};
       if (opts.currency !== undefined) body.currency = opts.currency === 'null' ? null : opts.currency;
+      if (opts.default) body.isDefault = true;
       if (opts.iban) body.iban = opts.iban;
       if (opts.bic !== undefined) body.bic = opts.bic === 'null' ? null : opts.bic;
       if (opts.accountHolderName !== undefined) body.accountHolderName = opts.accountHolderName === 'null' ? null : opts.accountHolderName;
@@ -1267,6 +1276,21 @@ export function createProgram(): Command {
       else printRunSummary(run);
     });
 
+  tests
+    .command('export <runId>')
+    .description('Export the record of one test run to keep (JSON): what each test expected, what was observed, the test version and a content digest')
+    .option('--out <file>', 'Write the record to this file instead of printing it')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (runId: string, opts: { out?: string; pretty?: boolean }) => {
+      const record = await api('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
+      if (opts.out) {
+        writeFileSync(opts.out, JSON.stringify(record, null, 2));
+        console.log(opts.out);
+      } else {
+        print(record, !!opts.pretty);
+      }
+    });
+
   const testCases = tests.command('cases').description('The tests you can run: standard ones and your own');
 
   testCases
@@ -1298,6 +1322,22 @@ export function createProgram(): Command {
         process.exit(EXIT_USAGE);
       }
       print(await api('POST', '/test-cases', body), !!opts.pretty);
+    });
+
+  tests
+    .command('skip <caseId>')
+    .description('Skip a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true }), !!opts.pretty);
+    });
+
+  tests
+    .command('unskip <caseId>')
+    .description('Put a skipped test back so new runs include it again')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false }), !!opts.pretty);
     });
 
   testCases
@@ -1968,6 +2008,7 @@ export function createProgram(): Command {
     .option('--description <text>', 'Rule description')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY — default BUSINESS_POLICY')
     .option('--sort-order <n>', 'Evaluation order within this ruleKind')
+    .option('--clearance-status <status>', 'What a matched ERROR rule makes of the document: REJECTED (default), NEEDS_INFO (accepted, flagged for the sender to complete) or EXCLUDED (skipped: recorded, nothing submitted). Only for --rule-kind ERROR')
     .option('--conditions <json>', 'JSON array, ANDed at the top level: each element is {property, operator, value?} or a group {any: [...]} / {all: [...]} (max 50 leaves, 2 levels deep). Omit or [] to always match', '[]')
     .option('--company-code <code>', 'Scope the rule to one of the entity\'s active company codes (Enterprise). Omit for an entity-wide rule')
     .option('--actions <json>', 'JSON array of {property, value} (literal) or {property, fn, args?} (function dispatch)', '[]')
@@ -1978,7 +2019,7 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
       domain: string; recordType?: string; ruleKind: string; code: string; name: string; description?: string;
-      legalBasisTag?: string; sortOrder?: string; conditions: string; actions: string; templateId?: string;
+      legalBasisTag?: string; sortOrder?: string; clearanceStatus?: string; conditions: string; actions: string; templateId?: string;
       effectiveFrom?: string; effectiveTo?: string; companyCode?: string; entity?: string; pretty?: boolean;
     }) => {
       const body: Record<string, unknown> = {
@@ -1990,6 +2031,7 @@ export function createProgram(): Command {
       if (opts.description) body.description = opts.description;
       if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
       if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.clearanceStatus) body.clearanceStatus = opts.clearanceStatus;
       if (opts.templateId) body.templateId = opts.templateId;
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
       if (opts.effectiveTo) body.effectiveTo = opts.effectiveTo;
@@ -2006,6 +2048,7 @@ export function createProgram(): Command {
     .option('--description <text>')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY')
     .option('--sort-order <n>')
+    .option('--clearance-status <status>', 'What a matched ERROR rule makes of the document: REJECTED (default), NEEDS_INFO (accepted, flagged for the sender to complete) or EXCLUDED (skipped: recorded, nothing submitted). Only for an ERROR rule')
     .option('--conditions <json>', 'JSON array replacing the rule\'s own conditions (leaves or {any|all: [...]} groups)')
     .option('--company-code <code>', 'Re-scope to another active company code')
     .option('--entity-wide', 'Make the rule entity-wide again (company code null)')
@@ -2018,7 +2061,7 @@ export function createProgram(): Command {
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
-      version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string;
+      version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string; clearanceStatus?: string;
       conditions?: string; actions?: string; effectiveFrom?: string; effectiveTo?: string;
       companyCode?: string; entityWide?: boolean;
       enabled?: boolean; disabled?: boolean; archive?: boolean; entity?: string; pretty?: boolean;
@@ -2028,6 +2071,7 @@ export function createProgram(): Command {
       if (opts.description) body.description = opts.description;
       if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
       if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.clearanceStatus) body.clearanceStatus = opts.clearanceStatus;
       if (opts.conditions) body.conditions = parseJsonOption('--conditions', opts.conditions);
       if (opts.actions) body.actions = parseJsonOption('--actions', opts.actions);
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
