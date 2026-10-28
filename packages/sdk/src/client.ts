@@ -199,20 +199,27 @@ import type {
   FilingUploadTemplateFormat,
 } from './types.js';
 import { ClearvoError, isRejected } from './types.js';
+import { BodyReadError, parseErrorResponse, parseRetryAfter, readBody, timeoutSignal } from './error-format.js';
 import type { ClearvoErrorBody } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
 
-// Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
-// POST /v1/send/bulk's synchronous ceiling (Taxually-Einvoicing lib/mcp/tools.ts).
-const MAX_BULK_ROWS = 500;
-const MAX_BULK_UPLOAD_BYTES = 25 * 1024 * 1024;
+// Just under the 150 s Azure Front Door cut, so a slow call still gets the API's own answer.
+const DEFAULT_TIMEOUT_MS = 140_000;
 
-/** Data-row count of a CSV's raw text (header row excluded, blank lines ignored) — client-side only, used by submitInvoicesBulk's pre-check against MAX_BULK_ROWS. */
-function countCsvDataRows(csvContent: string): number {
-  const lines = csvContent.split(/\r\n|\r|\n/).filter(line => line.length > 0);
-  return Math.max(0, lines.length - 1);
+/** The ClearvoError (status 0, TIMEOUT or NETWORK_ERROR, cause kept) for a failed fetch or an unreadable body. */
+function transportError(cause: unknown, timeoutMs: number): ClearvoError {
+  const original = cause instanceof BodyReadError ? cause.cause : cause;
+  const timedOut = original instanceof Error && (original.name === 'TimeoutError' || original.name === 'AbortError');
+  return new ClearvoError(
+    0,
+    timedOut
+      ? `Request timed out after ${timeoutMs} ms; the operation may still have completed, check its status before retrying`
+      : `Network error: ${original instanceof Error ? original.message : String(original)}`,
+    undefined, undefined, timedOut ? 'TIMEOUT' : 'NETWORK_ERROR', undefined, undefined, { cause: original },
+  );
 }
+const MAX_RETRY_DELAY_MS = 30_000;
 
 /** Builds the multipart/form-data body submitInvoicesBulk(Async) send to POST /v1/send/bulk — a single 'file' field carrying the raw CSV text, same field name the route expects. */
 function csvFormData(csvContent: string, filename: string): FormData {
@@ -230,25 +237,58 @@ export class ClearvoClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly throwOnRejected: boolean;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseDelayMs: number;
 
   constructor(options: ClearvoClientOptions) {
     if (!options.apiKey) throw new Error('apiKey is required');
     this.apiKey = options.apiKey;
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.throwOnRejected = options.throwOnRejected ?? true;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.maxRetries = Math.max(0, Math.floor(options.maxRetries ?? 0));
+    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 500;
+  }
+
+  /**
+   * One HTTP call with the timeout applied, a network or timeout failure wrapped in a ClearvoError (status 0, code
+   * NETWORK_ERROR or TIMEOUT, `cause` kept), and, when `maxRetries` is set, retries of 429 / 503 / network failures for
+   * calls that are safe to repeat (GET, or a write carrying an idempotency key). A non-idempotent write is never retried.
+   */
+  private async fetchWithPolicy(method: string, url: string, init: RequestInit, timeoutMs: number = this.timeoutMs): Promise<Response> {
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    const idempotent = method === 'GET' || Object.keys(headers).some(k => k.toLowerCase() === 'x-idempotency-key');
+    const retries = idempotent ? this.maxRetries : 0;
+    for (let attempt = 0; ; attempt++) {
+      let response: Response | undefined;
+      let failure: ClearvoError | undefined;
+      try {
+        response = await fetch(url, timeoutMs > 0 ? { ...init, signal: timeoutSignal(timeoutMs) } : init);
+      } catch (cause) {
+        failure = transportError(cause, timeoutMs);
+      }
+      if (response && !(attempt < retries && (response.status === 429 || response.status === 503))) return response;
+      if (failure && attempt >= retries) throw failure;
+      // Retry: back off, honouring Retry-After (capped).
+      const retryAfter = response ? parseRetryAfter(response.headers?.get?.('retry-after')) : undefined;
+      const delay = Math.min(retryAfter !== undefined ? retryAfter * 1000 : this.retryBaseDelayMs * 2 ** attempt, MAX_RETRY_DELAY_MS);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
-    extraHeaders?: Record<string, string>
+    extraHeaders?: Record<string, string>,
+    opts: { timeoutMs?: number } = {}
   ): Promise<T> {
     // FormData (e.g. bulk CSV upload) must not get a JSON Content-Type or be stringified —
     // fetch sets the correct multipart boundary itself when the body is a FormData instance,
     // and stringifying it would send "[object FormData]".
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await this.fetchWithPolicy(method, `${this.baseUrl}${path}`, {
       method,
       headers: {
         'x-api-key': this.apiKey,
@@ -257,35 +297,44 @@ export class ClearvoClient {
         ...extraHeaders,
       },
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
-    });
+    }, opts.timeoutMs ?? this.timeoutMs);
 
     if (!response.ok) throw await this.errorFrom(response);
 
-    if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
+    // A 2xx whose body cannot be read (abort, reset, truncated stream) is a failure, not an empty success.
+    const read = await readBody(response).catch((e) => { throw e instanceof BodyReadError ? transportError(e, opts.timeoutMs ?? this.timeoutMs) : e; });
+    // 204, or an empty body: nothing to parse, but the call succeeded.
+    if (response.status === 204 || read.text === '') return { ok: true, status: response.status } as T;
+    // A 2xx that is not JSON (an HTML page from a proxy, plain text) must not pass for success.
+    if (!read.isJson) {
+      throw new ClearvoError(response.status, 'Unexpected non-JSON response', undefined, undefined, undefined, undefined, undefined, {
+        rawBody: read.text.slice(0, 500),
+        requestId: response.headers?.get?.('x-request-id') ?? undefined,
+      });
+    }
+    // A literal JSON `null` carries no data either.
+    if (read.json === null) return { ok: true, status: response.status } as T;
+    return read.json as T;
   }
 
-  /** The ClearvoError for a non-2xx response. */
+  /** The ClearvoError for a non-2xx response: status, code, message (with the field errors), hint, details, issues, errors[], request id, retry-after and, for a non-JSON body, rawBody. */
   private async errorFrom(response: Response): Promise<ClearvoError> {
-    const data = await response.json().catch(() => ({})) as Record<string, unknown>;
-    // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
-    const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
-    // The Filings routes put the stable code in `error` and the sentence in `message` or `detail`.
-    const filingsCode = !errObj && typeof data.error === 'string' && (typeof data.message === 'string' || typeof data.detail === 'string') ? data.error : undefined;
+    const p = parseErrorResponse(response, await readBody(response));
     return new ClearvoError(
-      response.status,
-      errObj ? String(errObj.message ?? errObj.code ?? `HTTP ${response.status}`) : String(filingsCode ? (data.message ?? data.detail) : (data.error ?? `HTTP ${response.status}`)),
-      typeof data.hint === 'string' ? data.hint : undefined,
-      typeof data.field === 'string' ? data.field : undefined,
-      typeof data.code === 'string' ? data.code : typeof errObj?.code === 'string' ? errObj.code : filingsCode,
-      Array.isArray(data.errors) ? data.errors as SendRejectionEntry[] : undefined,
-      Object.keys(data).length > 0 ? data as ClearvoErrorBody : undefined
+      p.status,
+      p.message,
+      p.hint,
+      p.field,
+      p.code,
+      p.errors as SendRejectionEntry[] | undefined,
+      p.body && Object.keys(p.body).length > 0 ? p.body as ClearvoErrorBody : undefined,
+      { details: p.details, issues: p.issues, requestId: p.requestId, retryAfter: p.retryAfter, retryable: p.retryable, idempotencyKey: p.idempotencyKey, rawBody: p.rawBody },
     );
   }
 
   /** A GET that returns a file (CSV, XLSX, PDF/image), not JSON. */
   private async requestFile(path: string, extraHeaders?: Record<string, string>): Promise<Response> {
-    const response = await fetch(`${this.baseUrl}${path}`, { method: 'GET', headers: { 'x-api-key': this.apiKey, ...extraHeaders } });
+    const response = await this.fetchWithPolicy('GET', `${this.baseUrl}${path}`, { method: 'GET', headers: { 'x-api-key': this.apiKey, ...extraHeaders } });
     if (!response.ok) throw await this.errorFrom(response);
     return response;
   }
@@ -311,7 +360,7 @@ export class ClearvoClient {
   async submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string, options: SubmitInvoiceOptions = {}): Promise<SendResult> {
     const headers: Record<string, string> = {};
     if (idempotencyKey) headers['x-idempotency-key'] = idempotencyKey;
-    const result = await this.request<SendResult>('POST', '/send', input, headers);
+    const result = await this.request<SendResult>('POST', '/send', input, headers, { timeoutMs: options.timeoutMs });
     if ((options.throwOnRejected ?? this.throwOnRejected) && isRejected(result)) throw this.rejectionError(result);
     return result;
   }
@@ -963,39 +1012,35 @@ export class ClearvoClient {
 
   /**
    * Submits (does not just validate) many transactions at once from a CSV file, through the
-   * exact same resolution/dispatch pipeline as submitInvoice, one call per row. Up to 500 rows /
-   * 25MB, processed synchronously with per-row outcomes in the response — throws (without
-   * calling the API at all) for a csvContent over either limit, naming submitInvoicesBulkAsync
-   * instead. No idempotency key needed: each row's own content (or its source_reference column)
-   * is already the de-duplication key, so a byte-identical re-run of the same file is a safe
-   * no-op.
+   * exact same resolution/dispatch pipeline as submitInvoice, one call per row. Every upload becomes
+   * a batch; the server waits a short, bounded time for it to finish and answers 200
+   * ({@link SubmitInvoicesBulkCompletedResponse}: `summary`, the first 500 `rows`, `rowsTruncated`) or, when it is
+   * still running, 202 ({@link SubmitInvoicesBulkQueuedResponse}: poll `getBulkUploadStatus(batchId)`). Narrow on
+   * `completedInline`. A 200 is not "every row worked": check `summary.errored` / `summary.needsInfo`. There is no
+   * client-side size check any more (the route answers 413 FILE_TOO_LARGE over its own limit). No idempotency key
+   * needed: each row's own content (or its source_reference column) is already the de-duplication key, so a
+   * byte-identical re-run of the same file is a safe no-op. `wait` and `submissionMode` are optional.
    */
   submitInvoicesBulk(input: SubmitInvoicesBulkInput): Promise<SubmitInvoicesBulkResponse> {
-    const { csvContent, entityId } = input;
-    const rowCount = countCsvDataRows(csvContent);
-    const byteLength = new TextEncoder().encode(csvContent).length;
-    if (rowCount > MAX_BULK_ROWS || byteLength > MAX_BULK_UPLOAD_BYTES) {
-      throw new Error(
-        `This CSV has ${rowCount} data rows (${byteLength} bytes) — submitInvoicesBulk accepts at most ${MAX_BULK_ROWS} rows ` +
-        `and ${MAX_BULK_UPLOAD_BYTES / (1024 * 1024)}MB per call. Use submitInvoicesBulkAsync instead for a file this size — ` +
-        'no request was sent.',
-      );
-    }
-    return this.request('POST', '/send/bulk', csvFormData(csvContent, 'invoices.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+    return this.postBulkCsv(input, 'invoices.csv');
   }
 
   /**
-   * Submits (does not just validate) many transactions at once from a CSV file — for a file too
-   * large for submitInvoicesBulk's 500-row/25MB synchronous ceiling, or simply to skip that
-   * method's client-side size check. The underlying route decides the real transport by request
-   * size: a small csvContent may still come back as a completed synchronous result rather than a
-   * queued batch. When it DOES queue, it returns { batchId, status: 'UPLOADED' } immediately —
-   * poll getBulkUploadStatus with that batchId every 30-60 seconds until status is
-   * COMPLETED/FAILED/CANCELLED, then call listBulkUploadErrors if any rows errored.
+   * The same route as submitInvoicesBulk, for a file you expect to be large: pass `wait: 0` to get the 202 straight
+   * away, then poll getBulkUploadStatus with the `batchId` every 30-60 seconds until status is
+   * COMPLETED/FAILED/CANCELLED, and call listBulkUploadErrors if any rows errored. `filename` is recorded on the batch.
    */
-  submitInvoicesBulkAsync(input: SubmitInvoicesBulkAsyncInput): Promise<SubmitInvoicesBulkResponse | SubmitInvoicesBulkAsyncQueuedResponse> {
-    const { csvContent, filename, entityId } = input;
-    return this.request('POST', '/send/bulk', csvFormData(csvContent, filename || 'invoices.csv'), entityId ? { 'x-entity-id': entityId } : undefined);
+  submitInvoicesBulkAsync(input: SubmitInvoicesBulkAsyncInput): Promise<SubmitInvoicesBulkResponse> {
+    return this.postBulkCsv(input, input.filename || 'invoices.csv');
+  }
+
+  private postBulkCsv(input: SubmitInvoicesBulkInput | SubmitInvoicesBulkAsyncInput, filename: string): Promise<SubmitInvoicesBulkResponse> {
+    const { csvContent, entityId, submissionMode, wait } = input;
+    const form = csvFormData(csvContent, filename);
+    if (submissionMode) form.append('submissionMode', submissionMode);
+    const headers: Record<string, string> = { ...entityHeaders(entityId) };
+    if (wait !== undefined) headers['Prefer'] = wait <= 0 ? 'respond-async' : `wait=${Math.floor(wait)}`;
+    return this.request('POST', '/send/bulk', form, Object.keys(headers).length > 0 ? headers : undefined);
   }
 
   /**
@@ -1271,13 +1316,7 @@ export class ClearvoClient {
 
   /** Raw CSV export of a dataset's rows — text/csv, not JSON. */
   async exportRulesEngineDataset(datasetId: string, entityId?: string): Promise<string> {
-    const headers: Record<string, string> = { 'x-api-key': this.apiKey, ...(entityId ? { 'x-entity-id': entityId } : {}) };
-    const response = await fetch(`${this.baseUrl}/rules-engine/datasets/${encodeURIComponent(datasetId)}/export`, { method: 'GET', headers });
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({})) as Record<string, unknown>;
-      const errObj = data.error !== null && typeof data.error === 'object' ? data.error as Record<string, unknown> : null;
-      throw new ClearvoError(response.status, errObj ? String(errObj.message ?? errObj.code ?? `HTTP ${response.status}`) : String(data.error ?? `HTTP ${response.status}`));
-    }
+    const response = await this.requestFile(`/rules-engine/datasets/${encodeURIComponent(datasetId)}/export`, entityHeaders(entityId));
     return response.text();
   }
 

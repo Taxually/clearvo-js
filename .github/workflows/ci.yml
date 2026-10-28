@@ -51,3 +51,9 @@ jobs:
 
       - name: Send contract check (MCP submit_invoice returns the 200 body)
         run: npm run test:send-contract --workspace packages/mcp
+
+      - name: Error passthrough check (MCP keeps field errors, flags 2xx failures, passes 402 through)
+        run: npm run test:error-passthrough --workspace packages/mcp
+
+      - name: SDK and CLI unit tests
+        run: npm test --workspace packages/sdk --workspace packages/cli
