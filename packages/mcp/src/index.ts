@@ -449,9 +449,10 @@ const TOOLS = [
       '`mandate`, `reviewRequired`, `statusClass` and `nextStep`. A 200 means the document is STORED, not that it was accepted: ' +
       'a well-formed document is always stored first, and a validation failure, a missing setup or a not-yet-supported country becomes a status on the stored record, not a lost request. ' +
       'Read `outcome`, `clearanceStatus`, `statusClass` (IN_FLIGHT: Clearvo is working on it; WAIT_MERCHANT: you or the user can fix it, and it never expires; WAIT_PLATFORM: Clearvo resolves it, nothing for you to do; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `terminal`. ' +
-      'When the document is held (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION, ...), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
+      'When the document is held (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION, HELD_AWAITING_ORIGINAL, ...), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
       'Held documents are released automatically once the cause is fixed; poll_status (or an invoice.status_changed webhook) shows the move. ' +
       'A document for a country that is not enabled for your account yet (including live Portugal submissions) is stored 200 HELD_AWAITING_AUTHORIZATION: it is held and released automatically once the country is enabled for your account, so there is nothing to resend; a document dated before a mandate\'s support start is NOT_SUPPORTED (final, never submitted later). ' +
+      'A credit note whose original invoice is not yet submittable (NEEDS_INFO, UNROUTABLE, UNDELIVERED, PENDING, RECEIVED, held) is stored HELD_AWAITING_ORIGINAL (errorCode CREDIT_NOTE_AWAITING_ORIGINAL, outcome HELD) with `originalInvoiceId`: \"Held until invoice <number> is accepted. Nothing to do on this credit note: it is sent automatically once the original is fixed.\" It is sent once the original is ACCEPTED, DELIVERED or ACCUMULATED and refused if the original ends REJECTED; fix the original, not the credit note. Debit notes do not wait. ' +
       'A response of clearanceStatus RECEIVED means stored and still being processed: keep its `id`, and call poll_status or get_invoice to follow it. ' +
       'RECEIVED with a PROCESSING_DELAYED warning means a temporary problem interrupted processing after the document was stored: do not resend, Clearvo re-runs it; follow it with poll_status. ' +
       'ACCUMULATED (France e-reporting, Spain SII batches) is a 200 too, not a 202. ' +
@@ -922,7 +923,7 @@ const TOOLS = [
       'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns clearanceStatus, and `statusClass` which says who the document is waiting for: ' +
       'IN_FLIGHT (RECEIVED = stored and still processing, PENDING, ACCUMULATED: wait, do nothing), ' +
       'WAIT_MERCHANT (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
-      'WAIT_PLATFORM (HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
+      'WAIT_PLATFORM (HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, HELD_AWAITING_ORIGINAL, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
       'DONE_OK (ACCEPTED, DELIVERED, CANCELLED), DONE_REJECTED (REJECTED: see errors and nextStep) and DONE_NA (NO_MANDATE, EXCLUDED, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resend the corrected document to POST /v1/send with the same invoice number. ' +
