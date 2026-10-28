@@ -1,5 +1,5 @@
 export { ClearvoClient } from './client.js';
-export { ClearvoError, isRejected } from './types.js';
+export { ClearvoError, isRejected, INVOICE_STATUSES, INVOICE_STAGES, INVOICE_REASONS } from './types.js';
 export type {
   CompanyCode,
   ListCompanyCodesParams,
@@ -196,7 +196,13 @@ export type {
   TaxCalcImportErrorRow,
   ListTaxCalculationImportErrorsResponse,
   TaxTreatment,
-  ClearanceStatus,
+  InvoiceStatus,
+  InvoiceStage,
+  InvoiceReason,
+  InvoiceStatusFields,
+  Issue,
+  CustomerResponse,
+  CustomerResponseStatus,
   PartyInput,
   CustomerPartyInput,
   EsCountrySpecific,

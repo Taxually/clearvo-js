@@ -2,9 +2,10 @@ export interface ClearvoClientOptions {
   apiKey: string;
   baseUrl?: string;
   /**
-   * POST /v1/send answers HTTP 200 for every stored document, with the outcome in the body. When true (the default for
-   * this SDK major) `submitInvoice` throws a {@link ClearvoError} when the stored outcome is REJECTED or NEEDS_INFO,
-   * as it did when those came back as 422. Set false to receive the body and branch on `outcome` yourself.
+   * POST /v1/send answers HTTP 200 for every stored document, with the status in the body. When true (the default for
+   * this SDK major) `submitInvoice` throws a {@link ClearvoError} when the stored status is REJECTED, or WAITING_FOR_YOU
+   * because information is missing (reason NEEDS_INFO or UNROUTABLE), as it did when those came back as 422. Set false to
+   * receive the body and branch on `status` yourself.
    * The default flips to false in the next major. 4xx and 5xx responses always throw.
    */
   throwOnRejected?: boolean;
@@ -90,13 +91,14 @@ export type DeInvoiceFormat = 'ZUGFERD' | 'XRECHNUNG' | 'PEPPOL';
 /**
  * The body of POST /v1/send (HTTP 200) for a German invoice resolved to PEPPOL whose
  * buyer cannot be reached over Peppol. There is no silent fallback: the invoice
- * is stored NEEDS_INFO (absent on a dryRun) and `error.alternatives[]` lists
+ * is stored WAITING_FOR_YOU with reason NEEDS_INFO (absent on a dryRun) and `error.alternatives[]` lists
  * the formats to re-send as.
  */
 export interface PeppolCustomerUnreachableResponse {
   ok: false;
   id?: string;
-  clearanceStatus?: 'NEEDS_INFO';
+  status?: 'WAITING_FOR_YOU';
+  reason?: 'NEEDS_INFO';
   error: {
     code: 'PEPPOL_CUSTOMER_UNREACHABLE';
     message: string;
@@ -117,20 +119,18 @@ export interface PeppolCustomerUnreachableResponse {
 }
 
 /**
- * The body of POST /v1/send, which answers HTTP 200 for every document it stores. Branch on `outcome` (or
- * `clearanceStatus`), never on the HTTP status or on `ok` alone: `ok` is false for a rejection or a document that needs
- * action and true for an accepted, in-flight or held one.
+ * The body of POST /v1/send, which answers HTTP 200 for every document it stores. Branch on `status`, never on the HTTP
+ * status or on `ok` alone: `ok` is false for a rejection or a document that needs action and true for a completed,
+ * in-flight or waiting one. `reason` says exactly why; `stage` says where a PENDING or COMPLETED one is.
  */
-export interface SendResult {
+export interface SendResult extends InvoiceStatusFields {
   referenceId: string;
   /**
-   * Derived from the status alone: false for REJECTED, NEEDS_INFO (including UNROUTABLE), SETUP_NEEDED and HELD_PLATFORM_FAULT (or a dry run that would be
-   * one), true for everything else (accepted, in flight, other holds, accumulated, PROCESSING). A replay of the same
-   * document carries the same `ok`, `error`, `errors[]`, `fixUrl` and `nextStep`. Branch on `outcome`, not `ok`.
+   * Derived from the status: false for REJECTED and for WAITING_FOR_YOU with reason NEEDS_INFO, UNROUTABLE or SETUP_NEEDED, and for
+   * WAITING_FOR_PLATFORM with reason HELD_PLATFORM_FAULT (or a dry run that would be one), true for everything else. A replay of the same
+   * document carries the same `ok`, `error`, `errors[]`, `fixUrl` and `nextStep`. Branch on `status`, not `ok`.
    */
   ok?: boolean;
-  /** The stored record's status: REJECTED, NEEDS_INFO, SETUP_NEEDED, HELD_*, NOT_SUPPORTED, ACCUMULATED, PENDING, RECEIVED, ... Same value as `status`. */
-  clearanceStatus?: ClearanceStatus;
   /**
    * On a rejection: `{ code, message, fixUrl, isMerchantResolvable, retryable }`, plus per-code extras (`field`, `details[]`,
    * `alternatives[]`). Absent on an accepted document.
@@ -139,20 +139,9 @@ export interface SendResult {
   /** On a rejection: one entry per failed check (JSON-pointer `path`, stable `errorCode`). */
   errors?: SendRejectionEntry[];
   /**
-   * Same value as `clearanceStatus`: RECEIVED/PENDING/ACCEPTED/REJECTED/DELIVERED/UNROUTABLE/
-   * UNDELIVERED/DUPLICATE, or HELD_AWAITING_AUTHORIZATION (errorCode MANDATE_SUPPORT_NOT_OPERATIONAL: a country that is not enabled
-   * for the account yet, including live Portugal submissions; answered 200, held and released automatically once the
-   * country is enabled for the account), NOT_SUPPORTED (dated before the mandate's support start, errorCode MANDATE_NOT_SUPPORTED, terminal), or HELD_UNMAPPED_TAX_CODE — a line/shipping/
-   * allowance-charge's clientTaxCode or taxTreatment isn't configured for
-   * this entity yet. Never a malformed request: the invoice is accepted
-   * and held with a machine-readable reason (see errorCode/message/reason
-   * below) rather than rejected. Configure the code and resubmit under a
-   * new idempotency key to unblock it.
-   */
-  status: ClearanceStatus;
-  /**
    * Who the document is waiting for, derived from `status`. A 200 response means the document is stored, not that it
-   * succeeded: read `outcome`, `clearanceStatus`, `statusClass` and `terminal`.
+   * succeeded: read `status`, `stage`, `reason` and `terminal`.
+   * @deprecated Use `status`: WAITING_FOR_YOU, WAITING_FOR_PLATFORM and the terminal statuses carry the same answer.
    */
   statusClass?: StatusClass;
   /** What has to happen next, who does it and where. Null when nothing is outstanding. Act on it for a hold. */
@@ -160,15 +149,10 @@ export interface SendResult {
   /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
   id?: string;
   /**
-   * CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD or PROCESSING. Read this, not the HTTP status (200 for
-   * every stored document, including ACCUMULATED, which used to be 202).
-   * PROCESSING: stored (status RECEIVED) but not processed yet, so not an answer: keep `id` and poll getInvoiceStatus or wait for
-   * `invoice.status_changed`. NEEDS_INFO: stored and only the sender can move it: a required fact is missing, or (UNROUTABLE) the recipient was not found, so fix the
-   * recipient's address and follow `nextStep`. UNDELIVERED is HELD (it was CLEARED); RECEIVED and UNROUTABLE are no longer CLEARED.
+   * CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD or PROCESSING.
+   * @deprecated Redundant with `status`; removed in a later release.
    */
   outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING';
-  /** True when the status is final. A 200 with `terminal: false` means stored and still moving: poll getInvoiceStatus or subscribe to `invoice.status_changed`. */
-  terminal?: boolean;
   /**
    * Machine-readable warnings. A `RECEIVED` result with a `PROCESSING_DELAYED` warning means a temporary problem interrupted
    * processing after the document was stored: do not resend, poll getInvoiceStatus or subscribe to `invoice.status_changed`; Clearvo
@@ -183,10 +167,10 @@ export interface SendResult {
    * tax treatment, so no mandate and no country until its tax code is mapped.
    */
   country?: string | null;
-  /** Present only when status is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
+  /** Present only when reason is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
   errorCode?: string;
-  /** Present only when status is HELD_UNMAPPED_TAX_CODE — the machine-readable diagnostic for which code wasn't configured and where to fix it. */
-  reason?: UnmappedTaxCodeReason;
+  /** Present only when reason is HELD_UNMAPPED_TAX_CODE — the machine-readable diagnostic for which code wasn't configured and where to fix it. */
+  unmappedTaxCode?: UnmappedTaxCodeReason;
   /** Echoed back only when the request set dryRun: true — no record was persisted. */
   dryRun?: boolean;
   /** A dryRun only: the auto-corrections the real send would apply. */
@@ -232,10 +216,9 @@ export interface SendResult {
 /** @deprecated Renamed {@link SendResult}; the shape is identical. */
 export type InvoiceSubmitResponse = SendResult;
 
-/** True when the stored outcome is REJECTED or NEEDS_INFO, the two outcomes `throwOnRejected` turns into a thrown error (PROCESSING never throws; UNROUTABLE is a NEEDS_INFO outcome and throws). Reads `outcome`, falling back to `clearanceStatus`. */
-export function isRejected(result: Pick<SendResult, 'outcome' | 'clearanceStatus' | 'status'>): boolean {
-  const outcome = result.outcome ?? result.clearanceStatus ?? result.status;
-  return outcome === 'REJECTED' || outcome === 'NEEDS_INFO';
+/** True when the stored send is REJECTED, or WAITING_FOR_YOU because a fact is missing or the recipient was not found (reason NEEDS_INFO or UNROUTABLE): the cases `throwOnRejected` turns into a thrown error. */
+export function isRejected(result: Pick<SendResult, 'status' | 'reason'>): boolean {
+  return needsFix(result.status, result.reason);
 }
 
 /**
@@ -245,8 +228,9 @@ export function isRejected(result: Pick<SendResult, 'outcome' | 'clearanceStatus
  */
 export interface RetryInvoiceRejectedResponse {
   ok: false;
-  clearanceStatus: 'REJECTED';
-  outcome: 'REJECTED';
+  status: 'REJECTED';
+  reason: 'REJECTED';
+  rejectionSource?: 'AUTHORITY';
   terminal: true;
   id?: string;
   error?: SendResult['error'];
@@ -281,12 +265,62 @@ export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 
 /**
- * POST /v1/send's clearanceStatus values — same generated source as
- * TaxTreatment above (components.schemas.ClearanceStatus in openapi.json),
- * including HELD_UNMAPPED_TAX_CODE.
+ * The invoice status model — same generated source as TaxTreatment above
+ * (components.schemas.InvoiceStatus / InvoiceStage / InvoiceReason in openapi.json).
  */
-export type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
-import type { ClearanceStatus } from './generated/openapi-tax-code-contract.js';
+export type { InvoiceStatus, InvoiceStage, InvoiceReason } from './generated/openapi-tax-code-contract.js';
+export { INVOICE_STATUSES, INVOICE_STAGES, INVOICE_REASONS } from './generated/openapi-tax-code-contract.js';
+import type { InvoiceStatus, InvoiceStage, InvoiceReason } from './generated/openapi-tax-code-contract.js';
+
+/** A problem the authority or the platform reported on an invoice that was otherwise taken (for example Spain SII "accepted with errors"). */
+export interface Issue {
+  severity: 'warning' | 'error';
+  code: string;
+  message: string;
+  source: 'authority' | 'platform';
+  /** True when you can or must act on it (for example amend the SII report). */
+  actionRequired: boolean;
+}
+
+/** The buyer's decision on an invoice. Separate from `status`: it never moves an invoice in or out of flight. */
+export type CustomerResponseStatus = 'in_review' | 'approved' | 'partially_approved' | 'disputed' | 'refused';
+
+export interface CustomerResponse {
+  status: CustomerResponseStatus;
+  /** The regime's own status code, for example PAYMENT_SENT. */
+  native: string;
+  label: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/**
+ * The status block carried by every response that reports an invoice: POST /v1/send, GET /v1/status, GET /v1/invoices,
+ * GET /v1/invoices/{id} and the `invoice.status_changed` webhook.
+ */
+export interface InvoiceStatusFields {
+  /** One of ten statuses. See {@link InvoiceStatus}. */
+  status: InvoiceStatus;
+  /** Where a PENDING or COMPLETED invoice is in its journey; null for every other status. */
+  stage: InvoiceStage | null;
+  /** Why the invoice has this status. The finest-grained value; branch on `status` first. */
+  reason: InvoiceReason;
+  /** Ready-to-show label for the status. */
+  statusLabel: string;
+  /** True when no more action or event is expected on the processing leg. */
+  terminal: boolean;
+  /** Warnings and errors reported on an invoice that was otherwise taken. Empty when there are none. */
+  issues: Issue[];
+  /** The buyer's decision, null when the regime has none or the buyer has not answered. */
+  customerResponse: CustomerResponse | null;
+  /** Only on a REJECTED invoice: who said no. */
+  rejectionSource?: 'PRE_SUBMISSION_CHECK' | 'AUTHORITY';
+}
+
+/** REJECTED, or WAITING_FOR_YOU for a missing fact or an unreachable recipient. */
+function needsFix(status: InvoiceStatus | undefined, reason: InvoiceReason | undefined): boolean {
+  return status === 'REJECTED' || (status === 'WAITING_FOR_YOU' && (reason === 'NEEDS_INFO' || reason === 'UNROUTABLE'));
+}
 
 /** The customer party of a sale: a PartyInput whose `name` is optional (Spain VeriFactu simplified invoices F2/R5 carry no customer identification). */
 export type CustomerPartyInput = Omit<PartyInput, 'name'> & { name?: string };
@@ -476,7 +510,7 @@ export interface EsCountrySpecific {
 
 /**
  * Input of POST /v1/send. Wherever a field below says a value is rejected, "fails" or "422", that is a stored outcome:
- * the call answers HTTP 200 with `ok: false`, `clearanceStatus` REJECTED or NEEDS_INFO, the code in `error.code` and one
+ * the call answers HTTP 200 with `ok: false`, `status` REJECTED (or WAITING_FOR_YOU with `reason` NEEDS_INFO), the code in `error.code` and one
  * `errors[]` entry per failed check. `submitInvoice` throws it as a ClearvoError with status 422 while `throwOnRejected`
  * is true (the default for this SDK major). Only a malformed request (400), a caller-supplied `channel`/`source` (400),
  * auth/plan (401/403) and an edited resend (409) are real HTTP errors.
@@ -822,12 +856,12 @@ export interface NextStep {
   fixUrl?: string;
 }
 
-export interface InvoiceStatusResponse {
+/** GET /v1/status. */
+export interface InvoiceStatusResponse extends InvoiceStatusFields {
   referenceId: string;
-  clearanceStatus: ClearanceStatus;
+  /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   nextStep?: NextStep | null;
-  clearanceStatusLabel?: string;
   ksefNumber?: string;
   updatedAt: string;
 }
@@ -837,7 +871,12 @@ export interface ListInvoicesParams {
   afterId?: string;
   beforeId?: string;
   country?: string;
-  status?: string;
+  /** One of the ten statuses ({@link InvoiceStatus}). */
+  status?: InvoiceStatus;
+  /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. */
+  reason?: InvoiceReason;
+  /** Filter on the buyer's decision: in_review, approved, partially_approved, disputed or refused. A regime's own native code (for example PAYMENT_SENT) is also accepted. */
+  businessStatus?: CustomerResponseStatus | (string & {});
   /** ISO 8601 timestamp — only invoices whose Clearvo-side created_at is strictly after this. A monotonic ingestion cursor, distinct from issueDate; most relevant for Mexico CFDIs given SAT's own multi-day publishing lag. */
   receivedAfter?: string;
 }
@@ -958,6 +997,7 @@ export interface SimulateReceivedInvoicesResponse {
 }
 
 export interface ListInvoicesResponse {
+  /** Each row carries the {@link InvoiceStatusFields} block; cast a row to `InvoiceStatusFields & Record<string, unknown>` to read it. */
   invoices: unknown[];
   total: number;
   nextCursor: string | null;
@@ -2081,7 +2121,7 @@ export interface Webhook {
   url: string;
   events: string[];
   /** Only for `invoice.status_changed`: the statuses delivered. Empty means every status change. */
-  statuses?: ClearanceStatus[];
+  statuses?: Array<InvoiceStatus | InvoiceReason>;
   entityId: string | null;
   active: boolean;
   createdAt: string;
@@ -2095,7 +2135,7 @@ export interface CreateWebhookInput {
    */
   events?: WebhookEventName[] | string[];
   /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
-  statuses?: ClearanceStatus[];
+  statuses?: Array<InvoiceStatus | InvoiceReason>;
 }
 
 export interface CreateWebhookResponse extends Webhook {
@@ -2112,7 +2152,7 @@ export interface TestWebhookInput {
   /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending, .business_status_changed or .status_changed. */
   event?: string;
   /** Only with event `invoice.status_changed`: the new status the sample reports (default: the invoice's own status, else ACCEPTED). */
-  to?: ClearanceStatus;
+  to?: InvoiceStatus | InvoiceReason;
   /** Build the payload from one of your own invoices instead of sample values. */
   invoiceId?: string;
 }
@@ -3085,7 +3125,7 @@ export interface ListMandateTransactionsParams {
 }
 
 export type MandateTransactionTerminalArtifact =
-  | { type: 'einvoice'; einvoicingRecordId: string; clearanceStatus: string; clearanceStatusLabel: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
+  | { type: 'einvoice'; einvoicingRecordId: string; status: InvoiceStatus; stage: InvoiceStage | null; reason: InvoiceReason; statusLabel: string; /** @deprecated Stored reason code; use `reason`. */ clearanceStatus?: string; /** @deprecated Use `statusLabel`. */ clearanceStatusLabel?: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
   | { type: 'period'; periodId: string; periodKey: string; periodStatus: string; closedAt: string | null; submittedAt: string | null; filedAt: string | null }
   | { type: 'recorded_only' }
   | null;
@@ -3163,7 +3203,8 @@ export interface BulkSendRow {
   /** The transaction's Clearvo id when it reached dispatch. */
   recordId?: string;
   mandate?: string | null;
-  clearanceStatus?: string | null;
+  status?: InvoiceStatus | null;
+  reason?: InvoiceReason | null;
   /** The idempotency key this row was dispatched under — present whenever the row passed structural validation, regardless of outcome. */
   idempotencyKey?: string;
   /** The row's own `country` CSV column — present under the same conditions as idempotencyKey. */
@@ -3379,7 +3420,7 @@ export interface ListTaxCalculationImportErrorsResponse {
 // the POST/GET /fr/credentials response shape in clearvo-marketing's
 // public/openapi.json — keep in sync by hand (this endpoint is out of scope
 // for scripts/generate-from-openapi.mjs, which only covers the
-// TaxTreatment/ClearanceStatus tax-code-mapping contract).
+// TaxTreatment tax-code-mapping contract and the invoice status model).
 
 /** Per-capability outcome. `active` — the platform's own France connection is configured, this tax number is
  *  authorised for this capability, and the platform's France channel is the production gateway. `pending_activation`
@@ -3539,9 +3580,6 @@ export type BusinessStatus =
   /** Brazil only, never a valid PATCH target: the day-90 deemed-acceptance presumption SEFAZ's own statutory silence writes, not a customer request. Readable on GET, listed here only so a caller checking `=== 'PRESUMIDA'` type-checks. */
   | 'PRESUMIDA';
 
-/** The shared, regime-agnostic bucket every registered regime's native BusinessStatus value maps onto. */
-export type CanonicalBusinessStatus = 'RECEIVED' | 'ACKNOWLEDGED' | 'ACCEPTED' | 'DISPUTED';
-
 export interface UpdateBusinessStatusInput {
   /** Invoice id or referenceId of a received (inbound) invoice. */
   id: string;
@@ -3558,9 +3596,8 @@ export interface UpdateBusinessStatusResponse {
   ok: boolean;
   /** The invoice's new native status value. */
   businessStatus: BusinessStatus;
-  /** The shared, regime-agnostic bucket this new value maps onto. Brazil: CIENCIA→ACKNOWLEDGED,
-   *  CONFIRMACAO/PRESUMIDA→ACCEPTED, OPERACAO_NAO_REALIZADA/DESCONHECIMENTO→DISPUTED. */
-  canonicalBusinessStatus?: CanonicalBusinessStatus;
+  /** The buyer's decision in the shared, regime-agnostic vocabulary (`status`), with the native value alongside. */
+  customerResponse?: CustomerResponse | null;
   updatedAt: string;
 }
 
@@ -4339,8 +4376,9 @@ export interface SendRejectionEntry {
   /** Present when a rule produced the entry: the rule's own name (the message a caller reads). */
   ruleName?: string;
   source?: 'rule';
-  /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or NEEDS_INFO (a required fact is missing; resend the corrected document to POST /v1/send with the same invoice number). */
-  clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  /** Present with `ruleName`: the status the stored record takes, REJECTED (a value is invalid) or WAITING_FOR_YOU with `reason` NEEDS_INFO (a required fact is missing; resend the corrected document to POST /v1/send with the same invoice number). */
+  status?: 'REJECTED' | 'WAITING_FOR_YOU';
+  reason?: 'REJECTED' | 'NEEDS_INFO';
   /** Why the finding exists: `format_authority` blocks (the format, the tax authority or the mandate rejects the invoice without it); `legal_content` and `business_policy` warn at most. */
   obligationClass?: 'format_authority' | 'legal_content' | 'business_policy';
   /** True when the business may switch this warning off for itself (`ruleId` for a rule, `ruleCode` for a validation rule). Never true for an error. */
@@ -4368,11 +4406,18 @@ export interface SendRejectionBody {
   adjustments?: unknown[];
   warnings?: SendRejectionEntry[];
   code?: string;
-  clearanceStatus?: 'REJECTED' | 'NEEDS_INFO';
+  status?: 'REJECTED' | 'WAITING_FOR_YOU';
+  reason?: 'REJECTED' | 'NEEDS_INFO' | 'UNROUTABLE';
+  stage?: null;
+  /** @deprecated Redundant with `status`; removed in a later release. */
   outcome?: 'REJECTED' | 'NEEDS_INFO';
+  /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   nextStep?: NextStep | null;
   terminal?: boolean;
+  issues?: Issue[];
+  customerResponse?: CustomerResponse | null;
+  rejectionSource?: 'PRE_SUBMISSION_CHECK' | 'AUTHORITY';
   /** The stored record's id. */
   id?: string;
   /** Present only when a record was stored. */
@@ -4519,14 +4564,26 @@ export interface StatusChangedWebhookPayload {
   referenceId: string | null;
   country: string;
   documentType: string;
-  /** Same as `to`. */
-  clearanceStatus: ClearanceStatus;
-  /** The previous status; null for the first status of a record. */
-  from: ClearanceStatus | null;
-  to: ClearanceStatus;
-  statusClass: StatusClass;
+  /** The previous stored reason code; null for the first status of a record. Use `previousStatus`. */
+  from: string | null;
+  /** The new stored reason code. Use `status` and `reason`. */
+  to: string;
+  /** The status before the change; null for the first status of a record. */
+  previousStatus: InvoiceStatus | null;
+  /** The invoice's status after the change. */
+  status: InvoiceStatus;
+  statusLabel: string;
+  stage: InvoiceStage | null;
+  /** The public reason code ({@link InvoiceReason}). */
+  reason: InvoiceReason;
+  issues: Issue[];
   terminal: boolean;
-  reason: {
+  /** The buyer's decision, when the regime has one. */
+  customerResponse?: CustomerResponse | null;
+  /** @deprecated Use `status`. */
+  statusClass?: StatusClass;
+  /** Who and what caused the change. */
+  cause: {
     code: string | null;
     message: string | null;
     actor: 'authority' | 'rule' | 'system' | 'merchant' | 'platform';
