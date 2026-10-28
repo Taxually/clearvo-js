@@ -566,13 +566,13 @@ export interface SubmitInvoiceInput {
   };
   taxIncluded?: boolean;
   /**
-   * Optional on an ordinary sale — auto-derived from the entity's own
-   * master data when omitted. On a self-billed invoice
-   * (countrySpecific.peppol.selfBilling: true), `supplier` identifies the
-   * real third-party seller instead and is effectively required — omitting
-   * it with no resolvable `supplierRef` fails with 422
-   * MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never
-   * applies to it (see `customer` below).
+   * Never send this on a sale: the supplier of a sale is the entity's own
+   * master data (name, address, tax registrations), and a sale carrying
+   * `supplier` is refused with 422 UNKNOWN_FIELD_SUPPLIER_ON_SALE. Send it
+   * only on a purchase (`transactionDirection: 'purchase'`, the vendor) or a
+   * self-billed invoice (countrySpecific.peppol.selfBilling: true, the real
+   * third-party seller; omitting it with no resolvable `supplierRef` fails
+   * with 422 MISSING_SELF_BILLING_SUPPLIER).
    */
   supplier?: PartyInput;
   /**
@@ -755,9 +755,9 @@ export interface SubmitInvoiceInput {
    * its own Received batch; send `supplier.taxId` and `supplier.address.country`, a
    * missing one parks NEEDS_INFO); every other live country's purchase-direction
    * submission currently resolves to no reporting mandate at all. `supplier` is
-   * still required for a purchase and is the VENDOR/counterparty (the entity's own
-   * Spanish registration is applied automatically, same derivation as the
-   * sale-side `supplier.taxId` rule).
+   * still required for a purchase and is the VENDOR/counterparty. On a purchase the
+   * `customer` must be this entity (a different tax number or name holds the
+   * document RECEIVED_NEEDS_REVIEW, PURCHASE_CUSTOMER_NOT_ENTITY).
    */
   transactionDirection?: 'sale' | 'purchase';
   /**
