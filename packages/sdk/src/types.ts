@@ -2218,7 +2218,10 @@ export interface TaxRegistration {
   taxNumberId: string | null;
   obligationId: string | null;
   registrationStatus: string;
+  /** Null when Compliance Radar is off for the account (see ListRegistrationsResponse.monitoring). */
   obligationStatus: string | null;
+  /** "Not monitored" when Compliance Radar is off; otherwise the status label (null when none). */
+  obligationStatusLabel?: string | null;
   threshold: { amount: number; currency: string } | null;
   currentPeriodAmount: number | null;
   collectFromDate: string | null;
@@ -2236,6 +2239,12 @@ export interface ListRegistrationsResponse {
   iossNumber: string | null;
   taxCalcEnabled: boolean;
   taxCalcSetupRequired: boolean;
+  /**
+   * Whether Compliance Radar is monitoring thresholds. `enabled: false` (an Enterprise administrator switched it off):
+   * every row has obligationStatus, threshold and currentPeriodAmount null with obligationStatusLabel "Not monitored", and
+   * Radar-created Not Registered monitoring rows are omitted. Never read a not-monitored row as compliant.
+   */
+  monitoring: { enabled: true } | { enabled: false; message: string };
   registrations: TaxRegistration[];
 }
 

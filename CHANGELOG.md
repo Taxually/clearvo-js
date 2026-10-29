@@ -153,6 +153,23 @@ Behaviour change in the API, mirrored here: a webhook `url` must be a public HTT
 - MCP: `create_webhook`'s `url` description states the rule.
 - CLI: `webhooks create --url` help states the rule.
 
+## Unreleased — publish only AFTER the Compliance Radar optional-for-Enterprise backend PR has merged and deployed
+
+Backend: Taxually-Einvoicing branch `claude/radar-optional-enterprise`. Additive and non-breaking: an account with Compliance Radar on gets `monitoring: { enabled: true }` and unchanged rows. Package versions are left for the release prep.
+
+### @clearvo/sdk
+
+- `ListRegistrationsResponse.monitoring` (`{ enabled: true } | { enabled: false; message }`) and `TaxRegistration.obligationStatusLabel`. With Radar off (an Enterprise administrator choice) rows carry `obligationStatus`, `threshold` and `currentPeriodAmount` as null and the label "Not monitored"; Radar-created Not Registered rows are omitted.
+
+### @clearvo/mcp
+
+- `list_registrations` description explains the `monitoring` block and the "Not monitored" state (never read as compliant).
+- `get_setup_status` description names `solutionAccess.compliance_radar` = `not_selected` (Radar off) and the 403 `solution_not_enabled` that `GET /v1/tax/obligations` and the Radar obligation endpoints return. The SDK and CLI have no typed method for either, so nothing was added there.
+
+### @clearvo/cli
+
+- `clearvo registrations list` help text mentions the `monitoring` block.
+
 ## Unreleased — publish only AFTER the backend send-pipeline PR (Taxually-einvoicing 17436) is deployed
 
 Behaviour change in the API, mirrored here: `POST /v1/send` accepts a malformed or incomplete invoice, runs the rules (normalise, enrich), then validates. A failure returns `422 { ok: false, error: { code, message, ... }, errors: [{ path, errorCode, message, ... }] }` and stores the document as NEEDS_INFO or REJECTED. `error` is now an object, not a string, and the old `details[]` is gone. If the validation rules cannot load the call returns `503 VALIDATION_RULES_UNAVAILABLE` with nothing stored. Rule windows (`effectiveFrom` / `effectiveTo`) are judged against the time the platform ingested the document, not the document's date.
