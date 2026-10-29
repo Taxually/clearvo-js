@@ -463,15 +463,11 @@ const TOOLS = [
       'carries `siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate) and ' +
       'its own held/actionOwner when applicable — never the AEAT CSV, which only exists once P2 ' +
       'gets a real AEAT answer (see get_invoice\'s own siiDetail). ' +
-      'The issuing company on a sale is this entity and is never supplied by the caller: omit `supplier` entirely and its name, tax ID, address and contact come from the Business Profile (on a purchase the entity is the customer and `supplier` is the vendor you pass). ' +
+      'The issuing company on a sale is this entity and is never supplied by the caller: do not send `supplier` on a sale (a sale carrying it is refused with 422 UNKNOWN_FIELD_SUPPLIER_ON_SALE); its name, tax ID, address and contact come from the Business Profile and tax registrations of the entity the call is made for. On a purchase (transactionDirection "purchase") the entity is the customer and `supplier` is the vendor you pass; on a self-billed invoice `supplier` is the real seller. ' +
       'If the profile is incomplete the document is stored WAITING_FOR_YOU with reason NEEDS_INFO (HTTP 200) and error MISSING_SUPPLIER_DATA and a fixUrl — ask the user to complete the Business Profile; do not invent or copy an address. ' +
       'A PENDING status means sent or queued for the authority, not final: always follow with poll_status, which carries the authority\'s own answer. RECEIVED is not an answer: keep the `id` and poll. `ok` is false for REJECTED and for WAITING_FOR_YOU with reason NEEDS_INFO, UNROUTABLE or SETUP_NEEDED, and for WAITING_FOR_PLATFORM with reason HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. An UNROUTABLE document is WAITING_FOR_YOU: it is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is WAITING_FOR_PLATFORM. `issues[]` carries warnings or errors an authority reported on a document it took (a Spain SII answer with errors is WAITING_FOR_YOU, reason REGISTERED_WITH_ERRORS: amend it, never resubmit). `customerResponse` is the buyer\'s separate decision (in_review, approved, partially_approved, disputed, refused) and never changes `status`. ' +
-      'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
-      'resolved country is applied automatically (an entity can hold registrations in more than ' +
-      'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
-      'country). If supplied, it must match that registered tax ID exactly (a country prefix ' +
-      'is stripped before comparing) or it is stored REJECTED (HTTP 200) with error SUPPLIER_TAX_ID_MISMATCH ' +
-      '(`mandateCountry`/`registeredTaxId`/`suppliedTaxId`/`fixUrl`). ' +
+      'On a sale the entity\'s own registered tax ID for the resolved country is applied automatically (an entity can hold registrations in more than one country; the right one is derived per-invoice, not assumed from the entity\'s home country). ' +
+      'On a purchase, the customer must be this entity: when the customer\'s tax number (or, without one, its name) does not match the entity\'s registered details the document is stored held for review (RECEIVED_NEEDS_REVIEW, errorCode PURCHASE_CUSTOMER_NOT_ENTITY) because it appears to belong to a different entity or may have been misrouted. ' +
       'A Spain SII/VeriFactu invoice for an entity with no current Spanish registration is stored NEEDS_INFO (errorCode ' +
       'MISSING_SUPPLIER_REGISTRATION, fixUrl): add the registration, then resubmit. A Spain SII submission also carries `reportBy` ' +
       '(the AEAT deadline); when the entity\'s es_sii submissionMode is batch_auto or batch_review the response is 200 ACCUMULATED ' +
@@ -568,10 +564,10 @@ const TOOLS = [
         },
         supplier: {
           type: 'object',
-          description: 'The issuing company (your entity). Pull name and taxId from your entity settings. On a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), this instead identifies the real third-party SELLER you are self-billing on behalf of, never your own entity — omitting it with no resolvable supplierRef is stored with the error MISSING_SELF_BILLING_SUPPLIER, and SUPPLIER_TAX_ID_MISMATCH never applies to it (see customer\'s own description).',
+          description: 'NEVER SEND THIS ON A SALE: a sale carrying it is refused (422 UNKNOWN_FIELD_SUPPLIER_ON_SALE); the issuing company is your entity, taken from its Business Profile and tax registrations. Send it only on a purchase (transactionDirection "purchase"), where it is the vendor, or on a self-billed invoice (countrySpecific.peppol.selfBilling: true — see below), where it is the real third-party SELLER you are self-billing on behalf of — omitting it with no resolvable supplierRef is stored with the error MISSING_SELF_BILLING_SUPPLIER.',
           properties: {
             name: { type: 'string' },
-            taxId: { type: 'string', description: 'Optional — omit to use the entity\'s own registered tax ID for the resolved destination country automatically. If supplied, must match that registered tax ID (country prefix stripped before comparing) or the invoice is stored with the error SUPPLIER_TAX_ID_MISMATCH. Does not apply on a self-billed invoice, where this is the real seller\'s own tax ID, taken as supplied.' },
+            taxId: { type: 'string', description: 'The vendor\'s tax number (purchase) or the real seller\'s (self-billed), taken as supplied.' },
             address: {
               type: 'object',
               properties: {
