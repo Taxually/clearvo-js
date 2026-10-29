@@ -583,9 +583,10 @@ export function createProgram(): Command {
   entities
     .command('list')
     .description('List all entities under the account')
+    .option('--tax-number <taxNumber>', 'Only entities with this tax number (any spelling, at least 4 characters)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { pretty?: boolean }) => {
-      const result = await api('GET', '/entities');
+    .action(async (opts: { taxNumber?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/entities${opts.taxNumber ? `?taxNumber=${encodeURIComponent(opts.taxNumber)}` : ''}`);
       print(result, !!opts.pretty);
     });
   

@@ -1106,10 +1106,13 @@ const TOOLS = [
       'List the business entities registered under this Clearvo account. ' +
       'Each entity is a legal company registered for tax compliance (one VAT registration, one country of establishment). ' +
       'Returns entity IDs, names, countries of establishment, and VAT numbers. ' +
-      'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices.',
+      'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices. ' +
+      'Pass taxNumber to find the entity already registered under a tax number (any spelling, with or without the country prefix).',
     inputSchema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        taxNumber: { type: 'string', description: 'Only return entities whose tax number matches this value (at least 4 characters). Spaces, dashes and the country prefix are ignored.' },
+      },
     },
   },
   {
@@ -1119,7 +1122,8 @@ const TOOLS = [
       'Use this when onboarding a new legal entity, subsidiary, or client company. ' +
       'Requires an account-scoped API key (csk_live_acct_... or csk_test_acct_...). ' +
       'The returned apiKey is shown ONLY ONCE — save it immediately to a secure location. ' +
-      'After creation, use the entity\'s apiKey for all invoice and tax calculation operations for that entity.',
+      'After creation, use the entity\'s apiKey for all invoice and tax calculation operations for that entity. ' +
+      'Returns 409 DUPLICATE_ENTITY (with the existing entityId) when an open entity in the same organisation already has this country and tax number.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -4265,8 +4269,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/tax-numbers/validate', { countryCode: country, taxNumber, ...(registryType && { registryType }), ...(force && { force }) });
     }
 
-    case 'list_entities':
-      return callApi('GET', '/entities');
+    case 'list_entities': {
+      const taxNumber = (args as { taxNumber?: unknown }).taxNumber;
+      return callApi('GET', `/entities${typeof taxNumber === 'string' && taxNumber ? `?taxNumber=${encodeURIComponent(taxNumber)}` : ''}`);
+    }
 
     case 'create_entity':
       return callApi('POST', '/entities', args);

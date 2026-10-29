@@ -18,6 +18,8 @@ export type {
   InvoiceRecordTimestamps,
   Entity,
   CreateEntityInput,
+  ListEntitiesParams,
+  DuplicateEntityErrorBody,
   CreateEntityResponse,
   UpdateEntityInput,
   InvoiceSubmitResponse,
