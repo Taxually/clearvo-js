@@ -120,6 +120,7 @@ CLEARVO_API_KEY=csk_live_... npx @clearvo/cli entities list --pretty
 # Or install globally
 npm install -g @clearvo/cli
 clearvo entities list --pretty
+clearvo entities list --tax-number DE123456788 --pretty   # find the entity registered under a tax number
 clearvo requirements --country IT --pretty
 clearvo validate-tin --country DE --number DE123456789
 clearvo send invoice.json --pretty

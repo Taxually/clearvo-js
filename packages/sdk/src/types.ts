@@ -22,6 +22,8 @@ export interface Entity {
   name: string;
   country: string;
   vatNumber: string | null;
+  /** The entity's tax number as stored, beside `vatNumber`; null when none is set. Match it with `listEntities({ taxNumber })`. */
+  taxNumber?: string | null;
   isDefault: boolean;
   createdAt: string;
   /** Mexico only. Defaults to 'sat_pull' for every entity — meaningless (but always present) for a non-MX entity. */
@@ -32,6 +34,22 @@ export interface Entity {
   entityFacts?: Record<string, string>;
   /** Germany only. This entity's default DE invoice format (level 3 of the format resolver), or null when unset (platform default ZUGFERD). */
   defaultDeInvoiceFormat?: DeInvoiceFormat | null;
+}
+
+/** Query for `listEntities`. */
+export interface ListEntitiesParams {
+  /** Only entities whose tax number matches this value. Any spelling (spaces, dashes and the country prefix are ignored), at least 4 characters; otherwise the API answers 422 `INVALID_TAX_NUMBER_FILTER`. */
+  taxNumber?: string;
+}
+
+/**
+ * The 409 body of `createEntity` when an open entity in the same organisation already has this country and tax number.
+ * Reach it on `ClearvoError.body` when `ClearvoError.code === 'DUPLICATE_ENTITY'`.
+ */
+export interface DuplicateEntityErrorBody extends ClearvoErrorBody {
+  error: 'DUPLICATE_ENTITY';
+  /** The id of the existing entity. */
+  entityId: string;
 }
 
 export interface CreateEntityInput {

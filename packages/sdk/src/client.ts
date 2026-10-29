@@ -3,6 +3,7 @@ import type {
   ClearvoClientOptions,
   Entity,
   CreateEntityInput,
+  ListEntitiesParams,
   CreateEntityResponse,
   UpdateEntityInput,
   SendResult,
@@ -425,14 +426,17 @@ export class ClearvoClient {
 
   // ── Entity Management ─────────────────────────────────────────────────────────
 
-  listEntities(): Promise<{ entities: Entity[] }> {
-    return this.request('GET', '/entities');
+  /** List entities. Pass `taxNumber` to find the entity already registered under a tax number (any spelling, min 4 characters; else 422 INVALID_TAX_NUMBER_FILTER). */
+  listEntities(params: ListEntitiesParams = {}): Promise<{ entities: Entity[] }> {
+    const q = params.taxNumber ? `?taxNumber=${encodeURIComponent(params.taxNumber)}` : '';
+    return this.request('GET', `/entities${q}`);
   }
 
   getEntity(entityId: string): Promise<Entity> {
     return this.request('GET', `/entities/${encodeURIComponent(entityId)}`);
   }
 
+  /** Create an entity. Throws a ClearvoError 409 with code `DUPLICATE_ENTITY` (body.entityId = the existing entity) when an open entity in the same organisation already has this country and tax number. */
   createEntity(input: CreateEntityInput): Promise<CreateEntityResponse> {
     return this.request('POST', '/entities', input);
   }

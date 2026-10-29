@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — find and de-duplicate entities by tax number (backend change deploys with the next release)
+
+`GET /v1/entities` takes an optional `taxNumber` filter (any spelling, at least 4 characters, otherwise 422 `INVALID_TAX_NUMBER_FILTER`) and every entity now also carries `taxNumber` beside `vatNumber`. `POST /v1/entities` answers 409 `DUPLICATE_ENTITY` with the existing `entityId` when an open entity in the same organisation already has the same country and tax number.
+
+- SDK: `listEntities({ taxNumber })` (new `ListEntitiesParams`), `Entity.taxNumber`, and `DuplicateEntityErrorBody` for the 409 (`ClearvoError.code === 'DUPLICATE_ENTITY'`, `body.entityId`).
+- CLI: `clearvo entities list --tax-number <taxNumber>`.
+- MCP: `list_entities` gains the optional `taxNumber` input; `create_entity` describes the 409.
+
 ## Unreleased — invoice status model consolidation (backend change deploys with the next release; breaking for readers of `clearanceStatus`)
 
 Every invoice now has one of ten `status` values plus `stage`, `reason`, `issues[]` and `customerResponse` (Taxually-Einvoicing `docs/features/status-model/mapping.md`). The old 24-value clearance status becomes the public `reason`; nothing stored changes. The backend keeps a deprecated `clearanceStatus` alias for one release; these packages no longer expose or read it.
