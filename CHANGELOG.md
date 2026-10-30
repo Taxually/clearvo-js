@@ -20,6 +20,45 @@ Scenarios (same release): `POST /v1/receive/simulate` takes `scenario`, the shap
 - CLI: `clearvo receive simulate --scenario <id>`.
 - The same CI check now also fails when the scenario lists in the SDK, MCP server and CLI differ, or differ from the scenario enum in the published OpenAPI document.
 
+## Unreleased — find and de-duplicate entities by tax number (backend change deploys with the next release)
+
+`GET /v1/entities` takes an optional `taxNumber` filter (any spelling, at least 4 characters, otherwise 422 `INVALID_TAX_NUMBER_FILTER`) and every entity now also carries `taxNumber` beside `vatNumber`. `POST /v1/entities` answers 409 `DUPLICATE_ENTITY` with the existing `entityId` when an open entity in the same organisation already has the same country and tax number.
+
+- SDK: `listEntities({ taxNumber })` (new `ListEntitiesParams`), `Entity.taxNumber`, and `DuplicateEntityErrorBody` for the 409 (`ClearvoError.code === 'DUPLICATE_ENTITY'`, `body.entityId`).
+- CLI: `clearvo entities list --tax-number <taxNumber>`.
+- MCP: `list_entities` gains the optional `taxNumber` input; `create_entity` describes the 409.
+
+## Unreleased — invoice status model consolidation (backend change deploys with the next release; breaking for readers of `clearanceStatus`)
+
+Every invoice now has one of ten `status` values plus `stage`, `reason`, `issues[]` and `customerResponse` (Taxually-Einvoicing `docs/features/status-model/mapping.md`). The old 24-value clearance status becomes the public `reason`; nothing stored changes. The backend keeps a deprecated `clearanceStatus` alias for one release; these packages no longer expose or read it.
+
+- SDK: new types `InvoiceStatus` (`RECEIVED`, `PENDING`, `WAITING_FOR_YOU`, `WAITING_FOR_PLATFORM`, `ACCUMULATED`, `COMPLETED`, `REJECTED`, `CANCELLED`, `SKIPPED`, `NOT_APPLICABLE`), `InvoiceStage`, `InvoiceReason`, `Issue`, `CustomerResponse`, `CustomerResponseStatus` and `InvoiceStatusFields`, with the `INVOICE_STATUSES`, `INVOICE_STAGES` and `INVOICE_REASONS` constants. `SendResult`, `InvoiceStatusResponse` and the `invoice.status_changed` payload carry them. Removed: `ClearanceStatus`, `CLEARANCE_STATUSES`, `CanonicalBusinessStatus` and every `clearanceStatus` field. `outcome` and `statusClass` stay as deprecated optional fields. `isRejected` and `throwOnRejected` now throw for `REJECTED`, and for `WAITING_FOR_YOU` with reason `NEEDS_INFO` or `UNROUTABLE`. `ListInvoicesParams` gains `reason` and `businessStatus` (the buyer's decision) and `status` takes the ten statuses; webhook `statuses` and the `to` of a webhook test take them too. `UpdateBusinessStatusResponse.canonicalBusinessStatus` is replaced by `customerResponse`. On `SendResult` the old held-tax-code diagnostic `reason` object is now `unmappedTaxCode`, because `reason` is the status reason. The `invoice.status_changed` payload gains `previousStatus`, `status`, `statusLabel`, `stage`, `reason` (string) and `issues`; its old `reason {code,message,actor}` object is now `cause`; `from` and `to` stay as stored reason codes.
+- MCP: `submit_invoice`, `poll_status`, `get_invoice`, `list_invoices`, webhook and test tool descriptions use the new model; `list_invoices` gains the `reason` and `businessStatus` filters and a `status` enum of the ten statuses; `isError` on `submit_invoice` follows the new rule.
+- CLI: `clearvo send` exits 1 for `REJECTED` or `WAITING_FOR_YOU` (`NEEDS_INFO`, `UNROUTABLE`); new `clearvo invoices list` with `--status`, `--reason` and `--customer-response`.
+- `scripts/generate-from-openapi.mjs` now reads `InvoiceStatus`, `InvoiceStage` and `InvoiceReason` from the public OpenAPI file; regenerate once the marketing repo publishes them.
+
+## Unreleased — bank accounts have an explicit default (backend change deploys with the next release)
+
+- Every bank account has `isDefault`; exactly one is the default. The first account added is the default automatically. An invoice with no IBAN uses the account for its currency if there is one, otherwise the default; an IBAN sent on the invoice always wins. An account's `currency` stays optional but no longer means "default".
+- Create takes `isDefault: true` to make the new account the default (the old one is demoted). Update takes `isDefault: true` only; `false` is refused with 422 `DEFAULT_BANK_ACCOUNT_REQUIRED` (make another account the default instead). Deleting the default makes the oldest remaining account the default.
+- SDK: `BankAccount.isDefault`, `CreateBankAccountInput.isDefault`, `UpdateBankAccountInput.isDefault`. MCP: `create_bank_account` and `update_bank_account` take `isDefault`; descriptions updated. CLI: `bank-accounts create` and `update` take `--default`.
+
+## Unreleased — one exchange rate field for every country (backend change deploys with the next release)
+
+- An invoice whose currency differs from the currency its tax is reported in is no longer stopped with `TAX_REPORTING_CONVERSION_MISSING`. Without `exchangeRate` or `taxReporting` it is sent with the warning `MISSING_EXCHANGE_RATE` (raised only when a line carries tax). Hungary still needs the rate for a non-HUF invoice: `MISSING_EXCHANGE_RATE_REQUIRED`, stored NEEDS_INFO.
+- `countrySpecific.hu.exchangeRate` is a deprecated alias of the top-level `exchangeRate` (the top-level value wins). `MISSING_HU_EXCHANGE_RATE` and `INVALID_HU_EXCHANGE_RATE` are retired; a non-positive rate fails `INVALID_EXCHANGE_RATE`. A null `exchangeRate` counts as not sent.
+- SDK: doc comments on `SubmitInvoiceInput.taxReportingCurrency`, `exchangeRate` and `countrySpecific` updated. MCP: `submit_invoice` description updated. CLI: no change (bulk CSV already uses the generic `exchangeRate` column).
+
+## Unreleased — held-for-unmapped-tax-code invoices have no country (backend change deploys with the next release)
+
+- A document held for an unmapped tax code (`HELD_UNMAPPED_TAX_CODE`) has no tax treatment, so no mandate and no country: `country` (and `transactionId` on list and detail) is `null` until the code is mapped, on `/v1/send`, on an idempotent replay, and on `listInvoices`/`getInvoice`; the `country` filter never matches it.
+- SDK: `SendResult.country` and the typed `InvoiceRecordTimestamps` fields `country`/`transactionId` are `string | null`; `UnmappedTaxCodeReason` gains optional `codeName` (e.g. `Poland VAT`) and `codeRate` (percent, e.g. `23`), filled when the source system can name the code (Xero tax rates).
+- MCP: `list_invoices` and `submit_invoice` descriptions say the same. CLI: no change (it prints the JSON as returned).
+
+## Unreleased — rule outcome `clearanceStatus` (backend change deploys with the next release)
+
+- CLI: `rules create` and `rules update` take `--clearance-status REJECTED|NEEDS_INFO|EXCLUDED` (what a matched ERROR rule makes of the document; EXCLUDED skips it). The MCP tool schemas for `create_rule`/`update_rule` list it too.
+
 ## Unreleased — integration tests (backend routes ship with the Integration Passport Stage 3 release)
 
 - SDK: `startTestRun`, `getTestRun`, `listTestRuns`, `listTestCases`, `createTestCase`, `updateTestCase`, `archiveTestCase`, `getTestCaseCatalogue` (`/v1/test-runs`, `/v1/test-cases`, sandbox key only).

@@ -1,5 +1,5 @@
 export { ClearvoClient } from './client.js';
-export { ClearvoError, isRejected } from './types.js';
+export { ClearvoError, isRejected, INVOICE_STATUSES, INVOICE_STAGES, INVOICE_REASONS } from './types.js';
 export { SIMULATION_COUNTRY_CODES } from './simulation-countries.js';
 export type { SimulationCountryCode } from './simulation-countries.js';
 export { SIMULATION_SCENARIOS, SIMULATION_SCENARIO_IDS } from './simulation-scenarios.js';
@@ -22,6 +22,8 @@ export type {
   InvoiceRecordTimestamps,
   Entity,
   CreateEntityInput,
+  ListEntitiesParams,
+  DuplicateEntityErrorBody,
   CreateEntityResponse,
   UpdateEntityInput,
   InvoiceSubmitResponse,
@@ -93,6 +95,10 @@ export type {
   TaxCalcParty,
   TaxNumberValidateResponse,
   CountryRequirements,
+  FixWhere,
+  FindingField,
+  FindingFix,
+  InvoiceContentRequirement,
   TaxRegistration,
   RegistrationSecondaryIdentifier,
   ListRegistrationsResponse,
@@ -196,7 +202,13 @@ export type {
   TaxCalcImportErrorRow,
   ListTaxCalculationImportErrorsResponse,
   TaxTreatment,
-  ClearanceStatus,
+  InvoiceStatus,
+  InvoiceStage,
+  InvoiceReason,
+  InvoiceStatusFields,
+  Issue,
+  CustomerResponse,
+  CustomerResponseStatus,
   PartyInput,
   CustomerPartyInput,
   EsCountrySpecific,
@@ -377,11 +389,15 @@ export type {
   TestRunSummary,
   TestRunCaseResult,
   TestRun,
+  TestRunComparison,
+  TestRunRecordCase,
+  TestRunRecord,
   ListTestRunsResponse,
   TestCase,
   ListTestCasesResponse,
   CreateTestCaseInput,
   UpdateTestCaseInput,
   TestCaseWriteResponse,
+  TestCaseSkipResult,
   TestCaseCatalogue,
 } from './types.js';

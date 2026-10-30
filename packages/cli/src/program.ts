@@ -130,7 +130,7 @@ export function createProgram(): Command {
     return res;
   }
 
-  /** Human-readable summary of a stored REJECTED / NEEDS_INFO send (UNROUTABLE is a NEEDS_INFO outcome): the error, one line per failed check, and the next step. */
+  /** Human-readable summary of a stored send that needs a fix (REJECTED, or WAITING_FOR_YOU with reason NEEDS_INFO or UNROUTABLE): the error, one line per failed check, and the next step. */
   function describeStoredRejection(r: Record<string, unknown>, outcome: string): string {
     const err = r.error !== null && typeof r.error === 'object' ? r.error as Record<string, unknown> : null;
     const parts = [`${outcome}${r.id ? ` (${r.id})` : ''}: ${err ? (err.message ?? err.code ?? 'rejected') : (r.message ?? 'rejected')}`];
@@ -168,7 +168,7 @@ export function createProgram(): Command {
   // unrecognised); a bare 0% with neither is rejected with 400
   // ZERO_RATE_NEEDS_TAX_TREATMENT. taxRate itself (0–100) is ALWAYS required,
   // even with a clientTaxCode — missing/out-of-range is a 400. An unrecognised clientTaxCode never rejects the invoice — it's held
-  // (status HELD_UNMAPPED_TAX_CODE) with a machine-readable reason in the
+  // (status WAITING_FOR_YOU, reason HELD_UNMAPPED_TAX_CODE) with a machine-readable reason in the
   // response instead.
   // Line items carry `taxRate`/`taxAmount` — the platform is global, so field
   // names are never tax-type-specific. A file still using the retired
@@ -181,10 +181,10 @@ export function createProgram(): Command {
   // Invoice responses carry `totalTax` (never `totalVat`).
   program
     .command('send <file>')
-    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the outcome is in the body. PROCESSING means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the outcome is REJECTED or NEEDS_INFO (which includes an unroutable recipient; errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on outcome yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
-    .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE outcome) without persisting anything or submitting to an authority')
+    .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the status (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), stage, reason, issues and customerResponse are in the body. RECEIVED means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the status is REJECTED, or WAITING_FOR_YOU for NEEDS_INFO or UNROUTABLE (errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on status yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
+    .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE reason) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
-    .option('--no-throw-on-rejected', 'Exit 0 when the stored outcome is REJECTED or NEEDS_INFO (default: exit 1)')
+    .option('--no-throw-on-rejected', 'Exit 0 when the stored status is REJECTED or WAITING_FOR_YOU for NEEDS_INFO / UNROUTABLE (default: exit 1)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { pretty?: boolean; dryRun?: boolean; clientTaxCode?: string; throwOnRejected?: boolean }) => {
       const raw = readFileSync(file, 'utf8');
@@ -193,18 +193,19 @@ export function createProgram(): Command {
       if (opts.clientTaxCode) body.clientTaxCode = opts.clientTaxCode;
       // x-idempotency-key is optional: the API generates its own identity key from the invoice
       // (type, country, invoice number) and answers 409 IDEMPOTENT_BODY_MISMATCH if the same invoice
-      // is re-sent with changed content. A 200 means the document is STORED: read outcome, clearanceStatus,
-      // statusClass, terminal and nextStep in the output, not the exit status alone.
+      // is re-sent with changed content. A 200 means the document is STORED: read status, stage,
+      // reason, terminal and nextStep in the output, not the exit status alone.
       const result = await api('POST', '/send', body) as Record<string, unknown>;
       print(result, !!opts.pretty);
-      const outcome = result.outcome ?? result.clearanceStatus ?? result.status;
-      if (outcome === 'PROCESSING') {
+      const status = String(result.status ?? '');
+      const reason = String(result.reason ?? '');
+      if (status === 'RECEIVED') {
         // Stored, not processed yet: not an answer. Exit 0 (nothing failed) but say how to follow it.
-        console.error(`PROCESSING${result.id ? ` (${result.id})` : ''}: stored, not processed yet. Poll \`clearvo status ${result.id ?? '<id>'}\` (GET /v1/status) or wait for the invoice.status_changed webhook; do not resend.`);
+        console.error(`RECEIVED${result.id ? ` (${result.id})` : ''}: stored, not processed yet. Poll \`clearvo status ${result.id ?? '<id>'}\` (GET /v1/status) or wait for the invoice.status_changed webhook; do not resend.`);
       }
-      if (opts.throwOnRejected !== false && (outcome === 'REJECTED' || outcome === 'NEEDS_INFO' || outcome === 'UNROUTABLE')) {
-        console.error(describeStoredRejection(result, String(outcome)));
-        if (result.clearanceStatus === 'UNROUTABLE') console.error('Only you can move this one: fix the recipient (address or Peppol ID) and resend the corrected document with the same invoice number.');
+      if (opts.throwOnRejected !== false && (status === 'REJECTED' || (status === 'WAITING_FOR_YOU' && (reason === 'NEEDS_INFO' || reason === 'UNROUTABLE')))) {
+        console.error(describeStoredRejection(result, status === 'REJECTED' ? status : reason));
+        if (reason === 'UNROUTABLE') console.error('Only you can move this one: fix the recipient (address or Peppol ID) and resend the corrected document with the same invoice number.');
         process.exit(1);
       }
     });
@@ -414,7 +415,7 @@ export function createProgram(): Command {
   // ── clearvo status <referenceId> ─────────────────────────────────────────────
   program
     .command('status <referenceId>')
-    .description('Poll the clearance status of a submitted invoice')
+    .description('Poll the status of a submitted invoice: status, stage, reason, issues and customerResponse')
     .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 country code of the invoice (e.g. IT, PL)')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (referenceId: string, opts: { country: string; pretty?: boolean }) => {
@@ -425,6 +426,36 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo invoices list ────────────────────────────────────────────────────
+  // MCP twin: list_invoices (GET /v1/invoices). Each row carries status, stage, reason, issues and customerResponse.
+  const invoices = program.command('invoices').description('List submitted invoices');
+  invoices
+    .command('list')
+    .description('List invoices with their status, stage, reason, issues and customerResponse. Filter by status (one of ten), reason (the specific cause) and the buyer\'s decision')
+    .option('--status <status>', 'RECEIVED | PENDING | WAITING_FOR_YOU | WAITING_FOR_PLATFORM | ACCUMULATED | COMPLETED | REJECTED | CANCELLED | SKIPPED | NOT_APPLICABLE')
+    .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, HELD_UNMAPPED_TAX_CODE, SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED are also accepted)')
+    .option('--customer-response <value>', 'The buyer\'s decision: in_review | approved | partially_approved | disputed | refused (a regime\'s own native code is also accepted)')
+    .option('--country <code>', 'ISO 3166-1 alpha-2 country code')
+    .option('--limit <n>', 'Results per page (default 25, max 100)')
+    .option('--after-id <id>', 'Cursor: nextCursor from a previous response')
+    .option('--before-id <id>', 'Cursor: prevCursor from a previous response')
+    .option('--received-after <iso>', 'Only invoices received after this ISO 8601 timestamp')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { status?: string; reason?: string; customerResponse?: string; country?: string; limit?: string; afterId?: string; beforeId?: string; receivedAfter?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.status) qs.set('status', opts.status);
+      if (opts.reason) qs.set('reason', opts.reason);
+      if (opts.customerResponse) qs.set('businessStatus', opts.customerResponse);
+      if (opts.country) qs.set('country', opts.country);
+      if (opts.limit) qs.set('limit', opts.limit);
+      if (opts.afterId) qs.set('after_id', opts.afterId);
+      if (opts.beforeId) qs.set('before_id', opts.beforeId);
+      if (opts.receivedAfter) qs.set('receivedAfter', opts.receivedAfter);
+      const q = qs.toString();
+      print(await api('GET', `/invoices${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
   // ── clearvo calculate <file> ─────────────────────────────────────────────────
   // The JSON file carries the parties (supplier/customer) directly — there is
   // no per-field CLI override for them; edit the file instead.
@@ -547,11 +578,14 @@ export function createProgram(): Command {
   // ── clearvo requirements ─────────────────────────────────────────────────────
   program
     .command('requirements')
-    .description('Get e-invoicing and tax requirements for a country')
+    .description('Get e-invoicing and tax requirements for a country, including what an invoice for it must or should carry (invoiceContent.requirements)')
     .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 country code (e.g. IT, PL, DE)')
+    .option('--class <class>', 'Keep only invoice content requirements of this obligation class (format_authority, legal_content, presentation)')
+    .option('--mandate <code>', 'Keep ordinary per-country requirements and those of this compliance mandate only')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { country: string; pretty?: boolean }) => {
-      const result = await api('GET', `/requirements?country=${encodeURIComponent(opts.country)}`);
+    .action(async (opts: { country: string; class?: string; mandate?: string; pretty?: boolean }) => {
+      const query = new URLSearchParams({ country: opts.country, ...(opts.class ? { class: opts.class } : {}), ...(opts.mandate ? { mandate: opts.mandate } : {}) });
+      const result = await api('GET', `/requirements?${query.toString()}`);
       print(result, !!opts.pretty);
     });
   
@@ -561,9 +595,10 @@ export function createProgram(): Command {
   entities
     .command('list')
     .description('List all entities under the account')
+    .option('--tax-number <taxNumber>', 'Only entities with this tax number (any spelling, at least 4 characters)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { pretty?: boolean }) => {
-      const result = await api('GET', '/entities');
+    .action(async (opts: { taxNumber?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/entities${opts.taxNumber ? `?taxNumber=${encodeURIComponent(opts.taxNumber)}` : ''}`);
       print(result, !!opts.pretty);
     });
   
@@ -888,9 +923,9 @@ export function createProgram(): Command {
     });
 
   // ── clearvo bank-accounts ───────────────────────────────────────────────────
-  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
-  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // an invoice's own payment.means[].iban always wins outright; this is a fallback.
+  // Entity-owned IBAN/BIC master data (exactly one account is the default) so it
+  // doesn't need to be resent on every invoice. An invoice uses its own
+  // payment.means[].iban if sent, else the account for its currency, else the default.
   const bankAccounts = program.command('bank-accounts').description('Manage bank-account master data');
 
   bankAccounts
@@ -907,21 +942,24 @@ export function createProgram(): Command {
     .command('create')
     .description('Store a bank account')
     .requiredOption('--iban <iban>', 'IBAN — format/checksum-validated before storing')
-    .option('--currency <code>', 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.')
+    .option('--currency <code>', 'ISO 4217 alpha-3 currency this account is used for (optional)')
+    .option('--default', 'Make this the default account (the first account is the default automatically)')
     .option('--bic <bic>', 'BIC')
-    .option('--account-holder-name <name>', 'Dashboard display only — never rendered onto an invoice')
+    .option('--account-holder-name <name>', 'Name of the account holder. Printed as the payee account name (BT-85) on invoices that use this account when the caller sends no iban')
     .option('--entity <entityId>', 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
       iban: string;
       currency?: string;
+      default?: boolean;
       bic?: string;
       accountHolderName?: string;
       entity?: string;
       pretty?: boolean;
     }) => {
-      const body: Record<string, string> = { iban: opts.iban };
+      const body: Record<string, string | boolean> = { iban: opts.iban };
       if (opts.currency) body.currency = opts.currency;
+      if (opts.default) body.isDefault = true;
       if (opts.bic) body.bic = opts.bic;
       if (opts.accountHolderName) body.accountHolderName = opts.accountHolderName;
       const result = await api('POST', '/bank-accounts', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
@@ -931,7 +969,8 @@ export function createProgram(): Command {
   bankAccounts
     .command('update <id>')
     .description('Update a bank account')
-    .option('--currency <code>', 'Updated currency, or the literal string "null" to move it back to the entity-wide DEFAULT slot')
+    .option('--currency <code>', 'Updated currency, or the literal string "null" to clear it')
+    .option('--default', 'Make this the default account (to change the default, make another account the default)')
     .option('--iban <iban>', 'Updated IBAN — re-validated (format/checksum)')
     .option('--bic <bic>', 'Updated BIC, or the literal string "null" to clear it')
     .option('--account-holder-name <name>', 'Updated account holder name, or the literal string "null" to clear it')
@@ -939,6 +978,7 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
       currency?: string;
+      default?: boolean;
       iban?: string;
       bic?: string;
       accountHolderName?: string;
@@ -947,6 +987,7 @@ export function createProgram(): Command {
     }) => {
       const body: Record<string, unknown> = {};
       if (opts.currency !== undefined) body.currency = opts.currency === 'null' ? null : opts.currency;
+      if (opts.default) body.isDefault = true;
       if (opts.iban) body.iban = opts.iban;
       if (opts.bic !== undefined) body.bic = opts.bic === 'null' ? null : opts.bic;
       if (opts.accountHolderName !== undefined) body.accountHolderName = opts.accountHolderName === 'null' ? null : opts.accountHolderName;
@@ -994,7 +1035,7 @@ export function createProgram(): Command {
     .description('Register a new webhook endpoint')
     .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
     .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending', '*')
-    .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example NEEDS_INFO,REJECTED,ACCEPTED). Omit for every status change')
+    .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; statuses?: string; pretty?: boolean }) => {
       const events = opts.events.split(',').map(e => e.trim()).filter(Boolean);
@@ -1022,7 +1063,7 @@ export function createProgram(): Command {
     .command('test <id>')
     .description('Send a signed test event to a webhook endpoint and show what it answered (sent once, nothing is stored)')
     .option('--event <event>', 'Event to simulate: invoice.received (default), accepted, rejected, duplicate, undelivered, pending, business_status_changed or status_changed (prefix invoice.)')
-    .option('--to <status>', 'Only with --event invoice.status_changed: the new status the sample reports (for example NEEDS_INFO). Default: the invoice\'s own status, else ACCEPTED')
+    .option('--to <status>', 'Only with --event invoice.status_changed: the new status the sample reports (for example WAITING_FOR_YOU). Default: the invoice\'s own status, else COMPLETED')
     .option('--invoice <invoiceId>', 'Build the payload from one of your own invoices instead of sample values')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { event?: string; to?: string; invoice?: string; pretty?: boolean }) => {
@@ -1126,6 +1167,21 @@ export function createProgram(): Command {
       else printRunSummary(run);
     });
 
+  tests
+    .command('export <runId>')
+    .description('Export the record of one test run to keep (JSON): what each test expected, what was observed, the test version and a content digest')
+    .option('--out <file>', 'Write the record to this file instead of printing it')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (runId: string, opts: { out?: string; pretty?: boolean }) => {
+      const record = await api('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
+      if (opts.out) {
+        writeFileSync(opts.out, JSON.stringify(record, null, 2));
+        console.log(opts.out);
+      } else {
+        print(record, !!opts.pretty);
+      }
+    });
+
   const testCases = tests.command('cases').description('The tests you can run: standard ones and your own');
 
   testCases
@@ -1157,6 +1213,22 @@ export function createProgram(): Command {
         process.exit(1);
       }
       print(await api('POST', '/test-cases', body), !!opts.pretty);
+    });
+
+  tests
+    .command('skip <caseId>')
+    .description('Skip a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true }), !!opts.pretty);
+    });
+
+  tests
+    .command('unskip <caseId>')
+    .description('Put a skipped test back so new runs include it again')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (caseId: string, opts: { pretty?: boolean }) => {
+      print(await api('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false }), !!opts.pretty);
     });
 
   testCases
@@ -1827,6 +1899,7 @@ export function createProgram(): Command {
     .option('--description <text>', 'Rule description')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY — default BUSINESS_POLICY')
     .option('--sort-order <n>', 'Evaluation order within this ruleKind')
+    .option('--clearance-status <status>', 'What a matched ERROR rule makes of the document: REJECTED (default), NEEDS_INFO (accepted, flagged for the sender to complete) or EXCLUDED (skipped: recorded, nothing submitted). Only for --rule-kind ERROR')
     .option('--conditions <json>', 'JSON array, ANDed at the top level: each element is {property, operator, value?} or a group {any: [...]} / {all: [...]} (max 50 leaves, 2 levels deep). Omit or [] to always match', '[]')
     .option('--company-code <code>', 'Scope the rule to one of the entity\'s active company codes (Enterprise). Omit for an entity-wide rule')
     .option('--actions <json>', 'JSON array of {property, value} (literal) or {property, fn, args?} (function dispatch)', '[]')
@@ -1837,7 +1910,7 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: {
       domain: string; recordType?: string; ruleKind: string; code: string; name: string; description?: string;
-      legalBasisTag?: string; sortOrder?: string; conditions: string; actions: string; templateId?: string;
+      legalBasisTag?: string; sortOrder?: string; clearanceStatus?: string; conditions: string; actions: string; templateId?: string;
       effectiveFrom?: string; effectiveTo?: string; companyCode?: string; entity?: string; pretty?: boolean;
     }) => {
       const body: Record<string, unknown> = {
@@ -1849,6 +1922,7 @@ export function createProgram(): Command {
       if (opts.description) body.description = opts.description;
       if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
       if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.clearanceStatus) body.clearanceStatus = opts.clearanceStatus;
       if (opts.templateId) body.templateId = opts.templateId;
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;
       if (opts.effectiveTo) body.effectiveTo = opts.effectiveTo;
@@ -1865,6 +1939,7 @@ export function createProgram(): Command {
     .option('--description <text>')
     .option('--legal-basis-tag <tag>', 'LEGAL_MANDATE or BUSINESS_POLICY')
     .option('--sort-order <n>')
+    .option('--clearance-status <status>', 'What a matched ERROR rule makes of the document: REJECTED (default), NEEDS_INFO (accepted, flagged for the sender to complete) or EXCLUDED (skipped: recorded, nothing submitted). Only for an ERROR rule')
     .option('--conditions <json>', 'JSON array replacing the rule\'s own conditions (leaves or {any|all: [...]} groups)')
     .option('--company-code <code>', 'Re-scope to another active company code')
     .option('--entity-wide', 'Make the rule entity-wide again (company code null)')
@@ -1877,7 +1952,7 @@ export function createProgram(): Command {
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: {
-      version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string;
+      version: string; name?: string; description?: string; legalBasisTag?: string; sortOrder?: string; clearanceStatus?: string;
       conditions?: string; actions?: string; effectiveFrom?: string; effectiveTo?: string;
       companyCode?: string; entityWide?: boolean;
       enabled?: boolean; disabled?: boolean; archive?: boolean; entity?: string; pretty?: boolean;
@@ -1887,6 +1962,7 @@ export function createProgram(): Command {
       if (opts.description) body.description = opts.description;
       if (opts.legalBasisTag) body.legalBasisTag = opts.legalBasisTag;
       if (opts.sortOrder) body.sortOrder = Number(opts.sortOrder);
+      if (opts.clearanceStatus) body.clearanceStatus = opts.clearanceStatus;
       if (opts.conditions) body.conditions = parseJsonOption('--conditions', opts.conditions);
       if (opts.actions) body.actions = parseJsonOption('--actions', opts.actions);
       if (opts.effectiveFrom) body.effectiveFrom = opts.effectiveFrom;

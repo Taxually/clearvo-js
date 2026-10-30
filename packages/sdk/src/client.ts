@@ -3,6 +3,7 @@ import type {
   ClearvoClientOptions,
   Entity,
   CreateEntityInput,
+  ListEntitiesParams,
   CreateEntityResponse,
   UpdateEntityInput,
   SendResult,
@@ -54,11 +55,13 @@ import type {
   StartTestRunInput,
   StartTestRunResponse,
   TestRun,
+  TestRunRecord,
   ListTestRunsResponse,
   ListTestCasesResponse,
   CreateTestCaseInput,
   UpdateTestCaseInput,
   TestCaseWriteResponse,
+  TestCaseSkipResult,
   TestCaseCatalogue,
   TestWebhookResponse,
   CreateWebhookResponse,
@@ -295,14 +298,14 @@ export class ClearvoClient {
    * identity key from its own fields (sale: documentType + country + invoiceNumber; purchase: also
    * supplier.taxId + issueDate), returned in the `X-Idempotency-Key` response header; that, not your
    * key, is what deduplicates. A re-send of the same identity with different content is refused
-   * 409 IDEMPOTENT_BODY_MISMATCH (unless the earlier attempt is NEEDS_INFO or REJECTED, which re-run
+   * 409 IDEMPOTENT_BODY_MISMATCH (unless the earlier attempt is REJECTED or WAITING_FOR_YOU for missing information, which re-run
    * in place). Reusing your key for a DIFFERENT document is no longer a 409: the send is processed and the response carries the
    * warning IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS (a document lacking identity fields gets NO_IDENTITY_NO_DEDUP).
-   * A 200 means the document is STORED, not accepted: read `outcome`, `clearanceStatus`, `statusClass` and `terminal`, and act on
-   * `nextStep` for a hold. Poll getInvoiceStatus until terminal, or subscribe to the `invoice.status_changed` webhook.
+   * A 200 means the document is STORED, not accepted: read `status`, `stage`, `reason` and `terminal`, and act on
+   * `nextStep` when the status is WAITING_FOR_YOU. Poll getInvoiceStatus until terminal, or subscribe to the `invoice.status_changed` webhook.
    *
-   * A rejection is a stored outcome and answers 200 with `ok: false`. With `throwOnRejected` true (the default for this SDK major,
-   * set on the client or per call) a REJECTED or NEEDS_INFO outcome throws a {@link ClearvoError} (status 422, `code`, `errors`,
+   * A rejection is a stored status and answers 200 with `ok: false`. With `throwOnRejected` true (the default for this SDK major,
+   * set on the client or per call) a REJECTED status, or WAITING_FOR_YOU with reason NEEDS_INFO or UNROUTABLE, throws a {@link ClearvoError} (status 422, `code`, `errors`,
    * and the whole body on `body`), as it did before the 200 flip. With false it returns the body. 4xx and 5xx always throw: 400
    * malformed, 401/403 auth or plan, 409 edited resend, 429 rate limit, 503 INGEST_UNAVAILABLE (nothing stored: retry with the same body).
    */
@@ -314,13 +317,13 @@ export class ClearvoClient {
     return result;
   }
 
-  /** The ClearvoError for a stored REJECTED / NEEDS_INFO outcome: status 422, as before the 200 flip. */
+  /** The ClearvoError for a stored REJECTED or NEEDS_INFO send: status 422, as before the 200 flip. */
   private rejectionError(result: SendResult): ClearvoError {
     const data = result as unknown as ClearvoErrorBody;
     const err = result.error;
     return new ClearvoError(
       422,
-      String(err?.message ?? err?.code ?? `Document ${result.outcome ?? result.clearanceStatus}`),
+      String(err?.message ?? err?.code ?? `Document ${result.reason ?? result.status}`),
       typeof data.hint === 'string' ? data.hint : undefined,
       typeof err?.field === 'string' ? err.field : undefined,
       err?.code,
@@ -353,6 +356,8 @@ export class ClearvoClient {
     if (params.beforeId)         qs.set('before_id', params.beforeId);
     if (params.country)          qs.set('country',   params.country);
     if (params.status)           qs.set('status',    params.status);
+    if (params.reason)           qs.set('reason',    params.reason);
+    if (params.businessStatus)   qs.set('businessStatus', params.businessStatus);
     if (params.receivedAfter)    qs.set('receivedAfter', params.receivedAfter);
     const q = qs.toString();
     return this.request('GET', `/invoices${q ? `?${q}` : ''}`);
@@ -421,14 +426,17 @@ export class ClearvoClient {
 
   // ── Entity Management ─────────────────────────────────────────────────────────
 
-  listEntities(): Promise<{ entities: Entity[] }> {
-    return this.request('GET', '/entities');
+  /** List entities. Pass `taxNumber` to find the entity already registered under a tax number (any spelling, min 4 characters; else 422 INVALID_TAX_NUMBER_FILTER). */
+  listEntities(params: ListEntitiesParams = {}): Promise<{ entities: Entity[] }> {
+    const q = params.taxNumber ? `?taxNumber=${encodeURIComponent(params.taxNumber)}` : '';
+    return this.request('GET', `/entities${q}`);
   }
 
   getEntity(entityId: string): Promise<Entity> {
     return this.request('GET', `/entities/${encodeURIComponent(entityId)}`);
   }
 
+  /** Create an entity. Throws a ClearvoError 409 with code `DUPLICATE_ENTITY` (body.entityId = the existing entity) when an open entity in the same organisation already has this country and tax number. */
   createEntity(input: CreateEntityInput): Promise<CreateEntityResponse> {
     return this.request('POST', '/entities', input);
   }
@@ -532,9 +540,9 @@ export class ClearvoClient {
   }
 
   // ── Bank Account Master Data ─────────────────────────────────────────────────
-  // Entity-owned IBAN/BIC master data (one per currency, plus an optional
-  // entity-wide DEFAULT) so it doesn't need to be resent on every invoice —
-  // see BankAccount's own doc comment (types.ts) for the fallback precedence.
+  // Entity-owned IBAN/BIC master data (exactly one account is the default) so it
+  // doesn't need to be resent on every invoice — see BankAccount's own doc comment
+  // (types.ts) for the precedence.
 
   /** GET /bank-accounts responds 200 with `{ bankAccounts }`. */
   listBankAccounts(entityId?: string): Promise<ListBankAccountsResponse> {
@@ -567,8 +575,9 @@ export class ClearvoClient {
 
   // ── Requirements ──────────────────────────────────────────────────────────────
 
-  getRequirements(country: string): Promise<CountryRequirements> {
-    return this.request('GET', `/requirements?country=${encodeURIComponent(country)}`);
+  getRequirements(country: string, filter: { class?: 'format_authority' | 'legal_content' | 'presentation'; mandate?: string } = {}): Promise<CountryRequirements> {
+    const query = new URLSearchParams({ country, ...(filter.class ? { class: filter.class } : {}), ...(filter.mandate ? { mandate: filter.mandate } : {}) });
+    return this.request('GET', `/requirements?${query.toString()}`);
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────
@@ -607,6 +616,11 @@ export class ClearvoClient {
     return this.request('GET', `/test-runs/${encodeURIComponent(runId)}`);
   }
 
+  /** The record of one run to keep: per test what was expected, what was observed and whether they matched, with the test version, evidence ids and a content digest. No bodies are kept. */
+  exportTestRun(runId: string): Promise<TestRunRecord> {
+    return this.request('GET', `/test-runs/${encodeURIComponent(runId)}/export`);
+  }
+
   listTestRuns(): Promise<ListTestRunsResponse> {
     return this.request('GET', '/test-runs');
   }
@@ -627,6 +641,16 @@ export class ClearvoClient {
   /** Removes one of your own tests from new runs; past runs keep showing it. */
   archiveTestCase(caseId: string): Promise<{ id: string; archived: true }> {
     return this.request('DELETE', `/test-cases/${encodeURIComponent(caseId)}`);
+  }
+
+  /** Skips a test you do not need: it is not run, counts nowhere, and every run and export lists it as skipped. */
+  skipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: true });
+  }
+
+  /** Puts a skipped test back so new runs include it again. */
+  unskipTestCase(caseId: string): Promise<TestCaseSkipResult> {
+    return this.request('PUT', `/test-cases/${encodeURIComponent(caseId)}/skip`, { skipped: false });
   }
 
   /** The closed choices for adding a test: checks and their settings, who it applies to, and the limits. */

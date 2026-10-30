@@ -469,28 +469,28 @@ const TOOLS = [
       'E-Invoicing is an Enterprise product that is switched on per account: without it the call fails with HTTP 403 solution_not_enabled ' +
       '(no upgradeUrl; nothing is submitted) unless a reporting obligation already owed is open. Tell the user to contact us to add it, and check ' +
       'solutionAccess in get_setup_status. ' +
-      'Returns a referenceId — call poll_status to track the clearance outcome. Every ' +
-      'response also carries a stable `outcome` (CLEARED/ACCUMULATED/NEEDS_INFO/HELD/REJECTED/NO_OBLIGATION, plus PROCESSING for a stored document that is not processed yet; NEEDS_INFO also covers an UNROUTABLE recipient, follow `nextStep`), ' +
-      '`mandate`, `reviewRequired`, `statusClass` and `nextStep`. A 200 means the document is STORED, not that it was accepted: ' +
+      'Returns a referenceId — call poll_status to track the outcome. Every ' +
+      'response also carries `status` (one of ten: RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]`, `customerResponse`, ' +
+      '`mandate`, `reviewRequired` and `nextStep`. A 200 means the document is STORED, not that it was accepted: ' +
       'a well-formed document is always stored first, and a validation failure, a missing setup or a not-yet-supported country becomes a status on the stored record, not a lost request. ' +
-      'Read `outcome`, `clearanceStatus`, `statusClass` (IN_FLIGHT: Clearvo is working on it; WAIT_MERCHANT: you or the user can fix it, and it never expires; WAIT_PLATFORM: Clearvo resolves it, nothing for you to do; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `terminal`. ' +
-      'When the document is held (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION, ...), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
+      'Read `status`, `stage`, `reason` and `terminal`. `status` says who has to move it: RECEIVED and PENDING (stage queued or awaiting_authority) and ACCUMULATED: Clearvo or the authority is working on it, wait; WAITING_FOR_YOU: you or the user can fix it, and it never expires; WAITING_FOR_PLATFORM: Clearvo resolves it, nothing for you to do; COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED, CANCELLED, SKIPPED and NOT_APPLICABLE: finished. `reason` is the specific cause (for example NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION). ' +
+      'When the document is waiting (WAITING_FOR_YOU or WAITING_FOR_PLATFORM), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
       'Held documents are released automatically once the cause is fixed; poll_status (or an invoice.status_changed webhook) shows the move. ' +
-      'A document for a country that is not enabled for your account yet (including live Portugal submissions) is stored 200 HELD_AWAITING_AUTHORIZATION: it is held and released automatically once the country is enabled for your account, so there is nothing to resend; a document dated before a mandate\'s support start is NOT_SUPPORTED (final, never submitted later). ' +
-      'A response of clearanceStatus RECEIVED means stored and still being processed: keep its `id`, and call poll_status or get_invoice to follow it. ' +
+      'A document for a country that is not enabled for your account yet (including live Portugal submissions) is stored 200 WAITING_FOR_PLATFORM (reason HELD_AWAITING_AUTHORIZATION): it is held and released automatically once the country is enabled for your account, so there is nothing to resend; a document dated before a mandate\'s support start is NOT_APPLICABLE (reason NOT_SUPPORTED, final, never submitted later). ' +
+      'A response of status RECEIVED means stored and still being processed: keep its `id`, and call poll_status or get_invoice to follow it. ' +
       'RECEIVED with a PROCESSING_DELAYED warning means a temporary problem interrupted processing after the document was stored: do not resend, Clearvo re-runs it; follow it with poll_status. ' +
       'ACCUMULATED (France e-reporting, Spain SII batches) is a 200 too, not a 202. ' +
       'Error bodies that store the document also carry its `id`. warnings[] can include IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS (an x-idempotency-key reused for a different document never blocks it: it is processed under its own identity, so use a distinct key per document or omit it) and NO_IDENTITY_NO_DEDUP (no invoice identity to deduplicate on: a blind retry stores a second record). ' +
       'HTTP 4xx is only for a malformed request, an authentication or plan problem, a rate limit (429) and the 409 below; 5xx only when nothing could be stored (503 INGEST_UNAVAILABLE, retry). An edited resend of an already-processed document is refused with 409 IDEMPOTENT_BODY_MISMATCH: send a correction or a credit note instead. A transaction the tax-mandate engine cannot map to any ' +
       'country\'s compliance rule (a configuration gap, never a data problem with this specific ' +
-      'invoice) is held as `HELD_UNMAPPED_DECISION` for ANY country — not Spain-specific — with ' +
+      'invoice) is WAITING_FOR_PLATFORM with reason `HELD_UNMAPPED_DECISION` for ANY country — not Spain-specific — with ' +
       '`holdReason`/`actionOwner` (\'platform\') attached; a Spain SII submission additionally ' +
       'carries `siiClassification` (book/tipoFactura/claveRegimen/ejercicio/periodo/isLate) and ' +
       'its own held/actionOwner when applicable — never the AEAT CSV, which only exists once P2 ' +
       'gets a real AEAT answer (see get_invoice\'s own siiDetail). ' +
       'The issuing company on a sale is this entity and is never supplied by the caller: omit `supplier` entirely and its name, tax ID, address and contact come from the Business Profile (on a purchase the entity is the customer and `supplier` is the vendor you pass). ' +
-      'If the profile is incomplete the document is stored NEEDS_INFO (HTTP 200) with error MISSING_SUPPLIER_DATA and a fixUrl — ask the user to complete the Business Profile; do not invent or copy an address. ' +
-      'A response outcome of CLEARED means accepted for dispatch to the authority, not final authority clearance: always follow with poll_status, which carries the authority\'s own answer. PROCESSING is not an answer: keep the `id` and poll. `ok` is false for REJECTED, NEEDS_INFO, SETUP_NEEDED and HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. An UNROUTABLE document answers outcome NEEDS_INFO: it is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is HELD. ' +
+      'If the profile is incomplete the document is stored WAITING_FOR_YOU with reason NEEDS_INFO (HTTP 200) and error MISSING_SUPPLIER_DATA and a fixUrl — ask the user to complete the Business Profile; do not invent or copy an address. ' +
+      'A PENDING status means sent or queued for the authority, not final: always follow with poll_status, which carries the authority\'s own answer. RECEIVED is not an answer: keep the `id` and poll. `ok` is false for REJECTED and for WAITING_FOR_YOU with reason NEEDS_INFO, UNROUTABLE or SETUP_NEEDED, and for WAITING_FOR_PLATFORM with reason HELD_PLATFORM_FAULT (and a replay of such a document answers the same, with its error and fixUrl), true otherwise. An UNROUTABLE document is WAITING_FOR_YOU: it is stored and only the sender can move it: fix the recipient and resend the corrected document to POST /v1/send with the same invoice number. UNDELIVERED is WAITING_FOR_PLATFORM. `issues[]` carries warnings or errors an authority reported on a document it took (a Spain SII answer with errors is WAITING_FOR_YOU, reason REGISTERED_WITH_ERRORS: amend it, never resubmit). `customerResponse` is the buyer\'s separate decision (in_review, approved, partially_approved, disputed, refused) and never changes `status`. ' +
       'supplier.taxId is optional — omit it and the entity\'s own registered tax ID for the ' +
       'resolved country is applied automatically (an entity can hold registrations in more than ' +
       'one country; the right one is derived per-invoice, not assumed from the entity\'s home ' +
@@ -520,17 +520,17 @@ const TOOLS = [
       'formatted one; any of these being missing or malformed is stored with the error ' +
       '(MISSING_HU_SUPPLIER_TAX_NUMBER, MISSING_HU_SUPPLIER_ADDRESS, INVALID_HU_CUSTOMER_TAX_NUMBER, ' +
       'MISSING_HU_CUSTOMER_ADDRESS) rather than a silent NEEDS_INFO hold. A non-HUF Hungarian ' +
-      'invoice additionally requires countrySpecific.hu.exchangeRate (error ' +
-      'MISSING_HU_EXCHANGE_RATE if omitted, INVALID_HU_EXCHANGE_RATE if not a positive number); ' +
+      'invoice additionally requires the top-level exchangeRate to HUF (error ' +
+      'MISSING_EXCHANGE_RATE_REQUIRED if omitted, INVALID_EXCHANGE_RATE if not a positive number; ' +
+      'countrySpecific.hu.exchangeRate is a deprecated alias of exchangeRate); ' +
       'countrySpecific.hu.invoiceAppearance, if supplied, must be one of PAPER/ELECTRONIC/EDI/' +
       'UNKNOWN (error INVALID_HU_INVOICE_APPEARANCE otherwise) and otherwise defaults to PAPER for ' +
       'a private-individual customer, ELECTRONIC for every other customer. ' +
       'Germany (DE) generates ZUGFeRD (a PDF/A-3 hybrid, platform default) or XRechnung (a bare ' +
       'UBL XML) depending on this entity\'s own format setup — XRechnung additionally requires a ' +
       'Leitweg-ID or customer reference (BT-10: buyerReference, or countrySpecific.de.leitwegId) plus ' +
-      'a seller contact name/phone/email, and forbids a BIC/SWIFT code; any of these being missing ' +
-      'or malformed for a resolved-XRechnung invoice is stored with the error (MISSING_LEITWEG_ID, ' +
-      'MISSING_DE_XRECHNUNG_SELLER_CONTACT, DE_XRECHNUNG_BIC_FORBIDDEN) rather than a silent NEEDS_INFO hold. ' +
+      'a seller contact name/phone/email; either being missing for a resolved-XRechnung invoice is ' +
+      'stored with the error (MISSING_LEITWEG_ID, MISSING_DE_XRECHNUNG_SELLER_CONTACT) rather than a silent NEEDS_INFO hold. ' +
       'XRechnung and Peppol also need a customer electronic address (BT-49), taken from the first available of: ' +
       'customer.electronicAddress (value + schemeId), the Leitweg-ID (only if it is a valid Leitweg-ID, not a free-text reference), customer.contact.email, the customer\'s German VAT ID ' +
       '(none of these: error MISSING_CUSTOMER_ELECTRONIC_ADDRESS). ' +
@@ -553,10 +553,10 @@ const TOOLS = [
       'VALIDATION_UNAVAILABLE (the check could not run), CREDIT_NOTE_PEPPOL_UNSUPPORTED (credit and debit notes cannot go over Peppol for Singapore, Japan or the UAE; ' +
       'Germany and the other Peppol countries support them, and a credit note must reverse a previously accepted invoice in full). ' +
       'Self-billed German invoices cannot use PEPPOL: DE_SELF_BILLED_PEPPOL_NOT_SUPPORTED when requested explicitly, DE_SELF_BILLED_FORMAT_CHOICE_REQUIRED when a stored default is PEPPOL (pick ZUGFERD or XRECHNUNG). ' +
-      'dryRun=true on a German PEPPOL invoice runs the real content rules and the buyer reachability check and returns the same errors/warnings without storing anything. ' +
+      'dryRun=true runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, and answers what the real send would decide: the same errors/warnings (each with a fix: where the value lives and, when known, its label, type and options), the corrections it would apply and the ruleset version. It does not generate or submit the document; a German PEPPOL invoice also gets the buyer reachability check. A dryRun that used to answer ok:true for an invoice a real send would reject now answers ok:false. ' +
       'A malformed or incomplete invoice is accepted, normalised, enriched and then checked by the platform\'s structural rules; ' +
       'a failure is answered HTTP 200 with ok:false, error.code, and errors[] (one entry per field, JSON-pointer path and stable code), ' +
-      'and the document is stored with clearanceStatus NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
+      'and the document is stored WAITING_FOR_YOU with reason NEEDS_INFO (a required fact is missing) or REJECTED (a value is invalid). ' +
       'Correct it and resend the same invoiceNumber. GET /v1/validations lists every code. ' +
       'Romania also needs a payment due date (dueDate) or payment terms (payment.terms.text) on an invoice with an amount to pay (ANAF rule BR-CO-25); without one the document is stored with the error MISSING_PAYMENT_DUE_DATE_OR_TERMS. A fully prepaid invoice (prepaidAmount covering the total) needs neither. ' +
       'Call get_requirements first if unsure what fields are needed for a country.' +
@@ -567,8 +567,9 @@ const TOOLS = [
       'by country inference. A positive taxRate with neither is reported as a domestic taxable supply at that rate ' +
       '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held NEEDS_INFO ' +
       'asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode. An unrecognised ' +
-      'clientTaxCode never rejects the invoice — it is accepted and held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a ' +
-      'machine-readable reason until the code is configured. Set dryRun=true to preview each line\'s resolved ' +
+      'clientTaxCode never rejects the invoice — it is accepted and held (status WAITING_FOR_YOU, reason HELD_UNMAPPED_TAX_CODE) with a ' +
+      'machine-readable unmappedTaxCode diagnostic until the code is configured; such a held document has no mandate and no country yet, so `country` is null on the response ' +
+      '(and on a replay) and `unmappedTaxCode` carries optional `codeName` and `codeRate` (percent) when the source system can name the code, e.g. a Xero tax rate. Set dryRun=true to preview each line\'s resolved ' +
       'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
     inputSchema: {
       type: 'object' as const,
@@ -578,7 +579,7 @@ const TOOLS = [
         companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
         issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
-        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you must also supply exchangeRate or taxReporting below, or the invoice is stored with the error TAX_REPORTING_CONVERSION_MISSING — Clearvo never fetches or computes an exchange rate itself.' },
+        taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you should also supply exchangeRate or taxReporting below — without one the invoice is still sent with the warning MISSING_EXCHANGE_RATE, except where the authority needs the conversion (Hungary: MISSING_EXCHANGE_RATE_REQUIRED stops it). Clearvo never fetches or computes an exchange rate itself.' },
         exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReporting — supply one or the other, never both.' },
         taxReporting: {
           type: 'object',
@@ -708,7 +709,8 @@ const TOOLS = [
                 properties: {
                   method: { type: 'string', enum: ['bank_transfer', 'direct_debit', 'credit_card', 'cash', 'check', 'other'], description: '"direct_debit" renders SEPA payment means (UBL/CII PaymentMeansCode 59) and REQUIRES mandateReference (BT-89) — Germany also requires creditorId and debitedIban (BT-90/91). Omit for a plain credit-transfer invoice (bank_transfer, the default).' },
                   iban: { type: 'string', description: 'Seller\'s IBAN for a bank_transfer invoice.' },
-                  bic: { type: 'string', description: 'BIC/SWIFT code. Germany (DE): FORBIDDEN on a resolved-XRechnung invoice (BR-DE-25-b) — omit this field entirely for DE, or the invoice is stored with the error DE_XRECHNUNG_BIC_FORBIDDEN.' },
+                  bic: { type: 'string', description: 'BIC/SWIFT code.' },
+                  accountName: { type: 'string', description: 'Payee account name / account holder (BT-85), max 140 characters. When omitted and no iban is sent, the entity\'s stored bank account supplies iban, bic and its holder name; with a per-invoice iban the stored holder is never used.' },
                   reference: { type: 'string', description: 'Payment reference/remittance information.' },
                   mandateReference: { type: 'string', description: 'SEPA mandate reference identifier (BT-89, BG-19 Direct Debit). Required whenever method is "direct_debit" — max 35 characters, or the invoice is stored with the error MANDATE_REFERENCE_TOO_LONG.' },
                   creditorId: { type: 'string', description: 'SEPA bank-assigned creditor identifier / Gläubiger-ID (BT-90) — the SELLER\'s own identifier, never the customer\'s. Germany additionally requires this whenever method is "direct_debit" (KoSIT BR-DE-30).' },
@@ -743,13 +745,23 @@ const TOOLS = [
             ksefNumber: { type: 'string', description: 'Poland only: the original\'s KSeF number (NrFaKorygowanej). Required for a Polish credit note whose original is not stored in Clearvo.' },
           },
         },
+        contractReference: { type: 'string', description: 'BT-12 — the contract the invoice is issued under (at most 200 characters; Italy 20). Not written for the Peppol PINT profiles (Australia, New Zealand, Singapore, Japan).' },
+        projectReference: { type: 'string', description: 'BT-11 — the project the invoice belongs to. Written into UBL invoices and CII documents; a UBL credit note has no element for it. Not written for the Peppol PINT profiles.' },
+        despatchReference: { type: 'string', description: 'BT-16 — the despatch advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        receivingReference: { type: 'string', description: 'BT-15 — the receiving advice reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        accountingReference: { type: 'string', description: 'BT-19 — the customer\'s accounting reference (at most 200 characters). Not written for the Peppol PINT profiles.' },
+        invoicePeriod: {
+          type: 'object',
+          description: 'BG-14 — the period the invoice covers (BT-73 start, BT-74 end). Not written for the Peppol PINT profiles.',
+          properties: { start: { type: 'string', description: 'First day, YYYY-MM-DD.' }, end: { type: 'string', description: 'Last day, YYYY-MM-DD.' } },
+        },
         correctsInvoiceId: {
           type: 'string',
-          description: 'Id (from a prior submit_invoice response) of a REJECTED, UNROUTABLE or NEEDS_INFO invoice this submission re-attempts (a plain resubmission). Do not use it for a credit_note/debit_note: reference the original with originalInvoiceRef. As of 2026-09-14, a REJECTED, UNROUTABLE, or NEEDS_INFO invoice can all be corrected this way (previously only REJECTED/UNROUTABLE could) — a NEEDS_INFO record is no longer a dead end. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
+          description: 'Id (from a prior submit_invoice response) of a REJECTED or WAITING_FOR_YOU (reason UNROUTABLE or NEEDS_INFO) invoice this submission re-attempts (a plain resubmission). Do not use it for a credit_note/debit_note: reference the original with originalInvoiceRef. A REJECTED invoice, or one WAITING_FOR_YOU with reason UNROUTABLE or NEEDS_INFO, can be corrected this way. Must belong to the same entity and country; use a different invoiceNumber alongside this field (the idempotency key is derived from it). France e-reporting NEEDS_INFO is the exception: fix it with the needs-info PATCH, or resubmit the same invoice without an explicit idempotency key so the derived key re-runs it in place.',
         },
         dryRun: {
           type: 'boolean',
-          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting.',
+          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting. It also runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, returning the same errors[], warnings[], corrections[] (the auto-corrections it would apply) and rulesetVersion; each finding carries a fix (where the value lives: invoice, supplier_profile or customer_record, and when known its label, type and options). Tax number checks are format-only. It does not generate or submit the document.',
         },
         notifyCustomer: {
           type: 'boolean',
@@ -762,12 +774,12 @@ const TOOLS = [
         },
                 shipFrom: {
           type: 'object',
-          description: 'France e-reporting, own-goods stock transfers only (a client tax code with movement "own_goods_movement"). Where the goods leave: for an outbound transfer (sale) the French origin; for an inbound transfer (purchase) the origin member state. Send one entry per movement, on the French leg only. Optional and ignored for every other transaction; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country.',
+          description: 'Where the goods leave from (optional). Used to decide the reporting country when you send no country (a ship-from in one of your registered countries is used) and the movement for sales of goods (local, intra-community or export). Still required for a France e-reporting own-goods stock transfer (a client tax code with movement "own_goods_movement"): for an outbound transfer (sale) the French origin, for an inbound transfer (purchase) the origin member state, used to find your own VAT registration in the other member state; an own-goods transfer without it parks NEEDS_INFO naming shipFrom.country (fixable with the needs-info PATCH).',
           properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         shipTo: {
           type: 'object',
-          description: 'France e-reporting, own-goods stock transfers only. Where the goods arrive. Needed only for an outbound transfer (shipFrom in France) to name the destination member state; ignored otherwise.',
+          description: 'Where the goods arrive (optional). Still required for an outbound France e-reporting own-goods stock transfer (shipFrom in France) to name the destination member state.',
           properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2, e.g. "DE".' } },
         },
         accountingDate: {
@@ -875,8 +887,8 @@ const TOOLS = [
       'submit_invoice instead; amending an invoice that is ALREADY a credit/debit note is fine), 409 ' +
       'AMEND_IDENTITY_CHANGE_NOT_ALLOWED (the corrected payload would change the IDFactura identity — supplier ' +
       'taxId, invoiceNumber, or issueDate must exactly match the original registro), and 422 for an obligation ' +
-      'that is disabled or out of its effective date range. On success the record\'s own clearance status stays ' +
-      'ACCEPTED (this never creates a new record or changes the invoice number) — only the AEAT communication ' +
+      'that is disabled or out of its effective date range. On success the record\'s own status stays ' +
+      'COMPLETED (this never creates a new record or changes the invoice number) — only the AEAT communication ' +
       'ledger gains a new entry.',
     inputSchema: {
       type: 'object' as const,
@@ -898,7 +910,7 @@ const TOOLS = [
       'is wrong or was refunded, issue a credit note via submit_invoice instead. Idempotent: cancelling an ' +
       'already-cancelled invoice returns the stored cancelledAt rather than erroring, regardless of the ' +
       'idempotencyKey presented. Refuses 409 SII_NOT_REGISTERED_AT_AEAT when the record is not currently ' +
-      'registered. On success clearance status moves to the terminal CANCELLED state.',
+      'registered. On success the status moves to the terminal CANCELLED state.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -932,11 +944,12 @@ const TOOLS = [
     name: 'poll_status',
     description:
       'Check the status of a document previously submitted via submit_invoice. Reads the stored status only: it never calls the authority, so it is safe to repeat. ' +
-      'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns clearanceStatus, and `statusClass` which says who the document is waiting for: ' +
-      'IN_FLIGHT (RECEIVED = stored and still processing, PENDING, ACCUMULATED: wait, do nothing), ' +
-      'WAIT_MERCHANT (NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
-      'WAIT_PLATFORM (HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
-      'DONE_OK (ACCEPTED, DELIVERED, CANCELLED), DONE_REJECTED (REJECTED: see errors and nextStep) and DONE_NA (NO_MANDATE, EXCLUDED, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
+      'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns `status` (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]` and `customerResponse`. `status` says who the document is waiting for: ' +
+      'RECEIVED (stored, still processing), PENDING (stage queued: not sent yet; awaiting_authority: sent, wait for the answer), ACCUMULATED (in a periodic report, not yet filed): wait, do nothing; ' +
+      'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
+      'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
+      'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_DISCARDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
+      '`customerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resend the corrected document to POST /v1/send with the same invoice number. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
@@ -1118,10 +1131,13 @@ const TOOLS = [
       'List the business entities registered under this Clearvo account. ' +
       'Each entity is a legal company registered for tax compliance (one VAT registration, one country of establishment). ' +
       'Returns entity IDs, names, countries of establishment, and VAT numbers. ' +
-      'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices.',
+      'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices. ' +
+      'Pass taxNumber to find the entity already registered under a tax number (any spelling, with or without the country prefix).',
     inputSchema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        taxNumber: { type: 'string', description: 'Only return entities whose tax number matches this value (at least 4 characters). Spaces, dashes and the country prefix are ignored.' },
+      },
     },
   },
   {
@@ -1131,7 +1147,8 @@ const TOOLS = [
       'Use this when onboarding a new legal entity, subsidiary, or client company. ' +
       'Requires an account-scoped API key (csk_live_acct_... or csk_test_acct_...). ' +
       'The returned apiKey is shown ONLY ONCE — save it immediately to a secure location. ' +
-      'After creation, use the entity\'s apiKey for all invoice and tax calculation operations for that entity.',
+      'After creation, use the entity\'s apiKey for all invoice and tax calculation operations for that entity. ' +
+      'Returns 409 DUPLICATE_ENTITY (with the existing entityId) when an open entity in the same organisation already has this country and tax number.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1488,7 +1505,7 @@ const TOOLS = [
       'Push a received Mexico CFDI 4.0 document (client_push ingestion) — for an AP/ERP system that already holds ' +
       'a CFDI\'s XML, as an alternative to Clearvo polling SAT itself. Always accepted regardless of the entity\'s ' +
       'ingestion mode; no e.firma credential needed. Idempotent on the CFDI\'s own UUID: pushing an already-stored ' +
-      'document returns duplicate:true, never an error. clearanceStatus PENDING means SAT has not yet published the ' +
+      'document returns duplicate:true, never an error. status PENDING means SAT has not yet published the ' +
       'document on its own backend (or was briefly unreachable) — this is never a rejection; retry later, or rely ' +
       'on the automatic recheck if sat_pull is also configured. Refused (with a coded, plain-English error) for a ' +
       'CFDI whose Receptor RFC does not match this entity\'s own registered Mexico RFC, for the generic "público en ' +
@@ -1632,11 +1649,18 @@ const TOOLS = [
       'Returns: whether e-invoicing is mandatory and from when, supported invoice document types (invoice, credit note), ' +
       'Peppol scheme ID for that country, VAT number format description and validation regex, ' +
       'the name and portal URL of the relevant tax authority, and any important notes. ' +
+      'It also returns invoiceContent.requirements: what an invoice for that country must or should carry, read from the invoice-content registry. ' +
+      'Each entry has a key, an obligationClass (format_authority: the format or tax authority rejects the invoice without it, the only class that blocks; ' +
+      'legal_content: national invoice or company law, a warning the business can switch off; presentation: layout only), its enforcement (ERROR | WARNING | NONE), ' +
+      'when it applies (appliesWhen), the invoice paths that must be present (requiredPaths), where the value is supplied (where: invoice | supplier_profile | customer_record | automatic) ' +
+      'and a field description (label, type, options, help text) when the registry has one. Filter with class and mandate; the list is capped at 500. ' +
       'Call this before submitting invoices to a new country to understand what is required and avoid rejections.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code (e.g. "IT", "PL", "DE", "FR")' },
+        class: { type: 'string', enum: ['format_authority', 'legal_content', 'presentation'], description: 'Keep only the invoice content requirements of this obligation class.' },
+        mandate: { type: 'string', description: 'Keep ordinary per-country requirements and those of this compliance mandate only.' },
       },
       required: ['country'],
     },
@@ -1645,9 +1669,10 @@ const TOOLS = [
     name: 'list_invoices',
     description:
       'List invoices previously submitted through Clearvo. ' +
-      'Filter by country, clearance status, or date. ' +
-      'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), clearance status labels, and authority reference numbers. ' +
-      'Use this to audit submitted invoices, find invoices that are still PENDING, ' +
+      'Filter by country, status, reason, customer response, or date. ' +
+      'An invoice held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
+      'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), and per invoice `status`, `stage`, `reason`, `statusLabel`, `terminal`, `issues[]`, `customerResponse` and authority reference numbers. ' +
+      'Use this to audit submitted invoices, find invoices that are still PENDING or WAITING_FOR_YOU, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
       'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
       'validationOutcome (E_INVOICE, E_INVOICE_WITH_FLAGS, FORMAT_ERROR, PROFILE_NOT_SUFFICIENT, NOT_AN_EINVOICE, BUSINESS_RULE_ERROR, ' +
@@ -1661,8 +1686,17 @@ const TOOLS = [
         country: { type: 'string', description: 'Filter by country code (e.g. "IT", "PL")' },
         status: {
           type: 'string',
-          enum: ['PENDING', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNROUTABLE', 'DELIVERED', 'UNDELIVERED'],
-          description: 'Filter by clearance status',
+          enum: ['RECEIVED', 'PENDING', 'WAITING_FOR_YOU', 'WAITING_FOR_PLATFORM', 'ACCUMULATED', 'COMPLETED', 'REJECTED', 'CANCELLED', 'SKIPPED', 'NOT_APPLICABLE'],
+          description: 'Filter by status',
+        },
+        reason: {
+          type: 'string',
+          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
+          description: 'Filter by the specific reason behind the status. The old stored names (EXCLUDED, DISCARDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are both accepted.',
+        },
+        businessStatus: {
+          type: 'string',
+          description: 'Filter on the buyer\'s decision: in_review, approved, partially_approved, disputed or refused. A regime\'s own native code (for example PAYMENT_SENT) is also accepted.',
         },
         limit:     { type: 'number', description: 'Results per page (default 25, max 100)' },
         after_id:  { type: 'string', description: 'Return invoices submitted before this invoice ID (use nextCursor from a previous response)' },
@@ -1676,7 +1710,7 @@ const TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices (including ingestedAt), plus `statusClass` (IN_FLIGHT: wait; WAIT_MERCHANT: you can fix it; WAIT_PLATFORM: Clearvo resolves it; DONE_OK, DONE_REJECTED, DONE_NA: finished) and `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
@@ -1684,13 +1718,13 @@ const TOOLS = [
       'non-SII invoice (a plain VeriFactu ES invoice, or any other country). ' +
       'For a Spain VeriFactu invoice, also returns verifactuDetail (estadoEnvio, estadoRegistro, statusLabel, ' +
       'action, csv, codigoErrorRegistro, descripcionErrorRegistro, answeredAt) — AEAT\'s own answer to the real-time ' +
-      'submission, null until AEAT answers (and always in sandbox, which never calls AEAT). clearanceStatus stays ACCEPTED ' +
-      'for a generated record, so for an estadoRegistro of AceptadoConErrores or Incorrecto show verifactuDetail.statusLabel ' +
-      'and action verbatim, never "Accepted". When AEAT never gave a record-level answer, verifactuDetail is null and ' +
+      'submission, null until AEAT answers (and always in sandbox, which never calls AEAT). status stays COMPLETED (stage generated) ' +
+      'for a generated record, so for an estadoRegistro of AceptadoConErrores (see `issues[]`) or Incorrecto show verifactuDetail.statusLabel ' +
+      'and action verbatim, never plain "Accepted". When AEAT never gave a record-level answer, verifactuDetail is null and ' +
       'verifactuSubmission (outcome UNKNOWN or SOAP_FAULT, statusLabel, action, attempts, at) says so — show its statusLabel ' +
       'and action, never plain "Accepted". ' +
       'sandbox is true for a record created with a test key: it was generated locally and never sent to an authority, ' +
-      'so its ACCEPTED status is not an authority\'s answer. ' +
+      'so its COMPLETED status is not an authority\'s answer. ' +
       'For a Spain VeriFactu or Portugal AT invoice, also returns verificationQr (dataUrl, legend) — ' +
       'the country-mandated verification QR, rendered server-side. Null for every other country. ' +
       'For a Germany invoice, also returns supplierLegalRegistrationId (BT-30, the seller\'s Handelsregisternummer ' +
@@ -1790,7 +1824,7 @@ const TOOLS = [
       'payload authenticity via HMAC-SHA256. ' +
       'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
       'invoice.pending, product.classification_changed, ' +
-      'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, statusClass, terminal, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
+      'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, status, stage, reasonCode, terminal, issues, customerResponse, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
       'accepted_with_errors (Spain SII AceptadoConErrores — AEAT registered the invoice but flagged an admissible error needing an A1 correction), ' +
       'reporting_batch.ready_for_review / reporting_batch.deadline_approaching / reporting_batch.deadline_passed / reporting_batch.overdue_reminder ' +
@@ -1806,7 +1840,7 @@ const TOOLS = [
         statuses: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["NEEDS_INFO","REJECTED","ACCEPTED"]), matched on the new status. Omit or leave empty for every status change. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
+          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["WAITING_FOR_YOU","REJECTED","COMPLETED"]), matched on the new status, one of the ten statuses. Omit or leave empty for every status change. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
         },
         events: {
           type: 'array',
@@ -1835,13 +1869,13 @@ const TOOLS = [
       'The request is built and signed exactly like a real delivery (x-taxually-signature, x-taxually-timestamp) and carries "test": true. ' +
       'It is sent once with no retries; the response says whether your endpoint accepted it (delivered, status, durationMs, any error) and includes the exact payload sent. ' +
       'Nothing is stored and no real invoice changes. Pass invoiceId to build the payload from one of your own invoices instead of sample values. ' +
-      'To rehearse a status change, use event invoice.status_changed and set `to` to the status you want to see (for example NEEDS_INFO).',
+      'To rehearse a status change, use event invoice.status_changed and set `to` to the status you want to see (for example WAITING_FOR_YOU).',
     inputSchema: {
       type: 'object' as const,
       properties: {
         webhookId: { type: 'string', description: 'The webhook ID to test (from list_webhooks or create_webhook)' },
         event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.business_status_changed or invoice.status_changed' },
-        to: { type: 'string', description: 'Only with event invoice.status_changed: the new status the sample reports, e.g. NEEDS_INFO, SETUP_NEEDED, ACCEPTED. Default: the invoice\'s own status, else ACCEPTED. Any other event with `to` is a 400.' },
+        to: { type: 'string', description: 'Only with event invoice.status_changed: the new status the sample reports, one of the ten statuses, e.g. WAITING_FOR_YOU, REJECTED, COMPLETED. Default: the invoice\'s own status, else COMPLETED. Any other event with `to` is a 400.' },
         invoiceId: { type: 'string', description: 'Optional: the ID of one of your invoices (from list_invoices) to build the test payload from' },
       },
       required: ['webhookId'],
@@ -1927,6 +1961,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'export_test_run',
+    description:
+      'Export the record of one test run to keep: for every test, what it expected, what was actually observed and whether the two matched, with the version of the test, the ids behind each result and a digest of the content. ' +
+      'No request or document bodies are kept. A test marked done by hand says so and never counts towards a pass.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { runId: { type: 'string', description: 'The runId returned by start_test_run or list_test_runs' } },
+      required: ['runId'],
+    },
+  },
+  {
     name: 'list_test_runs',
     description: 'List your recent test runs, newest first (up to 50), each with its status and counts.' + TEST_DISCLAIMER,
     inputSchema: { type: 'object' as const, properties: {} },
@@ -1959,6 +2004,26 @@ const TOOLS = [
   {
     name: 'archive_test_case',
     description: 'Remove one of your own tests from new runs. Past runs keep showing it. Standard tests cannot be removed.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'skip_test_case',
+    description:
+      'Skip a test you do not need, for example a sale at a reduced rate when you sell at none. A skipped test is not run, counts nowhere and never blocks a result, ' +
+      'and every run and export lists it as skipped so a pass always says what was left out. Undo it with unskip_test_case.' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'unskip_test_case',
+    description: 'Put a skipped test back, so new runs include it again.' + TEST_DISCLAIMER,
     inputSchema: {
       type: 'object' as const,
       properties: { caseId: { type: 'string', description: 'The test id (from list_test_cases)' } },
@@ -3187,10 +3252,9 @@ const TOOLS = [
   {
     name: 'list_bank_accounts',
     description:
-      'List an entity\'s stored bank-account master data (IBAN/BIC), one per currency plus an optional ' +
-      'entity-wide DEFAULT (no currency). When a call to submit_invoice/send_invoice omits payment.means[].iban, this ' +
-      'master data is used as a fallback: the account matching the invoice\'s own currency first, then the ' +
-      'DEFAULT account, in that order. A payment.means[].iban given directly on the invoice always wins outright.',
+      'List an entity\'s stored bank accounts (IBAN/BIC). Each has isDefault; exactly one account is the default. ' +
+      'When submit_invoice/send_invoice omits payment.means[].iban, the account for the invoice currency is used if ' +
+      'there is one, otherwise the default account. An IBAN sent on the invoice always wins.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -3202,15 +3266,16 @@ const TOOLS = [
     name: 'create_bank_account',
     description:
       'Store a bank account (IBAN/BIC) as entity master data, so it does not need to be resent on every ' +
-      'invoice. At most one account per currency, and at most one DEFAULT (currency omitted) account, per ' +
-      'entity — a duplicate is rejected.',
+      'invoice. The first account you add is the default automatically. Send isDefault: true to make a later ' +
+      'account the default (the old default stops being the default). At most one account per currency.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        currency: { type: 'string', description: 'ISO 4217 alpha-3 currency this account applies to. Omit to make this the entity-wide DEFAULT account.' },
+        currency: { type: 'string', description: 'ISO 4217 alpha-3 currency this account is used for. Optional.' },
+        isDefault: { type: 'boolean', description: 'true makes this the default account and the previous default stops being the default. The first account is the default automatically.' },
         iban: { type: 'string', description: 'IBAN — format/checksum-validated before storing.' },
         bic: { type: 'string' },
-        accountHolderName: { type: 'string', description: 'Dashboard display only — never rendered onto an invoice.' },
+        accountHolderName: { type: 'string', description: 'Name of the account holder. Printed as the payee account name (BT-85) on invoices that use this account when the caller sends no iban.' },
         entityId: { type: 'string', description: 'Entity to create the bank account under. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['iban'],
@@ -3218,12 +3283,13 @@ const TOOLS = [
   },
   {
     name: 'update_bank_account',
-    description: 'Update a stored bank account. Passing currency: null moves it back to the entity-wide DEFAULT slot.',
+    description: 'Update a stored bank account. Send isDefault: true to make it the default account. isDefault: false is refused (422 DEFAULT_BANK_ACCOUNT_REQUIRED): to change the default, make another account the default.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         bankAccountId: { type: 'string', description: 'The bank account ID to update (from list_bank_accounts or create_bank_account)' },
-        currency: { type: ['string', 'null'], description: 'null sets this back to the entity-wide DEFAULT (no-currency) slot.' },
+        currency: { type: ['string', 'null'], description: 'Currency this account is used for. null clears it.' },
+        isDefault: { type: 'boolean', description: 'Only true is accepted: makes this the default account. false is refused with 422 DEFAULT_BANK_ACCOUNT_REQUIRED.' },
         iban: { type: 'string', description: 'Re-validated (format/checksum) if provided.' },
         bic: { type: ['string', 'null'] },
         accountHolderName: { type: ['string', 'null'] },
@@ -3234,7 +3300,7 @@ const TOOLS = [
   },
   {
     name: 'delete_bank_account',
-    description: 'Soft-delete a stored bank account.',
+    description: 'Soft-delete a stored bank account. If it was the default, the oldest remaining account becomes the default.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -4231,8 +4297,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/tax-numbers/validate', { countryCode: country, taxNumber, ...(registryType && { registryType }), ...(force && { force }) });
     }
 
-    case 'list_entities':
-      return callApi('GET', '/entities');
+    case 'list_entities': {
+      const taxNumber = (args as { taxNumber?: unknown }).taxNumber;
+      return callApi('GET', `/entities${typeof taxNumber === 'string' && taxNumber ? `?taxNumber=${encodeURIComponent(taxNumber)}` : ''}`);
+    }
 
     case 'create_entity':
       return callApi('POST', '/entities', args);
@@ -4380,13 +4448,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'get_requirements': {
       const country = args.country as string;
-      return callApi('GET', `/requirements?country=${encodeURIComponent(country)}`);
+      return callApi('GET', `/requirements?country=${encodeURIComponent(country)}${args.class ? `&class=${encodeURIComponent(String(args.class))}` : ''}${args.mandate ? `&mandate=${encodeURIComponent(String(args.mandate))}` : ''}`);
     }
 
     case 'list_invoices': {
       const qs = new URLSearchParams();
       if (args.country)   qs.set('country',   args.country   as string);
       if (args.status)    qs.set('status',    args.status    as string);
+      if (args.reason)    qs.set('reason',    args.reason    as string);
+      if (args.businessStatus) qs.set('businessStatus', args.businessStatus as string);
       if (args.limit)     qs.set('limit',     String(args.limit));
       if (args.after_id)  qs.set('after_id',  args.after_id  as string);
       if (args.before_id) qs.set('before_id', args.before_id as string);
@@ -4443,6 +4513,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_test_run':
       return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}`);
 
+    case 'export_test_run':
+      return callApi('GET', `/test-runs/${encodeURIComponent((args as { runId: string }).runId)}/export`);
+
     case 'list_test_runs':
       return callApi('GET', '/test-runs');
 
@@ -4454,6 +4527,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'archive_test_case':
       return callApi('DELETE', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}`);
+
+    case 'skip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: true });
+
+    case 'unskip_test_case':
+      return callApi('PUT', `/test-cases/${encodeURIComponent((args as { caseId: string }).caseId)}/skip`, { skipped: false });
 
     case 'get_test_case_catalogue':
       return callApi('GET', '/test-cases/catalogue');
@@ -5049,12 +5128,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
   }
 }
 
-/** True when submit_invoice answered 200 with a stored outcome that means the document was NOT sent (REJECTED / NEEDS_INFO). */
+/** True when submit_invoice answered 200 with a stored status that means the document was NOT sent (REJECTED, or WAITING_FOR_YOU for NEEDS_INFO / UNROUTABLE). */
 function isUnsentSendOutcome(toolName: string, result: unknown): boolean {
   if (toolName !== 'submit_invoice') return false;
   if (!result || typeof result !== 'object') return false;
-  const outcome = (result as { outcome?: unknown }).outcome;
-  return outcome === 'REJECTED' || outcome === 'NEEDS_INFO';
+  const { status, reason } = result as { status?: unknown; reason?: unknown };
+  return status === 'REJECTED' || (status === 'WAITING_FOR_YOU' && (reason === 'NEEDS_INFO' || reason === 'UNROUTABLE'));
 }
 
 const server = new Server(
@@ -5082,7 +5161,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await handleTool(name, (args ?? {}) as Record<string, unknown>);
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-      // A stored REJECTED or NEEDS_INFO document is HTTP 200 but was not sent: flag it so an agent does not treat it as
+      // A stored REJECTED document, or one WAITING_FOR_YOU for NEEDS_INFO / UNROUTABLE, is HTTP 200 but was not sent: flag it so an agent does not treat it as
       // delivered. The full body stays in the text so the fix (errors[], nextStep) is still readable.
       ...(isUnsentSendOutcome(name, result) ? { isError: true } : {}),
     };

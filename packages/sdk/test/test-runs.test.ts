@@ -46,6 +46,26 @@ describe('ClearvoClient integration tests', () => {
     expect(init.method).toBe('GET');
   });
 
+  it('skipTestCase and unskipTestCase PUT the boolean body to /test-cases/{id}/skip with the id encoded', async () => {
+    const f = mock({ caseId: 'a/b', skipped: true });
+    expect(await client().skipTestCase('a/b')).toEqual({ caseId: 'a/b', skipped: true });
+    await client().unskipTestCase('a/b');
+    const [url, init] = f.mock.calls[0] as Call;
+    expect(url).toBe('http://x/v1/test-cases/a%2Fb/skip');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body!)).toEqual({ skipped: true });
+    expect(JSON.parse((f.mock.calls[1] as Call)[1].body!)).toEqual({ skipped: false });
+  });
+
+  it('exportTestRun reads /test-runs/{id}/export with the id encoded', async () => {
+    const record = { format: 'test-run-record', version: 1, run: { runId: 'a/b' }, cases: [] };
+    const f = mock(record);
+    expect(await client().exportTestRun('a/b')).toEqual(record);
+    const [url, init] = f.mock.calls[0] as Call;
+    expect(url).toBe('http://x/v1/test-runs/a%2Fb/export');
+    expect(init.method).toBe('GET');
+  });
+
   it('listTestRuns and listTestCases are GETs', async () => {
     const f = mock({ runs: [], cases: [] });
     await client().listTestRuns();
