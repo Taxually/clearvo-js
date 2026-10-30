@@ -281,6 +281,8 @@ export interface RetryInvoiceRejectedResponse {
  */
 export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
+import type { SimulationCountryCode } from './simulation-countries.js';
+import type { SimulationScenarioId } from './simulation-scenarios.js';
 
 /**
  * The invoice status model — same generated source as TaxTreatment above
@@ -981,17 +983,19 @@ export interface InvoiceRecordTimestamps {
 }
 
 export interface SimulateReceivedInvoicesInput {
-  /** DE or FR: the registration the documents are received under (any country the entity is established or VAT-registered in; else 409 COUNTRY_NOT_REGISTERED). Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
-  country?: 'DE' | 'FR';
-  /** Default invoice. A credit note references an invoice from the same call. */
+  /** The registration the documents are received under: any country the entity is established or VAT-registered in that has sample documents (see `SIMULATION_COUNTRY_CODES`). Else 409 COUNTRY_NOT_REGISTERED, or 409 COUNTRY_NOT_ENABLED when the country has no sample documents. Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
+  country?: SimulationCountryCode;
+  /** Default invoice (credit_note for the scenario credit_note_for_existing). */
   type?: 'invoice' | 'credit_note';
+  /** The shape of the document (see `SIMULATION_SCENARIOS`; default `standard`). 400 `SCENARIO_NOT_AVAILABLE` when the country's documents cannot carry it; 400 `INVALID_SCENARIO` for an unknown scenario or a combination it cannot take (`lines`/`totalAmount` with a scenario that builds its own lines, `businessStatus` with a scenario that stores the document for review). */
+  scenario?: SimulationScenarioId;
   /** 1 to 20 documents (default 1). Every call adds new documents. */
   count?: number;
   /** Optional override of the fictional supplier; the name always keeps a sample marker. */
   supplier?: { name?: string; taxNumber?: string; legalRegistrationNumber?: string };
   /** Gross total of each document (default 1200). Not allowed together with `lines`. */
   totalAmount?: number;
-  /** Three-letter code. Default EUR; France accepts EUR only. */
+  /** Three-letter code. Default the country's own currency (EUR, DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY or AED); France accepts EUR only. */
   currency?: string;
   /** Net unit prices at the standard rate. Not allowed together with `totalAmount`. */
   lines?: Array<{ description: string; quantity: number; unitPrice: number }>;
@@ -1008,7 +1012,7 @@ export interface SimulateReceivedInvoicesResponse {
   sandbox: true;
   /** Received invoices in the same shape GET /v1/invoices returns (cast to ReceivedInvoiceFields for the inbound fields). */
   created: unknown[];
-  /** Ids of documents that were already present and so were not created again. */
+  /** Ids of documents that were already present and so were not created again (every duplicate scenario lists them). */
   duplicates: string[];
   webhooks: { event: string; subscribedEndpoints: number };
   notes: string[];

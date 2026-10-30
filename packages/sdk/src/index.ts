@@ -1,5 +1,9 @@
 export { ClearvoClient } from './client.js';
 export { ClearvoError, isRejected, INVOICE_STATUSES, INVOICE_STAGES, INVOICE_REASONS } from './types.js';
+export { SIMULATION_COUNTRY_CODES } from './simulation-countries.js';
+export type { SimulationCountryCode } from './simulation-countries.js';
+export { SIMULATION_SCENARIOS, SIMULATION_SCENARIO_IDS } from './simulation-scenarios.js';
+export type { SimulationScenarioId } from './simulation-scenarios.js';
 export type {
   CompanyCode,
   ListCompanyCodesParams,
