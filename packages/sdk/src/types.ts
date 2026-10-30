@@ -3496,6 +3496,45 @@ export interface SetFrCredentialsInput {
   entityId?: string;
 }
 
+/** Where an entity's connection to our French e-invoicing partner stands. `pending_verification`: the customer has
+ *  connected but the identity or company check is not finished. `needs_reconnect`: the authorisation lapsed or was
+ *  withdrawn; create a new link. `failed`: the check was refused or the wrong company was connected (see `reason`). */
+export type FrPlatformConnectState = 'not_connected' | 'pending_verification' | 'active' | 'needs_reconnect' | 'failed';
+
+/** What a connect link asks the customer to enable. `receive` is for a customer that only receives invoices. */
+export type FrPlatformCapability = 'send' | 'receive' | 'both';
+
+/** Mirrors components.schemas.FrPlatformConnection in clearvo-marketing's public/openapi.json. */
+export interface FrPlatformConnection {
+  state: FrPlatformConnectState;
+  /** The company check. Null before the customer has connected. */
+  companyVerification?: 'verified' | 'needs_review' | 'failed' | null;
+  /** The identity check of the person who connected. Null before the customer has connected. */
+  identityVerification?: 'verified' | 'needs_review' | 'failed' | 'not_verified' | null;
+  /** What the link asked for; records the request, not proof the customer accepted receiving. */
+  requestedCapability?: FrPlatformCapability | null;
+  /** Present only when it helps: `not_configured`, `company_verification_failed`, `company_mismatch`
+   *  (a different company was connected; nothing was stored) or `company_unreadable` (checked again automatically). */
+  reason?: 'not_configured' | 'company_verification_failed' | 'company_mismatch' | 'company_unreadable';
+}
+
+export interface CreateFrPlatformConnectLinkInput {
+  /** https URL the customer is sent back to after connecting. Its origin must be on the allowlist. */
+  returnUrl: string;
+  /** Optional email address to pre-fill on the sign-in page, typically the customer's legal representative. */
+  loginHint?: string;
+  /** What the customer needs. Default `both`; use `receive` for a receiving-only customer. */
+  requestedCapability?: FrPlatformCapability;
+  /** Entity to connect. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface FrPlatformConnectLinkResponse {
+  ok: boolean;
+  /** Forward this to the customer. Single use and short-lived. */
+  connectUrl: string;
+}
+
 export interface FrCredentialsResponse {
   ok: boolean;
   entityId: string;
@@ -3505,7 +3544,8 @@ export interface FrCredentialsResponse {
   sandbox: boolean;
   /** null only on a GET for an entity with no French registration yet. */
   taxNumber: string | null;
-  /** Read-through of the stored fr_siret extra field, if one was set via the general registrations API. */
+  /** The entity's own 14-digit SIRET when one is stored; null otherwise. Never a 9-digit SIREN (see `siren`).
+   *  Optional: nothing requires it. */
   siret?: string | null;
   /** Present only when a POST changed an already-stored tax number — the value it replaced. */
   previousTaxNumber?: string;
@@ -3529,6 +3569,9 @@ export interface FrCredentialsResponse {
   nextSteps: FrNextStep[];
   /** One plain-language sentence summarising both capabilities. */
   message: string;
+  /** The customer's connection to our French e-invoicing partner; read it until `state` is `active`
+   *  (see createFrPlatformConnectLink). Null when it cannot be read right now; retry. */
+  platformConnection?: FrPlatformConnection | null;
   /** When this entity's French tax registration was first created. */
   createdAt: string | null;
   /** When this entity's French tax registration was last written — this POST, if it changed

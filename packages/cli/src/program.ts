@@ -1349,6 +1349,24 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // clearvo fr connect-link — POST /v1/fr/platform-connect-link. Prints the link a French customer opens to connect
+  // its company (short secure sign-in, identity check, approval); read the result with `fr credentials get`.
+  fr
+    .command('connect-link')
+    .description('Create the link a French customer opens to connect its company (forward the returned connectUrl)')
+    .requiredOption('--return-url <url>', 'https URL the customer is sent back to after connecting. Its origin must be on the allowlist.')
+    .option('--login-hint <email>', 'Email address to pre-fill on the sign-in page')
+    .option('--capability <capability>', 'What the customer needs: send, receive (receiving only) or both (default)')
+    .option('--entity <entityId>', 'Entity to connect. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { returnUrl: string; loginHint?: string; capability?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { returnUrl: opts.returnUrl };
+      if (opts.loginHint) body.loginHint = opts.loginHint;
+      if (opts.capability) body.requestedCapability = opts.capability;
+      const result = await api('POST', '/fr/platform-connect-link', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // clearvo fr inbound poll — manual trigger, part of the temporary Marosa
   // interim bridge (see the clearvo-fr-marosa skill). Resolves status on this
   // entity's own pending outbound submissions and discovers newly received

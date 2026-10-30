@@ -1360,6 +1360,28 @@ const TOOLS = [
     },
   },
   {
+    name: 'create_fr_platform_connect_link',
+    description:
+      'Create the consent link a French client opens to connect its company to the French e-invoicing platform. The client signs in ' +
+      'there once, completes the identity and legal-representative check (this cannot be done through the API and is a legal ' +
+      'obligation), and is sent back to returnUrl with a status query parameter (ok or error) and, where useful, a reason; status=ok ' +
+      'with reason=pending_verification means the check is not finished yet. Forward the returned connectUrl to the client. The entity\'s ' +
+      'French VAT number must already be registered (set_fr_credentials): the company number is derived from it and pre-filled, never asked ' +
+      'for. Use requestedCapability receive for a client that only receives invoices, send for issuing only, both (default) when the client ' +
+      'should be able to do either. Read the result with get_fr_credentials: platformConnection.state is not_connected | ' +
+      'pending_verification | active | needs_reconnect | failed, and platformConnection.requestedCapability echoes the choice. returnUrl must be an https URL on the allowlisted origins.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        returnUrl: { type: 'string', description: 'https URL the client is sent back to after connecting. Its origin must be on the allowlist.' },
+        requestedCapability: { type: 'string', enum: ['send', 'receive', 'both'], description: 'What the client needs: send, receive (receiving-only) or both. Default both.' },
+        loginHint: { type: 'string', description: 'Optional email address to pre-fill on the sign-in page.' },
+        entityId: { type: 'string', description: 'Entity to connect. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['returnUrl'],
+    },
+  },
+  {
     name: 'poll_fr_inbound',
     description:
       'Manually trigger a France inbound poll for this entity: resolve status on your own pending outbound ' +
@@ -4348,6 +4370,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'get_fr_credentials': {
       const { entityId } = args as { entityId?: string };
       return callApi('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'create_fr_platform_connect_link': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/fr/platform-connect-link', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'poll_fr_inbound': {
