@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — erase a customer's address data on request (publish after backend PR 18786 is live)
+
+`POST /v1/tax/address-erasure` removes the address lines and the customer display name (at `level: "full"` also the city) that a customer's committed calculations kept, on request. Name the calculation by `calculationId` or by the order `reference` (the merchantRef, or an idempotency key such as `woo-order-123`); credit notes pointing at it are included. Amounts, tax, jurisdiction, region, postal code and country are never changed, and repeating the call changes nothing. Street lines are otherwise kept for as long as the calculation needs them.
+
+- SDK: `eraseCustomerAddressData({ calculationId | reference, level? }, entityId?)`; new types `AddressErasureInput`, `AddressErasureResult`.
+- MCP: new tool `erase_customer_address_data`.
+- CLI: new command `clearvo calculations erase-address --id <calculationId> | --reference <ref> [--level street|full]`.
+
 ## Unreleased — French receiving and buyer actions (publish after backend PR 18784 is live)
 
 `platformConnection` on `GET/POST /v1/fr/credentials` now also carries `receiving` (`not_applicable`, `unknown`, `active`, `pending`, `not_active`): whether the connected company can receive supplier invoices. `PATCH /v1/invoices/{id}/business-status` sends a decision on a French invoice received through the connection to the supplier's platform before the status changes (a reason is required to partially approve; suspending takes one of five reason codes), accepts `PAYMENT_RECEIVED` on a French invoice you issued through the connection, and answers `422` (`FR_PLATFORM_ACTIVATION_PENDING`, `FR_PLATFORM_NOT_CONNECTED`, `FR_PLATFORM_RECONNECT_REQUIRED`) when the connection is not usable. A reference that matches more than one document answers `409 AMBIGUOUS_REFERENCE` on `GET /v1/invoices/{id}` and on business-status: use the Clearvo id.

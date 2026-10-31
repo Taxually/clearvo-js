@@ -47,6 +47,8 @@ export type {
   DutiesEstimateProduct,
   DutiesEstimateDestination,
   DutiesEstimateResult,
+  AddressErasureInput,
+  AddressErasureResult,
   ImportSettlementInput,
   ImportSettlement,
   ImportSettlementAmounts,
