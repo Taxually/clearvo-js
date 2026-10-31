@@ -1114,7 +1114,10 @@ export class ClearvoClient {
 
   // ── Business (customer-lifecycle) status ─────────────────────────────────
   // Only valid for a received (inbound) invoice — records the calling
-  // entity's own decision (approve, dispute, mark paid, ...) on it.
+  // entity's own decision (approve, dispute, mark paid, ...) on it. One exception: for a French
+  // invoice issued through the connected e-invoicing platform, PAYMENT_RECEIVED can be recorded on the
+  // issued invoice once the customer has paid. A reference that matches more than one document is
+  // refused with 409 AMBIGUOUS_REFERENCE: pass the Clearvo id instead.
 
   updateBusinessStatus(input: UpdateBusinessStatusInput): Promise<UpdateBusinessStatusResponse> {
     const { id, entityId, ...body } = input;

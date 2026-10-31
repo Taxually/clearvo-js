@@ -13,6 +13,14 @@ The `calculate_tax` MCP tool and the SDK's `TaxCalculateRequest` described only 
 - CLI: `clearvo calculate <file>` sends the file as the request body, so it accepts the new fields without a change.
 - Two new CI checks (`npm run test:calculate-sdk-parity`, `npm run test:calculate-parity --workspace packages/mcp`) fail when the SDK type or the MCP tool lacks a field of the published request in `openapi.json`, declares one it does not have, or keeps a stale deliberate omission. The omissions are the removed `clientTaxCode` and `stripeTaxCode` fields and the deprecated `seller` alias beyond its country.
 
+## Unreleased — French receiving and buyer actions (publish after backend PR 18784 is live)
+
+`platformConnection` on `GET/POST /v1/fr/credentials` now also carries `receiving` (`not_applicable`, `unknown`, `active`, `pending`, `not_active`): whether the connected company can receive supplier invoices. `PATCH /v1/invoices/{id}/business-status` sends a decision on a French invoice received through the connection to the supplier's platform before the status changes (a reason is required to partially approve; suspending takes one of five reason codes), accepts `PAYMENT_RECEIVED` on a French invoice you issued through the connection, and answers `422` (`FR_PLATFORM_ACTIVATION_PENDING`, `FR_PLATFORM_NOT_CONNECTED`, `FR_PLATFORM_RECONNECT_REQUIRED`) when the connection is not usable. A reference that matches more than one document answers `409 AMBIGUOUS_REFERENCE` on `GET /v1/invoices/{id}` and on business-status: use the Clearvo id.
+
+- SDK: new type `FrPlatformReceiving`; `FrPlatformConnection.receiving`; `UpdateBusinessStatusInput.rejectionDetail` documents the French rules.
+- MCP: the `update_business_status` description covers the same.
+- CLI: `clearvo business-status` help text covers the same.
+
 ## Unreleased — connect a French customer's company (publish after backend PR 18781 is live)
 
 `POST /v1/fr/platform-connect-link` returns the link a French customer opens to connect its company (a short secure sign-in, an identity check and an approval), so a partner without a dashboard can enable French e-invoicing for a customer. `GET/POST /v1/fr/credentials` now also carry `platformConnection` (`state`: `not_connected`, `pending_verification`, `active`, `needs_reconnect`, `failed`) and `siret` reports only a 14-digit SIRET.
