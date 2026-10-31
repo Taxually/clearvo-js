@@ -1402,9 +1402,14 @@ const TOOLS = [
       'tool every registered regime goes through — currently France, Germany, and Brazil (Manifestação do ' +
       'Destinatário). Only valid on an INBOUND invoice you received: the calling entity is the customer ' +
       'recording their own decision on it. For an invoice you issued, the other side\'s response syncs ' +
-      'automatically once they act on their own side — there is nothing to call here for that direction. ' +
+      'automatically once they act on their own side — there is nothing to call here for that direction (the one exception: ' +
+      'for a French invoice you issued through the connected e-invoicing platform you can record PAYMENT_RECEIVED once ' +
+      'your customer has paid). ' +
       'FR/DE: approve, partially approve, dispute, suspend, refuse, or mark paid — rejectionDetail.reason is ' +
-      'required when status is DISPUTED, REFUSED, or SUSPENDED. Brazil: acknowledge receipt (CIENCIA), confirm ' +
+      'required when status is DISPUTED, REFUSED, or SUSPENDED. For a French invoice received through the connected ' +
+      'platform the decision is sent to the supplier\'s platform before the status changes, a reason is also required to ' +
+      'partially approve, and SUSPENDED takes one of five reason codes (JUSTIF_ABS, SIRET_ERR, COORD_BANC_ERR, CMD_ERR, ' +
+      'REF_CT_ABSENT). Brazil: acknowledge receipt (CIENCIA), confirm ' +
       'the operation occurred (CONFIRMACAO), or reject it — either the operation didn\'t occur ' +
       '(OPERACAO_NAO_REALIZADA, rejectionDetail.message required, 15–255 characters) or you don\'t recognize the ' +
       'transaction (DESCONHECIMENTO, rejectionDetail forbidden). PRESUMIDA (Brazil\'s day-90 deemed-acceptance ' +
@@ -1413,8 +1418,10 @@ const TOOLS = [
       'it — check get_invoice\'s businessStatusActions first rather than guessing from this enum alone. Fails ' +
       '409 if the transition isn\'t valid from the invoice\'s current status (also Brazil-specific: no ' +
       'certificate on file, an expired certificate, homologação not yet complete, or SEFAZ itself rejected the ' +
-      'event), 422 (FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s ' +
-      'tax number, and 503 (Brazil only, RATE_LIMITED) if SEFAZ\'s own 20/hour rate limit was hit — none is ' +
+      'event; or AMBIGUOUS_REFERENCE when the reference you passed matches more than one document: pass the ' +
+      'Clearvo id instead), 422 (FR_PLATFORM_ACTIVATION_PENDING, FR_PLATFORM_NOT_CONNECTED or ' +
+      'FR_PLATFORM_RECONNECT_REQUIRED) if the France platform connection isn\'t usable for this entity, and 503 ' +
+      '(Brazil only, RATE_LIMITED) if SEFAZ\'s own 20/hour rate limit was hit — none is ' +
       'retryable by changing the request; the status was not changed either way.',
     inputSchema: {
       type: 'object' as const,

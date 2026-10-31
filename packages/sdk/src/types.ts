@@ -3503,6 +3503,7 @@ export type FrPlatformConnectState = 'not_connected' | 'pending_verification' | 
 
 /** What a connect link asks the customer to enable. `receive` is for a customer that only receives invoices. */
 export type FrPlatformCapability = 'send' | 'receive' | 'both';
+export type FrPlatformReceiving = 'not_applicable' | 'unknown' | 'active' | 'pending' | 'not_active';
 
 /** Mirrors components.schemas.FrPlatformConnection in clearvo-marketing's public/openapi.json. */
 export interface FrPlatformConnection {
@@ -3513,6 +3514,10 @@ export interface FrPlatformConnection {
   identityVerification?: 'verified' | 'needs_review' | 'failed' | 'not_verified' | null;
   /** What the link asked for; records the request, not proof the customer accepted receiving. */
   requestedCapability?: FrPlatformCapability | null;
+  /** Whether the connected company can receive supplier invoices: `not_applicable` (requested for sending only),
+   *  `unknown` (not checked yet), `active`, `pending` (registration in progress) or `not_active` (suppliers cannot
+   *  reach the company). The customer manages the registration on the partner's page; Clearvo only reports it. */
+  receiving?: FrPlatformReceiving;
   /** Present only when it helps: `not_configured`, `company_verification_failed`, `company_mismatch`
    *  (a different company was connected; nothing was stored) or `company_unreadable` (checked again automatically). */
   reason?: 'not_configured' | 'company_verification_failed' | 'company_mismatch' | 'company_unreadable';
@@ -3651,7 +3656,12 @@ export interface UpdateBusinessStatusInput {
   status: BusinessStatus;
   /** Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), or
    *  OPERACAO_NAO_REALIZADA (Brazil — message required, 15–255 characters; reason accepted but never
-   *  required). Forbidden for Brazil's DESCONHECIMENTO. Also accepted as a bare string (treated as message). */
+   *  required). Forbidden for Brazil's DESCONHECIMENTO. Also accepted as a bare string (treated as message).
+   *  For a French invoice received through the connected e-invoicing platform a reason is also required to
+   *  partially approve, and SUSPENDED takes one of five reason codes: JUSTIF_ABS (a supporting document is
+   *  missing), SIRET_ERR (the company registration number is wrong), COORD_BANC_ERR (the bank details are
+   *  wrong), CMD_ERR (the purchase order reference is wrong) or REF_CT_ABSENT (the contract reference is
+   *  missing); any other value is refused with a message listing them. */
   rejectionDetail?: { reason?: string; message?: string } | string;
   /** Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;

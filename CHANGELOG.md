@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — French receiving and buyer actions (publish after backend PR 18784 is live)
+
+`platformConnection` on `GET/POST /v1/fr/credentials` now also carries `receiving` (`not_applicable`, `unknown`, `active`, `pending`, `not_active`): whether the connected company can receive supplier invoices. `PATCH /v1/invoices/{id}/business-status` sends a decision on a French invoice received through the connection to the supplier's platform before the status changes (a reason is required to partially approve; suspending takes one of five reason codes), accepts `PAYMENT_RECEIVED` on a French invoice you issued through the connection, and answers `422` (`FR_PLATFORM_ACTIVATION_PENDING`, `FR_PLATFORM_NOT_CONNECTED`, `FR_PLATFORM_RECONNECT_REQUIRED`) when the connection is not usable. A reference that matches more than one document answers `409 AMBIGUOUS_REFERENCE` on `GET /v1/invoices/{id}` and on business-status: use the Clearvo id.
+
+- SDK: new type `FrPlatformReceiving`; `FrPlatformConnection.receiving`; `UpdateBusinessStatusInput.rejectionDetail` documents the French rules.
+- MCP: the `update_business_status` description covers the same.
+- CLI: `clearvo business-status` help text covers the same.
+
 ## Unreleased — connect a French customer's company (publish after backend PR 18781 is live)
 
 `POST /v1/fr/platform-connect-link` returns the link a French customer opens to connect its company (a short secure sign-in, an identity check and an approval), so a partner without a dashboard can enable French e-invoicing for a customer. `GET/POST /v1/fr/credentials` now also carry `platformConnection` (`state`: `not_connected`, `pending_verification`, `active`, `needs_reconnect`, `failed`) and `siret` reports only a 14-digit SIRET.
