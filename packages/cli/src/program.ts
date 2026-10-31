@@ -379,12 +379,14 @@ export function createProgram(): Command {
   // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or
   // mark paid. Only valid on an INBOUND invoice: the calling entity is the
   // customer recording its own decision. For an invoice you issued, the other
-  // side's response syncs automatically once they act on their own side.
+  // side's response syncs automatically once they act on their own side; the one
+  // exception is PAYMENT_RECEIVED on a French invoice issued through the connected
+  // e-invoicing platform.
   program
     .command('business-status <id>')
     .description('Record a customer-lifecycle status decision on a received (inbound) invoice — FR/DE or Brazil (Manifestação do Destinatário)')
     .requiredOption('--status <status>', 'FR/DE: IN_HAND | APPROVED | PARTIALLY_APPROVED | DISPUTED | SUSPENDED | REFUSED | COMPLETED | PAYMENT_SENT | PAYMENT_RECEIVED. Brazil: CIENCIA | CONFIRMACAO | OPERACAO_NAO_REALIZADA | DESCONHECIMENTO.')
-    .option('--reason <reason>', 'Short machine-usable reason code (FR/DE). Required when --status is DISPUTED, REFUSED, or SUSPENDED.')
+    .option('--reason <reason>', 'Short machine-usable reason code (FR/DE). Required when --status is DISPUTED, REFUSED, or SUSPENDED (and PARTIALLY_APPROVED on a French invoice received through the connected e-invoicing platform, where SUSPENDED takes JUSTIF_ABS | SIRET_ERR | COORD_BANC_ERR | CMD_ERR | REF_CT_ABSENT).')
     .option('--message <message>', 'Human-readable detail — optional alongside --reason for FR/DE, required (15-255 characters) for Brazil\'s OPERACAO_NAO_REALIZADA, and forbidden for DESCONHECIMENTO. Can be passed without --reason.')
     .option('--entity <entityId>', 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')

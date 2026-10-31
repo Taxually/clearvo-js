@@ -240,6 +240,7 @@ export type {
   FrCredentialsResponse,
   FrPlatformConnectState,
   FrPlatformCapability,
+  FrPlatformReceiving,
   FrPlatformConnection,
   CreateFrPlatformConnectLinkInput,
   FrPlatformConnectLinkResponse,
