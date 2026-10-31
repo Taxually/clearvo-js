@@ -27,7 +27,7 @@ jobs:
           # Public-contract PRs land the openapi.json change in clearvo-marketing
           # first; point this at that branch when the two are shipped together,
           # otherwise this tracks its default branch.
-          ref: ${{ github.event.pull_request.head.ref == 'claude/tax-code-mapping' && 'claude/tax-code-mapping' || '' }}
+          ref: ${{ (github.event.pull_request.head.ref == 'claude/tax-code-mapping' || github.event.pull_request.head.ref == 'claude/mcp-full-address') && github.event.pull_request.head.ref || '' }}
 
       - uses: actions/setup-node@v4
         with:
@@ -51,8 +51,18 @@ jobs:
           CLEARVO_MARKETING_OPENAPI_PATH: ${{ github.workspace }}/clearvo-marketing/public/openapi.json
         run: npm run test:simulation-countries
 
+      - name: SDK request type covers every field of the published calculate request
+        env:
+          CLEARVO_MARKETING_OPENAPI_PATH: ${{ github.workspace }}/clearvo-marketing/public/openapi.json
+        run: npm run test:calculate-sdk-parity
+
       - name: Build all packages
         run: npm run build
 
       - name: Send contract check (MCP submit_invoice returns the 200 body)
         run: npm run test:send-contract --workspace packages/mcp
+
+      - name: MCP calculate_tax covers every field of the published calculate request
+        env:
+          CLEARVO_MARKETING_OPENAPI_PATH: ${{ github.workspace }}/clearvo-marketing/public/openapi.json
+        run: npm run test:calculate-parity --workspace packages/mcp

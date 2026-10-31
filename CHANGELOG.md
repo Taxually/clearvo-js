@@ -4,6 +4,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — calculate requests carry every field the API accepts (publish after backend PR 18785 is live; rides the SDK 0.6.0, MCP 0.7.0, CLI 0.6.0 minor)
+
+The `calculate_tax` MCP tool and the SDK's `TaxCalculateRequest` described only part of `POST /v1/tax/calculate`: party addresses stopped at country, region and postal code, and a number of request fields could not be sent from a typed client or an AI agent.
+
+- SDK: new `TaxCalcAddressInput` (street `line1`, `line2`, `city`, `region`, `postalCode`, `country`) for `supplier` and `customer` billing and shipping addresses. `TaxCalculateRequest` gains `date`, `transactionDate`, `orderDate`, `shippedAt`, `fulfilledAt`, `taxReportingCurrency`, `merchantRef`, `paymentMethod`, `orderDiscount`, `isMarketplaceFacilitatedSale`, `transactionType`, `relatedCalculationId`, `externalOriginalReference` and `shippingMode`; each line gains `productCode`, `productDescription`, `taxCode`, `discount`, `discountAmount`, `statedTaxAmount`, `recoverablePercentOverride` and `screenSizeInches`. All optional, nothing removed.
+- MCP: the stdio server's `calculate_tax` and `quote_duties` input schema is now the same as the hosted connector's, so every field above, the customer shipping address, the document stage, per-line ship-from and the rest are visible to an agent. A street and city give a US address street-level rates; names, emails and phone numbers are not accepted by the API and are not added.
+- CLI: `clearvo calculate <file>` sends the file as the request body, so it accepts the new fields without a change.
+- Two new CI checks (`npm run test:calculate-sdk-parity`, `npm run test:calculate-parity --workspace packages/mcp`) fail when the SDK type or the MCP tool lacks a field of the published request in `openapi.json`, declares one it does not have, or keeps a stale deliberate omission. The omissions are the removed `clientTaxCode` and `stripeTaxCode` fields and the deprecated `seller` alias beyond its country.
+
 ## Unreleased — connect a French customer's company (publish after backend PR 18781 is live)
 
 `POST /v1/fr/platform-connect-link` returns the link a French customer opens to connect its company (a short secure sign-in, an identity check and an approval), so a partner without a dashboard can enable French e-invoicing for a customer. `GET/POST /v1/fr/credentials` now also carry `platformConnection` (`state`: `not_connected`, `pending_verification`, `active`, `needs_reconnect`, `failed`) and `siret` reports only a 14-digit SIRET.
