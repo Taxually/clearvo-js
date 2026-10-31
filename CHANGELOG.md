@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — connect a French customer's company (publish after backend PR 18781 is live)
+
+`POST /v1/fr/platform-connect-link` returns the link a French customer opens to connect its company (a short secure sign-in, an identity check and an approval), so a partner without a dashboard can enable French e-invoicing for a customer. `GET/POST /v1/fr/credentials` now also carry `platformConnection` (`state`: `not_connected`, `pending_verification`, `active`, `needs_reconnect`, `failed`) and `siret` reports only a 14-digit SIRET.
+
+- SDK: `createFrPlatformConnectLink({ returnUrl, loginHint?, requestedCapability?, entityId? })`; new types `FrPlatformConnection`, `FrPlatformConnectState`, `FrPlatformCapability`, `CreateFrPlatformConnectLinkInput`, `FrPlatformConnectLinkResponse`; `FrCredentialsResponse.platformConnection`.
+- MCP: new tool `create_fr_platform_connect_link`.
+- CLI: `clearvo fr connect-link --return-url <url> [--login-hint <email>] [--capability send|receive|both] [--entity <id>]`.
+
 ## Unreleased — received-invoice simulator covers 24 countries (publish after backend PR 18366 is live; SDK 0.6.0, MCP 0.7.0, CLI 0.6.0)
 
 `POST /v1/receive/simulate` (sandbox keys only) now creates sample received invoices for 24 countries instead of Germany and France only: AE, AT, AU, BE, CH, DE, DK, EE, FI, FR, HR, IE, IS, JP, LT, LU, LV, NL, NO, NZ, SE, SG, SI, SK. Each document is a realistic e-invoice in the country's own format (Factur-X for France, ZUGFeRD for Germany, Peppol BIS Billing 3.0 or PINT for the others) and the default currency is the country's own (EUR for euro countries; DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY, AED for the others; France accepts EUR only). `country` stays optional: it is the registration the documents are received under (a country the entity is established or VAT-registered in that has sample documents); 409 `COUNTRY_NOT_REGISTERED`, 409 `COUNTRY_NOT_ENABLED` or 400 `COUNTRY_REQUIRED` otherwise.

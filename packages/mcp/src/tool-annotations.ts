@@ -74,6 +74,7 @@ const DESTRUCTIVE = new Set<string>([
 const NON_IDEMPOTENT = new Set<string>([
   'calculate_tax', 'propose_manual_adjustment', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
   'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
+  'create_fr_platform_connect_link',
   'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch',
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account', 'create_company_code',
   'receive_invoice_document', 'simulate_received_invoices', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
@@ -94,6 +95,7 @@ const OPEN_WORLD = new Set<string>([
   'upload_filing_data_file', 'replace_filing_data_file', 'delete_filing_data_file', 'process_filing_upload_month',
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
   'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
+  'create_fr_platform_connect_link',
   'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
   // poll_status is a GET that live-polls KSeF/NAV and writes the result back: NOT read-only.
   'poll_status',

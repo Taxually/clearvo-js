@@ -115,6 +115,8 @@ import type {
   ListMandateTransactionsResponse,
   SetFrCredentialsInput,
   FrCredentialsResponse,
+  CreateFrPlatformConnectLinkInput,
+  FrPlatformConnectLinkResponse,
   SetItProfileInput,
   ItProfileResponse,
   UpdateBusinessStatusInput,
@@ -1087,6 +1089,14 @@ export class ClearvoClient {
 
   getFrCredentials(entityId?: string): Promise<FrCredentialsResponse> {
     return this.request('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Creates the link a French customer opens to connect its company (a short secure sign-in, identity check and
+   *  approval). Forward `connectUrl` to the customer, then read `platformConnection.state` from getFrCredentials()
+   *  until it is `active`. The French tax number must already be registered (setFrCredentials). */
+  createFrPlatformConnectLink(input: CreateFrPlatformConnectLinkInput): Promise<FrPlatformConnectLinkResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/fr/platform-connect-link', body, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Italy profile field (Regime Fiscale) ─────────────────────────────────
