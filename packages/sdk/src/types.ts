@@ -5088,6 +5088,41 @@ export interface DutiesEstimateResult {
   destinations: DutiesEstimateDestination[];
 }
 
+/**
+ * Body of `eraseCustomerAddressData()`: name the calculation by `calculationId` or by the order `reference` it was committed under,
+ * exactly one of the two.
+ */
+export interface AddressErasureInput {
+  /** The calculation id (cl_calc_ prefix). */
+  calculationId?: string;
+  /** The order reference: the merchantRef, or the idempotency key such as `woo-order-123` or `shopify-<shop>-<id>`. Credit notes pointing at it are included. */
+  reference?: string;
+  /** `street` (default) removes the address lines and the customer display name; `full` also removes the city. */
+  level?: 'street' | 'full';
+}
+
+/** Result of `eraseCustomerAddressData()`. Amounts, tax, jurisdiction, region, postal code and country are never changed. */
+export interface AddressErasureResult {
+  ok: true;
+  level: 'street' | 'full';
+  /** Sale calculations matched: the order plus any credit notes pointing at it. */
+  matched: number;
+  /** Matched calculations that held address data and were erased. */
+  redacted: number;
+  /** Matched calculations that held none (already erased, or never carried it). */
+  alreadyClean: number;
+  /** Matched purchases, which are not touched. */
+  skippedPurchases: number;
+  /** Calculation lines whose stored address-check snapshot was erased. */
+  lineItemsRedacted: number;
+  /** Shared address-lookup cache rows removed for the erased addresses. */
+  cacheEntriesRemoved: number;
+  /** The calculations that were changed. */
+  calculationIds: string[];
+  /** More than 500 calculations matched; the first 500 were erased. */
+  truncated: boolean;
+}
+
 /** Body of `recordImportSettlement()`: what customs or the carrier actually charged after clearance. */
 export interface ImportSettlementInput {
   /** The customs entry or declaration number; with the calculation and consignment it is the idempotency key. */

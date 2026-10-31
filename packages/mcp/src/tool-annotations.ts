@@ -51,7 +51,7 @@ const READ_ONLY = new Set<string>([
 ]);
 
 const DESTRUCTIVE = new Set<string>([
-  'delete_client_tax_code', 'remove_entity_logo', 'delete_webhook', 'delete_customer', 'delete_supplier',
+  'delete_client_tax_code', 'remove_entity_logo', 'delete_webhook', 'delete_customer', 'delete_supplier', 'erase_customer_address_data',
   'delete_bank_account', 'unsuppress_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
   'cancel_sii_report', 'amend_sii_report', 'reset_field_mappings', 'exclude_reporting_batch_item',
   'confirm_reporting_batch',
