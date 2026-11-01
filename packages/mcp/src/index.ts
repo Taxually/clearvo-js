@@ -288,71 +288,65 @@ const CLASSIFICATION_CODES_SCHEMA = {
 
 // calculate_tax's input schema, hoisted so quote_duties (POST /v1/duties/quote, the same body minus commit,
 // transactionDirection and documentStage) is derived from it and can never drift from it.
+// The street, second line and city of a party address. Same bounds as AddressInputSchema (lib/tax-calc/request-schema.ts).
+// For a US address the street and city go to the address check for rooftop-precision rates (without a street the rate is
+// ZIP-level); anywhere else they never affect tax. The request is kept as sent. Names, emails and phone numbers are not accepted.
+const ADDRESS_LINE_PROPERTIES = {
+  line1: { type: 'string', description: 'Street address, max 200 characters. Lets a US address be matched to street level for the most precise local rate; never affects tax outside the US.' },
+  line2: { type: 'string', description: 'Second address line, max 200 characters.' },
+  city: { type: 'string', description: 'City, max 100 characters. With a street, used for the US address match.' },
+} as const;
+
 const CALCULATE_TAX_INPUT_SCHEMA = {
   type: 'object' as const,
   properties: {
     currency: { type: 'string', description: 'ISO 4217 currency code' },
-    commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
-    companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a code not valid on the transaction\'s own invoice/tax-point date (outside its validFrom/validTo window) fails with 422 company_code_not_valid_on_date (an entity default outside its window is not applied: source "none" plus a warning); a plan without company codes fails with 403 company_codes_not_included. The resolved code and its source (request, entity_default, none) are echoed on the result, and company-code-scoped rules fire only for it. List codes with list_company_codes.' },
+    commit: { type: 'boolean', description: 'Default: true — records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false for an ephemeral preview/quote that is not stored.' },
+    transactionDate: { type: 'string', description: 'Optional YYYY-MM-DD calendar date the sale is attributed to for tax return periods, as written (never shifted by time zone). Defaults: a sale uses orderDate, else the calendar date of date, else today (UTC); a credit note uses its own transactionDate, else today (UTC), never the original invoice\'s date. Does not change which rate applies (date does). Echoed on the response when supplied.' },
+    orderDate: { type: 'string', description: 'Optional YYYY-MM-DD date the order was placed. Used as the default transactionDate for a sale. Echoed on the response when supplied.' },
+    shippedAt: { type: 'string', description: 'Optional YYYY-MM-DD date the goods shipped. Recorded for return-period attribution; echoed on the response when supplied.' },
+    fulfilledAt: { type: 'string', description: 'Optional YYYY-MM-DD date the order was fulfilled or delivered. Recorded for return-period attribution; echoed on the response when supplied.' },
+    orderDiscount: { type: 'number', description: 'Order-level discount (a code, automatic promotion, bundle, or loyalty credit) not tied to a single line, in the transaction currency. Allocated across lines proportionally to each line\'s post-line-discount base and reduces the taxable base on top of any per-line discount. Non-negative; the per-line alternative is the line\'s own discount field.' },
+    date: { type: 'string', description: 'Optional date the tax rate is selected for (YYYY-MM-DD or an ISO 8601 timestamp). Defaults to today. This decides the rate; transactionDate decides which return period the sale belongs to. An invalid date is a 422 invalid_date.' },
+    taxReportingCurrency: { type: 'string', description: 'Optional currency the tax amounts are also reported in, when different from currency (max 20 characters).' },
+    idempotencyKey: { type: 'string', description: 'Optional key that makes a repeated commit return the first result instead of recording the transaction twice. Reusing it with a different body is an error.' },
+    merchantRef: { type: 'string', description: 'Optional reference of your own for the end customer or order, max 100 characters. Stored with the calculation for grouping and filing, and echoed on the response.' },
+    paymentMethod: { type: 'string', enum: ['card', 'bank_transfer', 'digital_wallet', 'cash', 'other'], description: 'Optional, informational only: how the customer paid. Never changes tax.' },
+    transactionType: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Default "invoice". A "credit_note" reverses an earlier sale: name the original with exactly one of relatedCalculationId or externalOriginalReference.' },
+    relatedCalculationId: { type: 'string', description: 'Credit note only: the calculationId of the original invoice Clearvo calculated for this entity (max 50 characters). The credit note takes the original\'s treatment, rate and jurisdiction per line with the same id. Use this or externalOriginalReference, never both.' },
+    externalOriginalReference: { type: 'string', description: 'Credit note only: your own reference for an original invoice Clearvo has no record of, max 200 characters. date is then required (the original\'s date), because there is nothing to reconstruct its rate from. Use this or relatedCalculationId, never both.' },
+    vatValidation: { type: 'string', enum: ['full', 'format', 'none'], description: 'How the customer VAT ID is validated: "full" (default) a live VIES check with a short timeout, "format" a format check only, "none" trusts the number entirely.' },
+    vatUnverifiableFallback: { type: 'string', enum: ['conservative', 'permissive'], description: 'What to do when a VAT ID cannot be verified (authority down, timeout). "conservative" (default) treats the customer as a consumer; "permissive" trusts the number.' },
+    evidence: {
+      type: 'object',
+      description: 'Optional location evidence for a consumer sale when the addresses are missing or disagree. Only used to resolve where the sale is taxed.',
+      properties: {
+        ipAddress: { type: 'string', description: 'IP address of the customer at the time of the order.' },
+        binCountry: { type: 'string', description: 'Two-letter country of the card issuer (from the card BIN).' },
+      },
+    },
+    isMarketplaceFacilitatedSale: {
+      type: 'boolean',
+      description: 'Set true when a marketplace (TikTok Shop, Amazon, ...) facilitated this whole order. US destinations only: where the state\'s marketplace-facilitator law makes the facilitator, not the seller, collect and remit, the seller collects no tax on that line (tax 0, taxCode O) and the line\'s marketplaceFacilitator object says why (reasonCode MARKETPLACE_FACILITATOR_COLLECTS), with marketplaceFacilitatorTax as a memo of the tax the facilitator collects (never in totalTax). Where the law does not relieve the seller (not yet effective, excluded category, local tax, no confirmed rule) the seller collects as usual and marketplaceFacilitator.reasonCode names the reason; a missing or unconfirmed state rule also sets degraded. A non-US destination returns 422 marketplace_facilitator_unsupported_jurisdiction. A customer exemption already applying to a line takes precedence. Omit for a direct sale. Not the same as the account setting isMarketplaceFacilitator (you ARE a marketplace). On a credit note that omits it, the original calculation\'s value is inherited.',
+    },
     transactionDirection: {
       type: 'string',
       enum: ['sale', 'purchase'],
-      description: '"sale" (default) — an outgoing transaction: the entity is the supplier, customer (the counterparty) is required. "purchase" — an incoming transaction: the entity is the customer, supplier (the counterparty, the vendor) is required. See this tool\'s own description for the full rule, including the 422 error codes for each direction. "purchase" is the Purchases (AP) sub-solution: Enterprise plan only, and the business must have Purchases (AP) switched on under Settings > Solutions; otherwise HTTP 403 code ap_not_included (plan; upgradeUrl returned) or ap_not_enabled (switch it on; hint returned).',
+      description: 'Default "sale": this entity is the supplier (output tax) and customer is the required counterparty. "purchase": this entity is the customer (input tax) and supplier — the vendor — is the required counterparty. The entity-side party may be omitted; it is filled from entity master data. "purchase" is the Purchases (AP) sub-solution: Enterprise plan only, and Purchases (AP) must be switched on for the business. Otherwise the call fails with HTTP 403 code ap_not_included (plan) or ap_not_enabled (switch).',
     },
-    seller: {
-      type: 'object',
-      deprecated: true,
-      description: 'Deprecated alias for `supplier`, accepted on a transactionDirection: "sale" calculation only (normalised to supplier before validation runs). Use `supplier` directly instead. Rejected with 422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE when sent alongside transactionDirection: "purchase".',
-      properties: {
-        address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
-        taxId: { type: 'string', description: 'Seller VAT number' },
-      },
-      required: ['address'],
+    documentStage: {
+      type: 'string',
+      enum: ['purchase_order', 'invoice'],
+      description: 'Default "invoice". "purchase_order" commits an ordinary tax calculation stamped as a PO — excluded from every obligation/aggregate reader (Compliance Radar, dashboard totals, Explore) and given its own idempotency-key namespace, so you may reuse the same idempotencyKey once here and again when calculating the matching invoice. Purchase-side only — set "purchase_order" without also setting transactionDirection to "purchase" and the call is rejected with 422 DOCUMENT_STAGE_REQUIRES_PURCHASE. Enterprise only (the Purchases (AP) sub-solution): 403 ap_not_included or ap_not_enabled otherwise.',
     },
-    supplier: {
-      type: 'object',
-      description: 'The supplier party. Required when transactionDirection is "purchase" — the actual vendor on the purchase invoice (422 SUPPLIER_REQUIRED if missing); only taxId and billingAddress.country are meaningful there. Optional when transactionDirection is "sale" or omitted — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 SUPPLIER_TAX_ID_MISMATCH on a mismatch). `ref` on a purchase resolves saved supplier master data (see list_suppliers/create_supplier), filling in name/taxId/address — unlike customer.ref on a sale, which does not resolve customer master data (see customer.ref\'s own description).',
-      properties: {
-        name: { type: 'string', description: 'Free-text display name. Accepted but unused for supplier resolution.' },
-        taxId: { type: 'string', description: 'Supplier VAT or tax ID — used to determine cross-border reverse-charge/import treatment on a purchase, or validated against the entity\'s own registration when supplier is the entity side on a sale.' },
-        ref: { type: 'string', description: 'Your own reference for this supplier (e.g. ERP vendor id). On a purchase, resolves saved supplier master data — see list_suppliers/create_supplier — filling in any of name/taxId/address you omit here. Ignored when supplier is the entity side (a sale).' },
-        billingAddress: {
-          type: 'object',
-          description: 'The supplier\'s own country/address — the real dispatch/origin signal for cross-border purchase treatment.',
-          properties: {
-            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
-            region: { type: 'string', description: 'State/province code, when relevant.' },
-            postalCode: { type: 'string' },
-          },
-          required: ['country'],
-        },
-      },
-    },
-    customer: {
-      type: 'object',
-      description: 'The customer party. Required when transactionDirection is "sale" or omitted — the counterparty on a sale (422 CUSTOMER_REQUIRED if missing). Optional when transactionDirection is "purchase" — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch).',
-      properties: {
-        b2bOverride: { type: 'boolean', description: 'Set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the buyer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied.' },
-        taxId: { type: 'string', description: 'Customer VAT number — triggers B2B reverse charge or zero-rating for cross-border sales' },
-        ref: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP id). Unlike supplier.ref on a purchase, this does NOT resolve saved customer master data (name/taxId/address are not filled in). Its only effect: when the transaction\'s jurisdiction is the US and this entity uses Exemption Certificate Management (ECM), Clearvo looks up an active exemption certificate on file for this ref and auto-applies it. No effect outside the US or with no matching certificate.' },
-        billingAddress: {
-          type: 'object',
-          properties: {
-            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
-            region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX"). Optional but recommended for Canada.' },
-            postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
-          },
-          required: ['country'],
-        },
-      },
-    },
+    companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with 422 company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. The resolved code and its source (request, entity_default) are echoed on the result, and company-code-scoped rules fire only for it. List codes with list_company_codes.' },
     customProperties: {
       type: 'object',
-      description: 'Header-level open, customer-defined fact bag. For data that is NOT part of our schema: every key must already be defined via the rules-engine property-definition API (create_rule_property_definition) — an undefined key returns a 400 UNKNOWN_CUSTOM_PROPERTY naming the key and a fixUrl to define it, and a key that names a built-in field (e.g. glAccount, costCenter, intendedUse, accountAssignment, commodityCode) returns a 400 BUILT_IN_PROPERTY_AS_CUSTOM. Values are string/number/boolean.',
+      description: 'Header-level open, customer-defined fact bag. For data that is NOT part of our schema: every key must already be defined via the rules-engine property-definition API — an undefined key returns a 400 UNKNOWN_CUSTOM_PROPERTY naming the key and a fixUrl to define it, and a key that names a built-in field (e.g. glAccount, costCenter, intendedUse, accountAssignment, commodityCode) returns a 400 BUILT_IN_PROPERTY_AS_CUSTOM. Values are string/number/boolean.',
     },
     shipFrom: {
       type: 'object',
-      description: 'Where the goods are dispatched from. With duties on, a dispatch place in a different customs territory from the destination makes the consignment a customs crossing; a line-level shipFrom overrides it for that line (a second warehouse is a second consignment). customsStatus "bonded" marks stock held under customs control, so leaving it is a crossing even within one territory.',
+      description: 'Where the goods are dispatched from. With duties on, a dispatch place in a different customs territory from the destination makes the consignment a customs crossing; a line-level shipFrom overrides it for that line (a second warehouse is a second consignment). customsStatus "bonded" marks stock held under customs control, so leaving it is a crossing even within one territory. On a sale that omits shipFrom, dispatch is assumed to be your entity\'s own country; the response echoes the dispatch country actually used as shipFromCountry with shipFromSource ("request" or "businessProfile"). For an EU consumer goods sale to another EU country it also decides whether VAT is charged at your home-country rate (shipping from the country your business is based in, while your recorded EU consumer sales stay under the EU distance-sales limit) or where the goods arrive; each goods line reports the outcome as placeOfSupplyBasis.',
       properties: {
         line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
         region: { type: 'string', description: 'State/region code, e.g. "TX"' },
@@ -373,6 +367,8 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       },
       required: ['country'],
     },
+    incoterms: { type: 'string', enum: ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'], description: 'Incoterms 2020 rule. Does not gate IOSS eligibility. On a B2C cross-border goods sale with no value-threshold scheme, DDP (seller imports) leaves tax unchanged and any other rule (buyer imports) makes the line out of scope (taxCode O, tax 0). With duties on it also decides who is responsible for the import charges: DDP is the seller, any other rule the buyer.' },
+    importerOfRecord: { type: 'string', enum: ['SELLER', 'BUYER'], description: 'Explicit importer of record on a customs-crossing shipment; wins over incoterms. With duties on it decides who bears the import charges and whether they can be collected at checkout.' },
     insurance: {
       type: 'object',
       description: 'Consignment insurance, a customs-value component where the destination values goods CIF. Duties only; ignored otherwise.',
@@ -382,6 +378,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       },
       required: ['amount'],
     },
+    shippingMode: { type: 'string', enum: ['post', 'courier'], description: 'How the consignment travels. Duties only: selects the low-value regime (Canada: courier vs post thresholds). Omitted means unknown: the stricter outcome is assumed and the quote flagged (estimateReasons shipping_mode_assumed).' },
     duties: {
       type: 'object',
       description: 'Estimated import duty, import VAT/GST and customs fees for a cross-border consignment. Never included in totalTax/totalAmountWithTax; see summary.importChargesAtCheckout for the one amount a checkout may add, and summary.totalAmountDue (present only alongside it) for the amount to charge. A duty failure never sets degraded: read the response duties.status (quoted, not_applicable, degraded, disabled). include overrides the account/entity dutiesEnabled setting either way; a deposit can only be collected when include is true.',
@@ -393,8 +390,90 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       },
       required: ['include'],
     },
-    incoterms: { type: 'string', enum: ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'], description: 'Incoterms 2020 rule. Does not gate IOSS eligibility. On a B2C cross-border goods sale with no value-threshold scheme, DDP (seller imports) leaves tax unchanged and any other rule (buyer imports) makes the line out of scope (taxCode O, tax 0). With duties on it also decides who is responsible for the import charges: DDP is the seller, any other rule the buyer.' },
-    importerOfRecord: { type: 'string', enum: ['SELLER', 'BUYER'], description: 'Explicit importer of record on a customs-crossing shipment; wins over incoterms. With duties on it decides who bears the import charges and whether they can be collected at checkout.' },
+    // `supplier` and `customer` carry the SAME property set — field-for-
+    // field PartyInputSchema (lib/tax-calc/request-schema.ts) minus its
+    // legacy `address` alias: name, taxId, type, b2bOverride, ref,
+    // exemptionRef, billingAddress, shippingAddress. Only the
+    // descriptions differ (which fields are read depends on the party's
+    // ROLE, not its slot).
+    // tests/unit/mcp-tools-parity.test.ts pins the two sets to be identical.
+    supplier: {
+      type: 'object',
+      description: 'The supplier party. On a sale this is the entity itself — omit it (auto-filled from master data), or supply it with one of the entity\'s own registered tax IDs (a mismatch is a 422 SUPPLIER_TAX_ID_MISMATCH). On a purchase this is the vendor and is required: its taxId and billingAddress.country drive the calculation — or pass `ref` (a supplierRef from create_supplier/list_suppliers) and the vendor\'s missing taxId/billingAddress are filled from the supplier master (explicit fields win; an unknown ref is a 422 SUPPLIER_REF_NOT_FOUND).',
+      properties: {
+        name: { type: 'string', description: 'Display name — informational only, never drives a decision.' },
+        taxId: { type: 'string', description: 'Supplier VAT/GST registration number. On a sale it must be one of the entity\'s own registered tax IDs (any country); on a purchase it is the vendor\'s number and drives B2B/reverse-charge resolution.' },
+        type: { type: 'string', description: 'Deprecated loose hint (e.g. "business"/"consumer") consumed by the seeded GENERAL_CUSTOMER_TYPE_NORMALIZE rule to canonicalise into B2B/B2C/B2G — prefer b2bOverride, which is exact and does not depend on that rule being active.' },
+        b2bOverride: { type: 'boolean', description: 'Counterparty only (a purchase\'s vendor): set true to force B2B treatment regardless of tax-number validation outcome. Ignored on a sale, where the supplier is the entity itself.' },
+        ref: { type: 'string', description: 'Purchase only: your supplierRef for this vendor in the supplier master (see create_supplier). Missing taxId/billingAddress fill from that record; fields you pass explicitly win; an unknown ref fails with 422 SUPPLIER_REF_NOT_FOUND. Ignored on a sale.' },
+        exemptionRef: { type: 'string', description: 'Not read for the supplier party (ECM exemption certificates apply to a sale\'s customer only). Accepted for shape parity with customer; ignored.' },
+        billingAddress: {
+          type: 'object',
+          description: 'Registered billing / invoice address. On a sale, the entity\'s registered establishment address (auto-filled when omitted).',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code.' },
+            postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
+          },
+          required: ['country'],
+        },
+        shippingAddress: {
+          type: 'object',
+          description: 'Counterparty only (a purchase\'s vendor): physical dispatch address. Ignored on a sale.',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code.' },
+            postalCode: { type: 'string', description: 'Postal code.' },
+          },
+          required: ['country'],
+        },
+      },
+    },
+    customer: {
+      type: 'object',
+      description: 'The customer party. On a sale (the default) this is the counterparty and is REQUIRED. On a purchase this is the entity itself — omit it (auto-filled from master data), or supply it with one of the entity\'s own registered tax IDs (a mismatch is a 422 CUSTOMER_TAX_ID_MISMATCH); the vendor\'s tax ID never belongs here.',
+      properties: {
+        name: { type: 'string', description: 'Display name — informational only, never drives a decision.' },
+        taxId: { type: 'string', description: 'Customer VAT/GST number. On a sale it triggers B2B reverse charge or zero-rating for cross-border sales; on a purchase it must be one of the entity\'s own registered tax IDs (any country).' },
+        type: { type: 'string', description: 'Deprecated loose hint (e.g. "business"/"consumer") consumed by the seeded GENERAL_CUSTOMER_TYPE_NORMALIZE rule to canonicalise into B2B/B2C/B2G — prefer b2bOverride, which is exact and does not depend on that rule being active.' },
+        b2bOverride: { type: 'boolean', description: 'Counterparty only (a sale\'s customer): set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the customer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied. Ignored on a purchase, where the customer is the entity itself.' },
+        ref: { type: 'string', description: 'Your customer reference (e.g. CRM ID, account number). On a SALE it is only used to auto-apply a stored ECM exemption certificate for this customer to eligible US lines (it does NOT fill customer master data). Ignored on a purchase.' },
+        exemptionRef: { type: 'string', description: 'Sale customer only: the certificateRef of an exemption certificate stored in Clearvo ECM (POST /v1/tax/exemptions). When it matches an active certificate the exemption is applied to eligible lines. Ignored on a purchase.' },
+        billingAddress: {
+          type: 'object',
+          description: 'Registered billing / invoice address. On a sale, used for B2B and as the fallback for B2C; on a purchase, the entity\'s registered establishment address (auto-filled when omitted).',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX"). Optional but recommended for Canada.' },
+            postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
+          },
+          required: ['country'],
+        },
+        shippingAddress: {
+          type: 'object',
+          description: 'Counterparty only (a sale\'s customer): physical delivery address. Takes precedence over billingAddress for physical goods. Ignored on a purchase.',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX").' },
+            postalCode: { type: 'string', description: 'Postal code — drives US rooftop/ZIP-level sourcing when supplied.' },
+          },
+          required: ['country'],
+        },
+      },
+    },
+    seller: {
+      type: 'object',
+      description: 'DEPRECATED — alias for `supplier` on a sale (its `address` becomes supplier.billingAddress). Not accepted on a purchase (422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE). Use `supplier` instead.',
+      properties: {
+        address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
+        taxId: { type: 'string', description: 'Seller VAT number' },
+      },
+      required: ['address'],
+    },
     lineItems: {
       type: 'array',
       items: {
@@ -405,18 +484,35 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
           unitPrice: { type: 'number', description: 'Per-unit price in the transaction currency. Alternative to amount: the line total is computed as unitPrice × quantity (rounded once), so you do not pre-multiply and absorb per-unit rounding. Requires quantity. Supply either amount, or unitPrice with quantity — not both.' },
           quantity: { type: 'number', description: 'Number of units. Required when unitPrice is supplied (the two define the line total); informational when amount is supplied directly.' },
           productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
+          productDescription: { type: 'string', description: 'Optional short description of the item, max 500 characters. Used to classify the product when no productCode or taxCategory matches. HTML entities are decoded.' },
+          taxCode: { type: 'string', description: 'Optional EN16931 tax code for this line, max 100 characters. An escape hatch; usually leave it to the engine.' },
+          amountIncludesTax: { type: 'boolean', description: 'true when amount or unitPrice already includes tax; false when it is before tax. Honoured in every jurisdiction, including the US. Omit to use the product or account default.' },
+          discount: { type: 'number', description: 'Line discount in the transaction currency. It reduces the taxable base: amount minus discount is what tax is charged on.' },
+          discountAmount: { type: 'number', description: 'Discount amount for audit and display only. Never used in the tax arithmetic; use discount for a discount that reduces the taxable base.' },
+          taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'ZERO', 'EXEMPT'], description: 'Optional explicit rate band for this line, replacing the default consumer rate step. B2B, reverse-charge and exemption decisions still run first and are not affected.' },
           productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
           taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
           classificationCodes: CLASSIFICATION_CODES_SCHEMA,
-          taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
-          commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff; for rate-band lookup, matching is jurisdiction-scoped by the line\'s own resolved country; with duties on, this is the code the duty is priced at, see commodityCodeScheme). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
-          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block).' },
+          commodityCode: { type: 'string', description: 'Optional tariff/HS classification code for this line (e.g. "6104199010"). Non-digit characters are stripped and the code is truncated to a fixed digit length before matching, so a dotted format like "6104.19.90" is accepted. Two uses: (1) classifies the line to a product category (longest-prefix map) whose rates set the tax rate; the code itself carries no rate, an explicit taxCategory wins, and an unmapped code returns a commodity_code_unmapped warning; (2) on an IOSS-treated calculation, drives the response\'s customsDuty object — lines sharing the same normalised classification count as one duty item. Omit for a line where neither use applies; a missing/malformed code on an otherwise-qualifying IOSS line still counts (see calculate_tax\'s own description), it never fails the call.' },
+          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block). Not the AP fact customProperties.commodityCodeScheme.' },
           countryOfOrigin: { type: 'string', description: 'Two-letter country the goods were made in, read only when duties are on. Never inferred from shipFrom. Falls back to the product catalogue, then defaultCountryOfOrigin.' },
-          glAccount: { type: 'string', description: 'Purchase side: the general-ledger account this line is booked to (max 50 characters). Rules can read and write it as the property "glAccount" (e.g. map a GL account to a tax category). Echoed post-rule on the response line. Not accepted inside customProperties.' },
-          costCenter: { type: 'string', description: 'Purchase side: the cost centre this line is booked to (max 50 characters). Rules can read and write it as "costCenter". Echoed post-rule. Not accepted inside customProperties.' },
-          intendedUse: { type: 'string', description: 'Purchase side: what the buyer intends to use the goods/services for, free text (max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate to the line. Rules can read and write it as "intendedUse". Echoed post-rule. Not accepted inside customProperties.' },
-          accountAssignment: { type: 'string', description: 'Purchase side: how the line is assigned in your books — "stock", "expense", "asset" or "project". A raw ERP code (SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string) is also accepted and mapped onto those four by the account_assignment_map dataset; a code with no mapping is dropped with a warning. The response always echoes one of the four. "stock" means a resale line for buyer-held certificate matching. Rules can read and write it as "accountAssignment". Not accepted inside customProperties.' },
-          customProperties: { type: 'object', description: 'Per-line open, customer-defined fact bag for data that is NOT part of our schema — same validation contract as the header-level field of the same name. Response echoes the post-rule (effective) value.' },
+          weight: {
+            type: 'object',
+            description: 'Weight of ONE unit, for specific (per-kg) duty rates; the line weight is value x quantity.',
+            properties: { value: { type: 'number' }, unit: { type: 'string', enum: ['kg', 'g', 'lb', 'oz'] } },
+            required: ['value', 'unit'],
+          },
+          shippingCarrier: { type: 'string', enum: ['common', 'seller_vehicle'], description: "Shipping/handling lines, US only: who delivers the goods, 'common' (an independent carrier) or 'seller_vehicle' (your own vehicles). Some states treat delivery differently. Omit it and the default rule (template default_shipping_carrier) fills it if you have one, else the cautious taxable assumption applies. The shipping rules always decide." },
+          chargeAvoidable: { type: 'boolean', description: "Shipping/handling lines, US only: whether the customer could have avoided this charge (for example by choosing pickup). Omit it and the default rule (template default_shipping_charge_avoidable) fills it if you have one, else it is treated as not avoidable." },
+          actualCostOfShipment: { type: 'boolean', description: "Shipping/handling lines, US only: whether this charge is exactly the carrier's actual cost rather than a flat fee or marked up. Omit it and the default rule (template default_shipping_actual_cost) fills it if you have one, else it is treated as not the actual cost." },
+          screenSizeInches: { type: 'number', description: 'Diagonal screen size in inches of a TV, monitor, laptop, tablet or portable DVD player. Read only by the California Covered Electronic Device recycling fee, which is tiered by size (over 4 and under 15 inches, 15 to under 35, 35 and over); never affects tax. Omit and the lowest tier is applied and the fee line carries appliedDefault true with a defaultReason.' },
+          exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
+          exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
+          statedTaxAmount: {
+            type: 'number',
+            description:
+              'Purchase only (transactionDirection "purchase"): the tax amount the VENDOR actually invoiced/charged on this line, in the transaction currency. When supplied, Clearvo verifies it against its own independently-computed legally-due amount and returns lines[].taxVerification — {statedTaxAmount, calculatedTaxAmount, delta, verdict, recoverableBase, outcome, reasonCode, legalDelta, appliedDelta, zeroLiabilityBasis, nonDeductibleStatedTax}. outcome is the AP decision layer\'s tolerance/trusted-supplier/PO-disposition-aware verdict (ACCEPTED_AS_CHARGED / OVERCHARGED / UNDERCHARGED / HELD — see get_tax_settings\'s apTolerance/apPoDisposition, set via update_tax_settings), distinct from the plain rounding-tolerance verdict field. A reverse-charge/PVA/exempt/zero-rated line the vendor nonetheless charged tax on is always OVERCHARGED regardless of tolerance (zeroLiabilityBasis names which basis applied). For a reverse-charge/PVA line specifically, only the vendor-charged amount is non-deductible (echoed as nonDeductibleStatedTax) — your own self-assessed input VAT (recoverableBase/recoverability.recoverableAmount) is unaffected and does not depend on the vendor\'s invoice being correct. A zero-liability line the vendor CORRECTLY charged nothing on reads reasonCode NO_TAX_DUE_NONE_CHARGED (still ACCEPTED_AS_CHARGED — not a fifth outcome), taking priority over a trusted-supplier or within-tolerance reason since there is nothing to trust or tolerate on a line with no liability. Omit entirely to skip verification (no taxVerification on the response line).',
+          },
           supplyType: {
             type: 'string',
             enum: ['GOODS', 'SERVICES'],
@@ -435,17 +531,41 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
             },
             required: ['country'],
           },
-          weight: {
-            type: 'object',
-            description: 'Weight of ONE unit, for specific (per-kg) duty rates; the line weight is value x quantity.',
-            properties: { value: { type: 'number' }, unit: { type: 'string', enum: ['kg', 'g', 'lb', 'oz'] } },
-            required: ['value', 'unit'],
+          recoverablePercentOverride: {
+            type: 'number',
+            description:
+              'Purchase only: overrides this line\'s input-tax recoverable percentage (0-100) — how much of the tax is this entity\'s own to reclaim — in place of whatever the matched client tax code configures. Wins unconditionally over a matched code\'s own recoverabilityType/recoverablePercentage. Omit to use the matched code\'s configured recoverability, or 100% (fully recoverable) when nothing configures it.',
           },
-          exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
-          shippingCarrier: { type: 'string', enum: ['common', 'seller_vehicle'], description: "Shipping/handling lines, US only: who delivers the goods, 'common' (an independent carrier) or 'seller_vehicle' (your own vehicles). Some states treat delivery differently. Omit it and the default rule (template default_shipping_carrier) fills it if you have one, else the cautious taxable assumption applies. The shipping rules always decide." },
-          chargeAvoidable: { type: 'boolean', description: "Shipping/handling lines, US only: whether the customer could have avoided this charge (for example by choosing pickup). Omit it and the default rule (template default_shipping_charge_avoidable) fills it if you have one, else it is treated as not avoidable." },
-          actualCostOfShipment: { type: 'boolean', description: "Shipping/handling lines, US only: whether this charge is exactly the carrier's actual cost rather than a flat fee or marked up. Omit it and the default rule (template default_shipping_actual_cost) fills it if you have one, else it is treated as not the actual cost." },
-          exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
+          glAccount: { type: 'string', description: 'Purchase side: the general-ledger account this line is booked to (max 50 characters). Rules can read and write it as the property "glAccount" (e.g. map a GL account to a tax category). Echoed post-rule on the response line. Not accepted inside customProperties.' },
+          costCenter: { type: 'string', description: 'Purchase side: the cost centre this line is booked to (max 50 characters). Rules can read and write it as "costCenter". Echoed post-rule. Not accepted inside customProperties.' },
+          intendedUse: { type: 'string', description: 'Purchase side: what the buyer intends to use the goods/services for, free text (max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate to the line. Rules can read and write it as "intendedUse". Echoed post-rule. Not accepted inside customProperties.' },
+          accountAssignment: { type: 'string', description: 'Purchase side: how the line is assigned in your books — "stock", "expense", "asset" or "project". A raw ERP code (SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string) is also accepted and mapped onto those four by the account_assignment_map dataset; a code with no mapping is dropped with a warning. The response always echoes one of the four. "stock" means a resale line for buyer-held certificate matching. Rules can read and write it as "accountAssignment". Not accepted inside customProperties.' },
+          customProperties: {
+            type: 'object',
+            description: 'Per-line open, customer-defined fact bag for data that is NOT part of our schema — same validation contract as the header-level field of the same name. Response echoes the POST-rule (effective) value, including any fact carried through from a linked purchase order (see purchaseOrderId).',
+          },
+          purchaseOrderId: {
+            type: 'string',
+            description: 'Purchase only: this invoice line\'s carry-through reference back to a purchase order you previously committed with documentStage "purchase_order" (that calculation\'s own calculationId). Resolves the response line\'s poLink (NONE/NOT_FOUND/LINKED) and, when LINKED, makes the PO line\'s own facts available to this line\'s carry-through (e.g. inheriting intendedUse when this line does not already state it).',
+          },
+          purchaseOrderLineNumber: {
+            type: 'string',
+            description: 'Narrows purchaseOrderId above to one specific line on that PO (matched against that line\'s own id) — may be omitted when the PO has exactly one line.',
+          },
+          shipFrom: {
+            type: 'object',
+            description: 'Per-line fulfilment origin for a multi-warehouse order — overrides the transaction-level shipFrom for THIS line. Sets the dispatch country for this line in the EU consumer goods rule, and affects US origin-sourcing states (TX/CA/IL), where local tax sources to the seller\'s location. Supply only for a line shipping from a different location than the rest of the order.',
+            properties: {
+              line1: { type: 'string' },
+              line2: { type: 'string' },
+              city: { type: 'string' },
+              region: { type: 'string', description: 'State/region code, e.g. "TX"' },
+              postalCode: { type: 'string' },
+              country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+              customsStatus: { type: 'string', enum: ['free_circulation', 'bonded'], description: 'Duties only. Default free_circulation.' },
+            },
+            required: ['country'],
+          },
         },
         required: ['id', 'productName'],
       },

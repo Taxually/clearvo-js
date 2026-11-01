@@ -1065,9 +1065,29 @@ export interface TaxCalcPartyInput {
    * certificate, `customer.ref` has no effect on the calculation.
    */
   ref?: string;
-  billingAddress?: { country: string; region?: string; postalCode?: string };
+  billingAddress?: TaxCalcAddressInput;
   /** Meaningful only for `customer`; accepted but ignored on `supplier`. */
-  shippingAddress?: { country: string; region?: string; postalCode?: string };
+  shippingAddress?: TaxCalcAddressInput;
+}
+
+/**
+ * A party address on a calculation. Only `country` is required. For a US address the street (`line1`, `line2`) and `city` are sent to the
+ * address check for rooftop-precision rates (`postalCode` alone gives ZIP-level rates); anywhere else they never affect tax. The request is
+ * kept as sent. Names, emails and phone numbers are not accepted.
+ */
+export interface TaxCalcAddressInput {
+  /** Street address, max 200 characters. */
+  line1?: string;
+  /** Second address line, max 200 characters. */
+  line2?: string;
+  /** City, max 100 characters. */
+  city?: string;
+  /** State or region code. Required for a US address, for example "TX". */
+  region?: string;
+  /** Postal or ZIP code, max 20 characters. Detects special VAT territories; a full ZIP code gives the most precise US rate. */
+  postalCode?: string;
+  /** ISO 3166-1 alpha-2. */
+  country: string;
 }
 
 /**
@@ -1346,8 +1366,52 @@ export interface TaxCalculateRequest {
      * intendedUse, accountAssignment, commodityCode, commodityCodeScheme, ...) is a
      * 400 `BUILT_IN_PROPERTY_AS_CUSTOM`: send it as the regular line field instead.
      */
+    /** Optional SKU or product code (max 40 characters). When given, the classification is cached per account so the product is not re-classified every time. */
+    productCode?: string;
+    /** Optional short description of the item, max 500 characters. Used to classify the product when no `productCode` or `taxCategory` matches. */
+    productDescription?: string;
+    /** Optional EN16931 tax code for this line, max 100 characters. An escape hatch; usually leave it to the engine. */
+    taxCode?: string;
+    /** Line discount in the transaction currency. It reduces the taxable base: `amount` minus `discount` is what tax is charged on. */
+    discount?: number;
+    /** Discount amount for audit and display only. Never used in the tax arithmetic; use `discount` for a discount that reduces the taxable base. */
+    discountAmount?: number;
+    /** Purchase only: the tax amount the vendor actually invoiced on this line, in the transaction currency. Clearvo verifies it against its own figure. */
+    statedTaxAmount?: number;
+    /** Purchase only: overrides this line's input-tax recoverable percentage (0-100). */
+    recoverablePercentOverride?: number;
+    /** Diagonal screen size in inches of a TV, monitor, laptop, tablet or portable DVD player. Read only by the California Covered Electronic Device recycling fee; never affects tax. */
+    screenSizeInches?: number;
     customProperties?: Record<string, string | number | boolean>;
   }>;
+  /** The date the tax rate is selected for (YYYY-MM-DD or an ISO 8601 timestamp). Defaults to today. This decides the rate; `transactionDate` decides the return period. */
+  date?: string;
+  /** The calendar date (YYYY-MM-DD, as written) the sale is attributed to for tax return periods. Defaults: a sale uses `orderDate`, else the date of `date`, else today (UTC); a credit note uses its own, else today. Does not change the rate. Echoed on the response. */
+  transactionDate?: string;
+  /** The date the order was placed (YYYY-MM-DD). The default `transactionDate` for a sale. Echoed on the response. */
+  orderDate?: string;
+  /** The date the goods shipped (YYYY-MM-DD). Recorded for return-period attribution. Echoed on the response. */
+  shippedAt?: string;
+  /** The date the order was fulfilled or delivered (YYYY-MM-DD). Recorded for return-period attribution. Echoed on the response. */
+  fulfilledAt?: string;
+  /** A currency the tax amounts are also reported in, when different from `currency` (max 20 characters). */
+  taxReportingCurrency?: string;
+  /** Your own reference for the end customer or order, max 100 characters. Stored with the calculation and echoed on the response. */
+  merchantRef?: string;
+  /** Informational only: how the customer paid. Never changes tax. */
+  paymentMethod?: 'card' | 'bank_transfer' | 'digital_wallet' | 'cash' | 'other';
+  /** An order-level discount (code, promotion, bundle, loyalty) not tied to one line, in the transaction currency. Allocated across lines in proportion to each line's taxable base. */
+  orderDiscount?: number;
+  /** True when a marketplace facilitated the whole order. Where a US state's marketplace-facilitator law applies, the facilitator and not the seller collects the tax. */
+  isMarketplaceFacilitatedSale?: boolean;
+  /** `'invoice'` (default) or `'credit_note'`. A credit note names its original with exactly one of `relatedCalculationId` or `externalOriginalReference`. */
+  transactionType?: 'invoice' | 'credit_note';
+  /** Credit note only: the `calculationId` of the original invoice Clearvo calculated for this entity (max 50 characters). The credit note takes the original's treatment, rate and jurisdiction per line with the same `id`. Use this or `externalOriginalReference`, never both. */
+  relatedCalculationId?: string;
+  /** Credit note only: your own reference for an original invoice Clearvo has no record of (max 200 characters). `date` is then required. Use this or `relatedCalculationId`, never both. */
+  externalOriginalReference?: string;
+  /** How the consignment travels. Duties only: selects the low-value regime (Canada: courier versus post thresholds). */
+  shippingMode?: 'post' | 'courier';
   vatValidation?: 'full' | 'format' | 'none';
   vatUnverifiableFallback?: 'conservative' | 'permissive';
   /**
