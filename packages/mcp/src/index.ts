@@ -3293,6 +3293,26 @@ const TOOLS = [
     },
   },
   {
+    name: 'erase_customer_address_data',
+    description:
+      'Erase a customer\'s stored address data from committed tax calculations, on request (for example a privacy erasure request). ' +
+      'Street lines are kept for as long as the calculation needs them and leave only through this tool. Name the calculation by ' +
+      'calculationId, or by the order reference it was committed under (merchantRef, or the idempotency key such as woo-order-123 or ' +
+      'shopify-<shop>-<id>); credit notes pointing at it are included. level "street" (default) removes the address lines and the ' +
+      'customer display name; "full" also removes the city. Amounts, tax, jurisdiction, period, region, postal code and country are ' +
+      'never changed, only sales are touched, and a repeat call changes nothing. Returns what was matched and erased. ' +
+      'Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'The calculation id (cl_calc_...). Send this or reference, not both.' },
+        reference: { type: 'string', description: 'The order reference the calculation was committed under. Send this or calculationId, not both.' },
+        level: { type: 'string', enum: ['street', 'full'], description: 'street (default): address lines and the display name. full: also the city.' },
+        entityId: { type: 'string', description: 'Entity the calculation belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'list_suppliers',
     description:
       'List an entity\'s supplier master data (name, tax ID, address) — mirrors list_customers for the other ' +
@@ -4945,6 +4965,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'delete_customer': {
       const { customerId, entityId } = args as { customerId: string; entityId?: string };
       return callApi('DELETE', `/customers/${encodeURIComponent(customerId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'erase_customer_address_data': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/tax/address-erasure', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'list_suppliers': {

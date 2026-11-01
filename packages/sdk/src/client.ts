@@ -18,6 +18,8 @@ import type {
   DutiesResult,
   EstimateDutiesInput,
   DutiesEstimateResult,
+  AddressErasureInput,
+  AddressErasureResult,
   ImportSettlementInput,
   ImportSettlementResult,
   ImportSettlementList,
@@ -402,6 +404,16 @@ export class ClearvoClient {
    */
   recordImportSettlement(calculationId: string, input: ImportSettlementInput, entityId?: string): Promise<ImportSettlementResult> {
     return this.request('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, input, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /**
+   * Erase a customer's stored address lines and display name from committed calculations, on request (POST /v1/tax/address-erasure).
+   * Name the calculation by `calculationId` or by the order `reference` (credit notes pointing at it are included). `level` `street`
+   * (default) removes the address lines and the name; `full` also removes the city. Amounts, tax, jurisdiction, region, postal code
+   * and country are never changed, and repeating the call changes nothing. A 404 `CALCULATION_NOT_FOUND` means nothing matched yet.
+   */
+  eraseCustomerAddressData(input: AddressErasureInput, entityId?: string): Promise<AddressErasureResult> {
+    return this.request('POST', '/tax/address-erasure', input, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   /** GET /tax/calculate/{id}/import-settlement: a calculation's settlements and a per-currency summary. */

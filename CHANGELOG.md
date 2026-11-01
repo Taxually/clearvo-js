@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — erase a customer's address data on request (publish after backend PR 18786 is live)
+
+`POST /v1/tax/address-erasure` removes the address lines and the customer display name (at `level: "full"` also the city) that a customer's committed calculations kept, on request. Name the calculation by `calculationId` or by the order `reference` (the merchantRef, or an idempotency key such as `woo-order-123`); credit notes pointing at it are included. Amounts, tax, jurisdiction, region, postal code and country are never changed, and repeating the call changes nothing. Street lines are otherwise kept for as long as the calculation needs them.
+
+- SDK: `eraseCustomerAddressData({ calculationId | reference, level? }, entityId?)`; new types `AddressErasureInput`, `AddressErasureResult`.
+- MCP: new tool `erase_customer_address_data`.
+- CLI: new command `clearvo calculations erase-address --id <calculationId> | --reference <ref> [--level street|full]`.
+
 ## Unreleased — calculate requests carry every field the API accepts (publish after backend PR 18785 is live; rides the SDK 0.6.0, MCP 0.7.0, CLI 0.6.0 minor)
 
 The `calculate_tax` MCP tool and the SDK's `TaxCalculateRequest` described only part of `POST /v1/tax/calculate`: party addresses stopped at country, region and postal code, and a number of request fields could not be sent from a typed client or an AI agent.

@@ -1758,6 +1758,28 @@ export function createProgram(): Command {
     });
   
   calculations
+    .command('erase-address')
+    .description("Erase a customer's stored address lines and display name from committed calculations, on request. Name the calculation with --id or --reference (credit notes pointing at it are included). Amounts, tax, jurisdiction, region, postal code and country are never changed; repeating it changes nothing")
+    .option('--id <calculationId>', 'The calculation id (cl_calc_...). Use this or --reference')
+    .option('--reference <ref>', 'The order reference the calculation was committed under (merchantRef, or e.g. woo-order-123). Use this or --id')
+    .option('--level <street|full>', 'street (default): address lines and the display name. full: also the city')
+    .option('--entity <entityId>', 'Entity ID (x-entity-id), for account-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { id?: string; reference?: string; level?: string; entity?: string; pretty?: boolean }) => {
+      if ((opts.id === undefined) === (opts.reference === undefined)) {
+        console.error('Give exactly one of --id or --reference.');
+        process.exit(2);
+      }
+      if (opts.level !== undefined && opts.level !== 'street' && opts.level !== 'full') {
+        console.error('--level must be street or full.');
+        process.exit(2);
+      }
+      const body = { ...(opts.id !== undefined ? { calculationId: opts.id } : { reference: opts.reference }), ...(opts.level ? { level: opts.level } : {}) };
+      const result = await api('POST', '/tax/address-erasure', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  calculations
     .command('requests')
     .description('List the calculation request ledger: every calculation request incl. commit=false quotes and rejections, with quote-to-final links')
     .option('--committed <bool>', 'true = committed only, false = quotes only')
