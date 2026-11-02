@@ -164,6 +164,13 @@ export interface SendResult extends InvoiceStatusFields {
   statusClass?: StatusClass;
   /** What has to happen next, who does it and where. Null when nothing is outstanding. Act on it for a hold. */
   nextStep?: NextStep | null;
+  /**
+   * On a credit note held for or linked to its original invoice: that invoice's id. A credit note whose original is not yet submittable is stored
+   * and held (status WAITING_FOR_PLATFORM, reason HELD_AWAITING_ORIGINAL, errorCode CREDIT_NOTE_AWAITING_ORIGINAL) and sent
+   * automatically once the original is accepted, delivered or accumulated, or refused if the original ends rejected. Nothing to do on the credit note.
+   * Debit notes do not wait.
+   */
+  originalInvoiceId?: string;
   /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
   id?: string;
   /**
@@ -882,6 +889,8 @@ export interface InvoiceStatusResponse extends InvoiceStatusFields {
   /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   nextStep?: NextStep | null;
+  /** On a credit note held for or linked to its original invoice (reason HELD_AWAITING_ORIGINAL): the original's id. */
+  originalInvoiceId?: string;
   ksefNumber?: string;
   updatedAt: string;
 }

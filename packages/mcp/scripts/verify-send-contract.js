@@ -105,7 +105,7 @@ api.listen(0, '127.0.0.1', async () => {
   const sdkReasons = (sdkSrc.match(/INVOICE_REASONS = \[([\s\S]*?)\]/)[1].match(/'[A-Z_]+'/g) || []).map(v => v.slice(1, -1));
   const listTool = (list.result?.tools ?? []).find(t => t.name === 'list_invoices');
   const mcpReasons = listTool?.inputSchema?.properties?.reason?.enum ?? [];
-  if (JSON.stringify([...mcpReasons].sort()) !== JSON.stringify([...sdkReasons].sort()) || mcpReasons.length !== 26) {
+  if (JSON.stringify([...mcpReasons].sort()) !== JSON.stringify([...sdkReasons].sort()) || mcpReasons.length !== 27) {
     return fail(`list_invoices reason enum differs from the SDK INVOICE_REASONS: ${JSON.stringify(mcpReasons)} vs ${JSON.stringify(sdkReasons)}`);
   }
 
