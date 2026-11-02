@@ -166,8 +166,8 @@ export function createProgram(): Command {
   // no clientTaxCode/taxTreatment is reported as a domestic taxable supply at
   // that rate (the client's rate is authoritative, never rejected as
   // unrecognised); a bare 0% with neither is rejected with 400
-  // ZERO_RATE_NEEDS_TAX_TREATMENT. taxRate itself (0–100) is ALWAYS required,
-  // even with a clientTaxCode — missing/out-of-range is a 400. An unrecognised clientTaxCode never rejects the invoice — it's held
+  // ZERO_RATE_NEEDS_TAX_TREATMENT. taxRate itself (0–100) is optional:
+  // sent it is used as it is, else the code's rate, else worked out from taxAmount; out-of-range is a 400. An unrecognised clientTaxCode never rejects the invoice — it's held
   // (status WAITING_FOR_YOU, reason HELD_UNMAPPED_TAX_CODE) with a machine-readable reason in the
   // response instead.
   // Line items carry `taxRate`/`taxAmount` — the platform is global, so field
