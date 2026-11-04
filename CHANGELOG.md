@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — a tax registration needs its tax number (publish after the backend PR is live)
+
+The API now refuses to record a registration without its tax number (`422 TAX_NUMBER_REQUIRED`), except programme enrolments that have none (CO_SUTS, AK_ARSSTC) and registrations that are not yet registered. This release only corrects the wording the SDK, MCP and CLI show; no field is added or removed.
+
+- SDK: doc comments on `AddRegistrationInput.taxNumber` and `UpdateRegistrationInput.taxNumber`.
+- MCP: `add_registration` and `update_registration` descriptions say the tax number is required.
+- CLI: `clearvo registrations update --number` help text.
+
 ## Unreleased — erase a customer's address data on request (publish after backend PR 18786 is live)
 
 `POST /v1/tax/address-erasure` removes the address lines and the customer display name (at `level: "full"` also the city) that a customer's committed calculations kept, on request. Name the calculation by `calculationId` or by the order `reference` (the merchantRef, or an idempotency key such as `woo-order-123`); credit notes pointing at it are included. Amounts, tax, jurisdiction, region, postal code and country are never changed, and repeating the call changes nothing. Street lines are otherwise kept for as long as the calculation needs them.
