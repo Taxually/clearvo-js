@@ -2228,8 +2228,9 @@ const TOOLS = [
     description:
       'Record a new tax registration for an entity. This covers any tax identifier issued by any tax authority ' +
       'worldwide — not just VAT: a US state sales-tax permit, GST registration, IOSS, OSS, or another local scheme ' +
-      'all count. Use this whenever the entity registers with a tax authority anywhere, whether or not the ' +
-      'registration number has arrived yet (omit taxNumber to self-certify the registration exists). ' +
+      'all count. Use this whenever the entity registers with a tax authority anywhere, once the ' +
+      'authority has issued the number: taxNumber is required, because a registration cannot be recorded without its tax number ' +
+      '(a call without one is rejected with 422 TAX_NUMBER_REQUIRED). ' +
       'IMPORTANT: a registration does not collect tax until its collection date is set — pass collectFromDate ' +
       'in this same call (ask the user whether to start immediately or on a future date) rather than leaving it ' +
       'unset; Clearvo will not apply tax for that country/state until it is. Omitting collectFromDate leaves ' +
@@ -2243,7 +2244,7 @@ const TOOLS = [
           description: 'Registration type. VAT=standard per-country, IOSS=EU Import One-Stop Shop, UNION_OSS=EU OSS — only valid when the entity itself is established in an EU member state, NON_UNION_OSS=EU OSS — only valid when the entity has no EU establishment at all, VOEC=Norway digital goods. Requesting the ineligible OSS type for this entity\'s own establishment returns error code SCHEME_NOT_ELIGIBLE.',
         },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 country code. Not required for IOSS (applies EU-wide).' },
-        taxNumber: { type: 'string', description: 'The registration or VAT number issued by the authority. Optional — can be added later once received. Omit to self-certify that the registration exists without yet recording the number.' },
+        taxNumber: { type: 'string', description: 'The registration or VAT number issued by the authority. Required for every type except CO_SUTS and AK_ARSSTC (program enrolments, which have no number); a call without it is rejected with 422 TAX_NUMBER_REQUIRED.' },
         collectFromDate: { type: ['string', 'null'], description: 'When tax collection should start. Pass null to start immediately, or an ISO date (YYYY-MM-DD) to defer to a future date. Omit entirely to leave collection unset (call set_registration_collection later instead).' },
         entityId: { type: 'string', description: 'Entity to register. Required for account-scoped keys; omit for entity-scoped keys.' },
       },
@@ -2326,7 +2327,7 @@ const TOOLS = [
           type: 'string',
           description: 'The tax number ID or obligation ID of the registration (from list_registrations — use taxNumberId or obligationId field)',
         },
-        taxNumber: { type: ['string', 'null'], description: 'New registration/VAT number. Pass null or an empty string to clear it. Omit entirely to leave it unchanged.' },
+        taxNumber: { type: ['string', 'null'], description: 'New registration/VAT number. A registration cannot be left without its number: null or an empty string is rejected with 422 TAX_NUMBER_REQUIRED. Omit entirely to leave it unchanged.' },
         extraFields: { type: 'object', additionalProperties: { type: ['string', 'null'] }, description: 'Secondary identifiers to merge in, e.g. { "fr_siret": "12345678901234" } or { "de_handelsregisternummer": "HRB 12345" }. A string value overwrites that key; an explicit null deletes it; an omitted key is left unchanged.' },
       },
       required: ['registrationId'],

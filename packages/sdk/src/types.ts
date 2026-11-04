@@ -2329,13 +2329,14 @@ export interface SetCollectionResponse {
 export interface AddRegistrationInput {
   type: 'VAT' | 'IOSS' | 'UNION_OSS' | 'NON_UNION_OSS' | 'VOEC';
   country?: string;
+  /** The number the authority issued. Required (422 TAX_NUMBER_REQUIRED without it), except for the CO_SUTS and AK_ARSSTC programme enrolments, which have none. */
   taxNumber?: string;
   iossNumber?: string;
   entityId?: string;
 }
 
 export interface UpdateRegistrationInput {
-  /** New registration/VAT number. Pass null or '' to clear it. Omit entirely to leave it unchanged. */
+  /** New registration/VAT number. A registration cannot be left without its number: null or '' is rejected with 422 TAX_NUMBER_REQUIRED. Omit entirely to leave it unchanged. */
   taxNumber?: string | null;
   /**
    * Secondary identifiers to merge in, per key: a string value overwrites
