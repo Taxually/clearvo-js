@@ -787,7 +787,7 @@ const TOOLS = [
               taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED).' },
               clientTaxCode: {
                 type: 'string',
-                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
+                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (reason HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
               },
               taxTreatment: {
                 type: 'string',
@@ -3704,7 +3704,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — header row plus up to 500 data rows. See the transaction_date/currency/country/net_amount/tax_amount required columns and the optional source_reference/tax_code columns documented for POST /v1/send/bulk. tax_code is the entity\'s own client tax code (mapped in advance via create_client_tax_code/list_client_tax_codes); a BLANK tax_code gets the platform default \'S\', which must itself be registered — otherwise every such row is held (clearanceStatus HELD_UNMAPPED_TAX_CODE, reason.codeSource \'default\', message naming the fix: register \'S\' or fill tax_code per row). A freshly onboarded entity with no codes registered yet should expect exactly this on its first upload.' },
+        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — header row plus up to 500 data rows. See the transaction_date/currency/country/net_amount/tax_amount required columns and the optional source_reference/tax_code columns documented for POST /v1/send/bulk. tax_code is the entity\'s own client tax code (mapped in advance via create_client_tax_code/list_client_tax_codes); a BLANK tax_code gets the platform default \'S\', which must itself be registered — otherwise every such row is held (reason HELD_UNMAPPED_TAX_CODE, reason.codeSource \'default\', message naming the fix: register \'S\' or fill tax_code per row). A freshly onboarded entity with no codes registered yet should expect exactly this on its first upload.' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['csvContent'],

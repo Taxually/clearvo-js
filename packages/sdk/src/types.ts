@@ -174,11 +174,6 @@ export interface SendResult extends InvoiceStatusFields {
   /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
   id?: string;
   /**
-   * CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD or PROCESSING.
-   * @deprecated Redundant with `status`; removed in a later release.
-   */
-  outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING';
-  /**
    * Machine-readable warnings. A `RECEIVED` result with a `PROCESSING_DELAYED` warning means a temporary problem interrupted
    * processing after the document was stored: do not resend, poll getInvoiceStatus or subscribe to `invoice.status_changed`; Clearvo
    * re-runs it. Also includes `IDEMPOTENCY_KEY_REUSED_ACROSS_DOCUMENTS` (your x-idempotency-key was already used for a
@@ -3220,7 +3215,7 @@ export interface ListMandateTransactionsParams {
 }
 
 export type MandateTransactionTerminalArtifact =
-  | { type: 'einvoice'; einvoicingRecordId: string; status: InvoiceStatus; stage: InvoiceStage | null; reason: InvoiceReason; statusLabel: string; /** @deprecated Stored reason code; use `reason`. */ clearanceStatus?: string; /** @deprecated Use `statusLabel`. */ clearanceStatusLabel?: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
+  | { type: 'einvoice'; einvoicingRecordId: string; status: InvoiceStatus; stage: InvoiceStage | null; reason: InvoiceReason; statusLabel: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
   | { type: 'period'; periodId: string; periodKey: string; periodStatus: string; closedAt: string | null; submittedAt: string | null; filedAt: string | null }
   | { type: 'recorded_only' }
   | null;
@@ -4557,8 +4552,6 @@ export interface SendRejectionBody {
   status?: 'REJECTED' | 'WAITING_FOR_YOU';
   reason?: 'REJECTED' | 'NEEDS_INFO' | 'UNROUTABLE';
   stage?: null;
-  /** @deprecated Redundant with `status`; removed in a later release. */
-  outcome?: 'REJECTED' | 'NEEDS_INFO';
   /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   nextStep?: NextStep | null;
