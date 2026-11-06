@@ -538,6 +538,8 @@ export interface EsCountrySpecific {
  * auth/plan (401/403) and an edited resend (409) are real HTTP errors.
  */
 export interface SubmitInvoiceInput {
+  /** Supporting documents sent with the invoice (BG-24). Never embedded in the e-invoice; offered as downloads. Limits and refusals: see `CustomerAttachment`. */
+  attachments?: CustomerAttachment[];
   documentType?: 'invoice' | 'credit_note' | 'debit_note';
   invoiceNumber: string;
   /**
@@ -970,6 +972,70 @@ export interface ReceivedInvoiceFields {
    * status and statusLabel). null otherwise.
    */
   supersededBy?: { id: string; invoiceNumber?: string; status?: string; statusLabel?: string } | null;
+}
+
+/**
+ * A supporting file listed on an invoice (GET /v1/invoices/{id}/attachments). Attachments are never part of the e-invoice
+ * document: no XML or PDF embeds them. `downloadable` is true only when Clearvo stores the file; a link-only attachment
+ * carries its `externalUrl` instead. The bytes come from `downloadInvoiceAttachment(id, index)`.
+ */
+export interface InvoiceAttachment {
+  /** The attachment reference (BT-122). */
+  id: string | null;
+  /** Position in the list; pass it to `downloadInvoiceAttachment`. */
+  index: number;
+  fileName: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  sha256: string | null;
+  description: string | null;
+  externalUrl: string | null;
+  /** True when Clearvo stores the file and it can be downloaded. */
+  downloadable: boolean;
+  /** Relative URL `/v1/invoices/{id}/attachments/{index}`, or null for a link-only attachment. */
+  downloadUrl: string | null;
+  /** `sender` on an invoice you issued, `supplier` on one you received. */
+  origin: 'sender' | 'supplier';
+}
+
+/** GET /v1/invoices/{id}/attachments. `attachments` is empty when the invoice has none. */
+export interface ListInvoiceAttachmentsResponse {
+  ok: true;
+  invoiceId: string;
+  attachments: InvoiceAttachment[];
+}
+
+/** A downloaded invoice attachment, byte for byte. `fileName` comes from the Content-Disposition header, `mimeType` from Content-Type. */
+export interface DownloadedInvoiceAttachment {
+  data: Buffer;
+  fileName: string | null;
+  mimeType: string;
+}
+
+/**
+ * One supporting document (EN 16931 BG-24) in `SubmitInvoiceInput.attachments`. Send either the file (`contentBase64`
+ * with `fileName` and `mimeType`) or a link (`externalUrl`, http or https). The file is stored outside the invoice and is
+ * NEVER embedded in the e-invoice XML or PDF; it reaches the customer as a download on the hosted invoice page.
+ *
+ * Limits: file types pdf, csv, xlsx, xls, ods, xml, png, jpg (jpeg) and txt, with the extension and `mimeType` agreeing;
+ * at most 10 MB per file, 25 MB in total and 20 attachments per invoice. A breach is a 422 naming the attachment:
+ * `TOO_MANY_ATTACHMENTS`, `ATTACHMENT_INVALID`, `ATTACHMENT_METADATA_MISSING`, `ATTACHMENT_CONTENT_INVALID`,
+ * `ATTACHMENT_TYPE_NOT_ALLOWED`, `ATTACHMENT_TYPE_MISMATCH`, `ATTACHMENT_TOO_LARGE`, `ATTACHMENTS_TOTAL_TOO_LARGE`,
+ * `ATTACHMENT_URL_INVALID` or `ATTACHMENT_MALWARE_DETECTED`; nothing is stored then. A 503 `ATTACHMENT_STORAGE_UNAVAILABLE` is retryable.
+ */
+export interface CustomerAttachment {
+  /** Reference identifier (BT-122). */
+  reference: string;
+  /** Description of the document (BT-123). */
+  description?: string;
+  /** External URL (BT-124), http or https; a link-only attachment is not downloadable from Clearvo. */
+  externalUrl?: string;
+  /** Raw base64 file content (BT-125), no `data:` prefix. Needs `fileName` and `mimeType`. */
+  contentBase64?: string;
+  /** MIME type, e.g. application/pdf; must agree with the `fileName` extension. */
+  mimeType?: string;
+  /** File name with an accepted extension. */
+  fileName?: string;
 }
 
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */

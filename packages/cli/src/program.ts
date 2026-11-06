@@ -458,6 +458,36 @@ export function createProgram(): Command {
       print(await api('GET', `/invoices${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
     });
 
+  // MCP twin: list_invoice_attachments (GET /v1/invoices/{id}/attachments). The download has no MCP twin: it is binary.
+  invoices
+    .command('attachments <id>')
+    .description('List the supporting files of an invoice (sent with one you issued, or received on one): reference, fileName, mimeType, sizeBytes, sha256, downloadable and downloadUrl. They are never part of the e-invoice document. <id> is the Clearvo id or the reference id')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/invoices/${encodeURIComponent(id)}/attachments`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
+  invoices
+    .command('download-attachment <id> <index>')
+    .description('Download one stored supporting file of an invoice, byte for byte. <index> is the index from "invoices attachments". Writes to --out, or to the file name the server gives in the current directory')
+    .option('--out <path>', 'Where to write the file (default: the attachment\'s own file name in the current directory)')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .action(async (id: string, index: string, opts: { out?: string; entity?: string }) => {
+      if (!/^\d+$/.test(index)) {
+        console.error('<index> must be a non-negative integer (the index from "invoices attachments").');
+        process.exit(2);
+      }
+      const res = await apiFile(`/invoices/${encodeURIComponent(id)}/attachments/${index}`, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      const disposition = res.headers.get('content-disposition') ?? '';
+      const named = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)|filename\s*=\s*"?([^";]+)"?/.exec(disposition);
+      let serverName = '';
+      try { serverName = named ? decodeURIComponent((named[1] ?? named[2]).trim()) : ''; } catch { serverName = named ? (named[1] ?? named[2]).trim() : ''; }
+      const target = opts.out ?? (serverName ? basename(serverName) : `attachment-${index}`);
+      writeFileSync(target, Buffer.from(await res.arrayBuffer()));
+      console.log(`Saved ${target}`);
+    });
+
   // ── clearvo calculate <file> ─────────────────────────────────────────────────
   // The JSON file carries the parties (supplier/customer) directly — there is
   // no per-field CLI override for them; edit the file instead.
