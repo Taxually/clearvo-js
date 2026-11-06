@@ -132,6 +132,7 @@ import type {
   ItProfileResponse,
   UpdateBusinessStatusInput,
   UpdateBusinessStatusResponse,
+  RevokeHostedPageResponse,
   FrInboundPollResponse,
   SubmitInvoicesBulkInput,
   SubmitInvoicesBulkAsyncInput,
@@ -1217,6 +1218,20 @@ export class ClearvoClient {
       'PATCH',
       `/invoices/${encodeURIComponent(id)}/business-status`,
       body,
+      entityId ? { 'x-entity-id': entityId } : undefined
+    );
+  }
+
+  // ── Hosted invoice page ───────────────────────────────────────────────────
+  // Revokes every hosted-page link of one invoice (the customer's emailed link, the link in
+  // hostedPage.url and dashboard staff links). The invoice itself is untouched; to give the customer a
+  // fresh link, resend the notification. Revoking again is harmless (revoked: 0).
+
+  revokeHostedPage(id: string, entityId?: string): Promise<RevokeHostedPageResponse> {
+    return this.request(
+      'DELETE',
+      `/invoices/${encodeURIComponent(id)}/hosted-page`,
+      undefined,
       entityId ? { 'x-entity-id': entityId } : undefined
     );
   }

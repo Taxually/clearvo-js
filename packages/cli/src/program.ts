@@ -416,6 +416,19 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo invoices revoke-hosted-page <id> ─────────────────────────────────
+  // Revokes every hosted-page link of an invoice: the emailed customer link, the
+  // link in hostedPage.url and dashboard staff links. The invoice is untouched.
+  program
+    .command('revoke-hosted-page <id>')
+    .description('Revoke every hosted invoice page link of an invoice (the customer link stops working; the invoice is untouched)')
+    .option('--entity <entityId>', 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('DELETE', `/invoices/${encodeURIComponent(id)}/hosted-page`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo reconciliation [id] ───────────────────────────────────────────────
   // ES SII block 3. Read-only: the AEAT Consulta reconciliation sweep runs on its
   // own schedule, never triggerable on demand. With no id, returns the latest run's

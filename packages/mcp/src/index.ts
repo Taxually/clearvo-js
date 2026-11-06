@@ -1561,6 +1561,19 @@ const TOOLS = [
         confirmationToken: { type: 'string', description: 'Confirmation token for the check-first step (operation invoice.fix).' },
         entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys.' },
       },
+    name: 'revoke_invoice_hosted_page',
+    description:
+      'Revoke every hosted-page link of one invoice (the customer link in the email the customer received, any link shown in get_invoice hostedPage.url, and dashboard staff links). ' +
+      'The page then shows "this link has been revoked" with no way to request a new one, and hostedPage.url becomes null. ' +
+      'The invoice itself is untouched. To give the customer a fresh link afterwards, send the notification again from the dashboard or the API (POST /v1/invoices/{id}/resend-notification). ' +
+      'Revoking again is harmless (revoked: 0). 404 if unknown. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice id or referenceId (from list_invoices or get_invoice).' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
     },
   },
   {
@@ -1876,6 +1889,7 @@ const TOOLS = [
     description:
       'List invoices previously submitted through Clearvo. ' +
       'Filter by country, status, reason, customer response, or date. ' +
+      'Every invoice also carries hostedPage ({ sentToCustomer, sentAt, url, expiresAt }) for the customer-facing invoice page; url is null when there is no live link. ' +
       'An invoice held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
       'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), and per invoice `status`, `stage`, `reason`, `statusLabel`, `terminal`, `issues[]`, `customerResponse` and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING or WAITING_FOR_YOU, ' +
@@ -1918,6 +1932,7 @@ const TOOLS = [
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
       'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
+      'hostedPage ({ sentToCustomer, sentAt, url, expiresAt }: the customer-facing invoice page the customer was emailed; url is the current link, null when the country or route has no page, it was never sent, or the link expired or was revoked; revoke it with revoke_invoice_hosted_page), ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
       'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
@@ -4616,6 +4631,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'fix_invoice': {
       const { id, entityId, ...body } = args as { id: string; entityId?: string; fields: Record<string, unknown>; clear?: string[]; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    case 'revoke_invoice_hosted_page': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('DELETE', `/invoices/${encodeURIComponent(id)}/hosted-page`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'update_business_status': {

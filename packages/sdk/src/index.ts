@@ -20,6 +20,8 @@ export type {
   SendRejectionEntry,
   SendRejectionBody,
   InvoiceRecordTimestamps,
+  InvoiceHostedPage,
+  RevokeHostedPageResponse,
   Entity,
   CreateEntityInput,
   ListEntitiesParams,
