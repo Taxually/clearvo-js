@@ -19,6 +19,8 @@ import type {
   EstimateDutiesInput,
   DutiesEstimateResult,
   AddressErasureInput,
+  ListInvoiceAttachmentsResponse,
+  DownloadedInvoiceAttachment,
   AddressErasureResult,
   ImportSettlementInput,
   ImportSettlementResult,
@@ -365,6 +367,34 @@ export class ClearvoClient {
     if (params.receivedAfter)    qs.set('receivedAfter', params.receivedAfter);
     const q = qs.toString();
     return this.request('GET', `/invoices${q ? `?${q}` : ''}`);
+  }
+
+  /**
+   * GET /invoices/{id}/attachments: the supporting files sent with an invoice you issued or received on one. `id` is the Clearvo id or the
+   * reference id (409 AMBIGUOUS_REFERENCE when a reference matches several: use the Clearvo id; 404 INVOICE_NOT_FOUND). Attachments are
+   * never part of the e-invoice document. A stored file has `downloadable: true`; a link-only one carries `externalUrl`.
+   */
+  listInvoiceAttachments(id: string): Promise<ListInvoiceAttachmentsResponse> {
+    return this.request('GET', `/invoices/${encodeURIComponent(id)}/attachments`);
+  }
+
+  /**
+   * GET /invoices/{id}/attachments/{index}: one stored supporting file, byte for byte. `index` is the `index` from `listInvoiceAttachments`.
+   * Errors surface as ClearvoError: 404 INVOICE_NOT_FOUND, 404 ATTACHMENT_NOT_FOUND (no such position, or a link-only attachment),
+   * 409 AMBIGUOUS_REFERENCE, 500 ATTACHMENT_UNAVAILABLE (retryable).
+   */
+  async downloadInvoiceAttachment(id: string, index: number): Promise<DownloadedInvoiceAttachment> {
+    const response = await this.requestFile(`/invoices/${encodeURIComponent(id)}/attachments/${encodeURIComponent(String(index))}`);
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(disposition);
+    const plain = /filename\s*=\s*"?([^";]+)"?/.exec(disposition);
+    let fileName: string | null = null;
+    try { fileName = star ? decodeURIComponent(star[1].trim()) : plain ? plain[1].trim() : null; } catch { fileName = plain ? plain[1].trim() : null; }
+    return {
+      data: Buffer.from(await response.arrayBuffer()),
+      fileName,
+      mimeType: (response.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim(),
+    };
   }
 
   // ── Tax Calculation ───────────────────────────────────────────────────────────

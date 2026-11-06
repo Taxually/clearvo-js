@@ -1517,6 +1517,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_invoice_attachments',
+    description:
+      'List the supporting files sent with an invoice you issued (attachments[] on submit_invoice) or received: reference, fileName, description, mimeType, sizeBytes, sha256, externalUrl, ' +
+      'downloadable (true when Clearvo stores the file) and downloadUrl (GET /v1/invoices/{id}/attachments/{index} with the same credentials; the file downloads as an attachment of its own MIME type). ' +
+      'Attachments are never part of the e-invoice document (no XML or PDF embeds them): they reach the customer as downloads on the hosted invoice page. ' +
+      'Allowed when sending: pdf, csv, xlsx, xls, ods, xml, png, jpg, txt (extension and mimeType must agree), up to 10 MB per file, 25 MB in total, 20 per invoice. ' +
+      'A send is refused with 422 ATTACHMENT_TYPE_NOT_ALLOWED, ATTACHMENT_TYPE_MISMATCH, ATTACHMENT_TOO_LARGE, ATTACHMENTS_TOTAL_TOO_LARGE, TOO_MANY_ATTACHMENTS or ATTACHMENT_MALWARE_DETECTED, naming the attachment reference; nothing is stored then.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'Clearvo invoice ID or reference ID, as returned by submit_invoice or list_invoices.' } },
+    },
+  },
+  {
     name: 'update_business_status',
     description:
       'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice. The one shared ' +
@@ -4644,6 +4658,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const id = args.id as string;
       return callApi('GET', `/invoices/${encodeURIComponent(id)}`);
     }
+
+    case 'list_invoice_attachments':
+      return callApi('GET', `/invoices/${encodeURIComponent(args.id as string)}/attachments`);
 
     case 'list_products': {
       const qs = new URLSearchParams();
