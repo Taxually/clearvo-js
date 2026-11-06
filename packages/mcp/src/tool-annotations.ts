@@ -58,6 +58,8 @@ const DESTRUCTIVE = new Set<string>([
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi',
   'update_business_status', 'update_invoice_business_status',
+  // Kills the customer's emailed invoice link.
+  'revoke_invoice_hosted_page',
   // Removes one of the customer's own tests from new runs.
   'archive_test_case',
   // Grant access / open an outbound data channel.

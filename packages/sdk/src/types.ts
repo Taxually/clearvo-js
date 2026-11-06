@@ -972,8 +972,28 @@ export interface ReceivedInvoiceFields {
   supersededBy?: { id: string; invoiceNumber?: string; status?: string; statusLabel?: string } | null;
 }
 
+/** The customer-facing invoice page of one invoice, as `GET /v1/invoices` and `GET /v1/invoices/{id}` report it. */
+export interface InvoiceHostedPage {
+  /** True once the customer has been emailed the link. */
+  sentToCustomer: boolean;
+  /** When the customer was emailed (ISO 8601); null if never. */
+  sentAt: string | null;
+  /** The current customer link. Null when there is no live link: the country or route has no page, it was never sent, or the link expired or was revoked. */
+  url: string | null;
+  /** When the current link stops working (ISO 8601); null when `url` is null. */
+  expiresAt: string | null;
+}
+
+/** `DELETE /v1/invoices/{id}/hosted-page`. */
+export interface RevokeHostedPageResponse {
+  /** Stored links revoked by this call; 0 when there was nothing left to revoke (revoking again is harmless). */
+  revoked: number;
+}
+
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
 export interface InvoiceRecordTimestamps {
+  /** The customer-facing invoice page: whether it was sent, and the current link while one is live. */
+  hostedPage?: InvoiceHostedPage;
   /**
    * Null while the invoice is held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE): the tax code decides the tax treatment and the
    * treatment decides the mandate, so until the code is mapped the invoice has no country. The `country` filter on listInvoices never matches it.
