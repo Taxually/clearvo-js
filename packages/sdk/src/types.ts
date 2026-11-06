@@ -4685,6 +4685,7 @@ export type WebhookEventName =
   | 'invoice.duplicate'
   | 'invoice.undelivered'
   | 'invoice.pending'
+  | 'invoice.unroutable'
   | 'ap.decision'
   | '*'
   | (string & {});
