@@ -1107,7 +1107,7 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
-  // ── clearvo receive simulate ─────────────────────────────────────────────────
+  // ── clearvo einvoicing-settings ──────────────────────────────────────────────
   // clearvo einvoicing-settings get|set — GET/PATCH /v1/einvoicing/settings. The optional live check of the supplier and
   // customer tax numbers on each invoice sent (off by default; a problem is only a warning). Separate from tax calculation settings.
   const einvoicingSettings = program
@@ -1139,6 +1139,7 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo receive simulate ─────────────────────────────────────────────────
   // Sandbox only: creates sample received invoices / credit notes through the real inbound pipeline.
   const receive = program.command('receive').description('Received (inbound) invoices');
   receive
