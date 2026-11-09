@@ -1986,7 +1986,7 @@ const TOOLS = [
       'Register a new webhook endpoint to receive real-time invoice status events. ' +
       'The response includes a signing secret (shown once — store it securely) used to verify ' +
       'payload authenticity via HMAC-SHA256. ' +
-      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
+      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.unroutable (a Peppol invoice with no reachable receiver: supply the electronicAddress and POST /v1/invoices/{id}/deliver), ' +
       'invoice.pending, product.classification_changed, ' +
       'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, status, stage, reasonCode, terminal, issues, customerResponse, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
@@ -2009,7 +2009,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
+          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
         },
       },
       required: ['url'],
@@ -2038,7 +2038,7 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         webhookId: { type: 'string', description: 'The webhook ID to test (from list_webhooks or create_webhook)' },
-        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.business_status_changed or invoice.status_changed' },
+        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, invoice.business_status_changed or invoice.status_changed' },
         to: { type: 'string', description: 'Only with event invoice.status_changed: the new status the sample reports, one of the ten statuses, e.g. WAITING_FOR_YOU, REJECTED, COMPLETED. Default: the invoice\'s own status, else COMPLETED. Any other event with `to` is a 400.' },
         invoiceId: { type: 'string', description: 'Optional: the ID of one of your invoices (from list_invoices) to build the test payload from' },
       },
