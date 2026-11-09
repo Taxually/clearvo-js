@@ -101,6 +101,8 @@ export type {
   TaxCalcParty,
   TaxNumberValidateResponse,
   CountryRequirements,
+  CountryCoverageEntry,
+  CountryCoverageResponse,
   FixWhere,
   FindingField,
   FindingFix,

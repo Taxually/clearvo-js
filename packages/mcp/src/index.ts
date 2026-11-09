@@ -1807,6 +1807,15 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_country_coverage',
+    description:
+      'List the countries and e-invoicing or reporting mandates Taxually covers, with a customer-facing status ' +
+      '(live, beta, coming_soon, not_supported or no_mandate) and the mandate go-live date where it is confirmed. ' +
+      'Use this to answer "do you support e-invoicing in country X" before promising anything. Public, customer-safe ' +
+      'information only: a country that is not listed has no confirmed status yet.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
     name: 'get_requirements',
     description:
       'Get the e-invoicing and tax requirements for a specific country. ' +
@@ -4634,6 +4643,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       formData.append('document', new Blob([buffer], { type: 'application/pdf' }), 'certificate.pdf');
       return callApi('POST', `/tax/exemptions/${encodeURIComponent(certificateId)}/document`, formData, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
+
+    case 'list_country_coverage':
+      return callApi('GET', '/coverage');
 
     case 'get_requirements': {
       const country = args.country as string;
