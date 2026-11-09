@@ -2924,6 +2924,35 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_einvoicing_settings',
+    description:
+      'Read the E-Invoicing settings. Today that is one setting: validateTaxNumbersOnSend, whether the supplier and customer ' +
+      'tax numbers on each invoice sent with submit_invoice are also checked live with the tax authority (for example VIES in the EU). ' +
+      'Off by default. A number reported invalid, or an authority that cannot be reached, only adds a warning to the invoice ' +
+      '(returned as `warnings`): it never rejects the invoice, stops it being sent or changes its status. Sending can take a few ' +
+      'seconds longer while the check runs. This is separate from the Tax Calculations settings and does not affect calculate_tax. ' +
+      'With an entity-scoped key the response shows that entity\'s own choice (null = it follows the account setting) and the value ' +
+      'that applies (effectiveValidateTaxNumbersOnSend). The response also carries the label and description to show the user.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'update_einvoicing_settings',
+    description:
+      'Change the E-Invoicing settings (see get_einvoicing_settings). With an entity-scoped key this sets that entity\'s own ' +
+      'choice, and null clears it so the entity follows the account setting again. With an organisation-scoped key it sets the ' +
+      'account default that every entity without its own choice follows. Changing it never affects Tax Calculations.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        validateTaxNumbersOnSend: {
+          type: ['boolean', 'null'],
+          description:
+            'true to also check the supplier and customer tax numbers live with the tax authority whenever an invoice is sent; false to turn the check off. Default false. A failed or unreachable check only adds a warning to the invoice: it never rejects the invoice or blocks sending. null clears an entity\'s own choice (entity-scoped key only).',
+        },
+      },
+    },
+  },
+  {
     name: 'get_reporting_obligations',
     description:
       'Read the domestic e-reporting/e-invoicing regime toggles under the "Tax Reporting" solution for this ' +
@@ -4925,6 +4954,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'update_tax_settings': {
       const { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, defaultCompanyCode, confirmed } = args;
       return callApi('PATCH', '/tax/settings', { vatValidationMode, vatUnverifiableTreatment, defaultPriceIncludesTax, defaultTaxCategorySlug, usAddressPrecision, dutiesEnabled, dutyRatePolicyForHs6, defaultCountryOfOrigin, apTolerance, apPoDisposition, defaultCompanyCode, confirmed });
+    }
+
+    case 'get_einvoicing_settings':
+      return callApi('GET', '/einvoicing/settings');
+
+    case 'update_einvoicing_settings': {
+      const { validateTaxNumbersOnSend } = args as { validateTaxNumbersOnSend?: boolean | null };
+      return callApi('PATCH', '/einvoicing/settings', { validateTaxNumbersOnSend });
     }
 
     case 'get_reporting_obligations':

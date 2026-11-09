@@ -82,6 +82,8 @@ import type {
   ListCalculationRequestsParams,
   ListCalculationRequestsResponse,
   ListTaxCalculationsResponse,
+  EinvoicingSettingsResponse,
+  UpdateEinvoicingSettingsInput,
   ListReportingObligationsResponse,
   UpdateReportingObligationsInput,
   UpdateReportingObligationsResponse,
@@ -760,6 +762,25 @@ export class ClearvoClient {
   }
 
   // ── Tax Reporting obligations ────────────────────────────────────────────────
+
+  /**
+   * Read the E-Invoicing settings (separate from the Tax Calculations settings). Today: `validateTaxNumbersOnSend`,
+   * the optional live check of the supplier and customer tax numbers with the tax authority on each invoice sent
+   * (off by default; a problem is only a warning). With an entity-scoped key the value is that entity's own choice
+   * (`null` = follows the account); with an organisation-scoped key pass `entityId` and the value is the account setting.
+   */
+  getEinvoicingSettings(entityId?: string): Promise<EinvoicingSettingsResponse> {
+    return this.request('GET', '/einvoicing/settings', undefined, entityHeaders(entityId));
+  }
+
+  /**
+   * Change the E-Invoicing settings. An entity-scoped key sets that entity's own choice (`null` clears it and the
+   * entity follows the account again); an organisation-scoped key (pass `entityId`) sets the account setting
+   * (`true`/`false` only; `null` is a 400). Returns the same body as getEinvoicingSettings().
+   */
+  updateEinvoicingSettings(input: UpdateEinvoicingSettingsInput, entityId?: string): Promise<EinvoicingSettingsResponse> {
+    return this.request('PATCH', '/einvoicing/settings', input, entityHeaders(entityId));
+  }
 
   /**
    * Per-regime reporting toggles (France e-reporting, Spain SII) for the entity.

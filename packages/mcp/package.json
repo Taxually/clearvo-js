@@ -20,6 +20,7 @@
     "test:test-run-tools": "node scripts/verify-test-run-tools.js",
     "test:rules-engine-tools": "node scripts/verify-rules-engine-tools.js",
     "test:filings-tools": "node scripts/verify-filings-tools.js",
+    "test:einvoicing-settings-tools": "node scripts/verify-einvoicing-settings-tools.js",
     "test:send-contract": "node scripts/verify-send-contract.js",
     "test:calculate-parity": "node scripts/verify-calculate-request-parity.js",
     "typecheck": "tsc --noEmit",

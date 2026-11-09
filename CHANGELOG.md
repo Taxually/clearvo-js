@@ -4,6 +4,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — E-Invoicing settings: check tax numbers when sending (publish after the backend PR is live)
+
+`GET` and `PATCH /v1/einvoicing/settings` read and set `validateTaxNumbersOnSend`, the optional live check of the supplier and customer tax numbers with the tax authority on every invoice sent. It is off by default and a problem is only a warning, never a rejection. It is separate from the Tax Calculations settings, which no longer carry it. An entity-scoped key sets that entity's own choice (`null` clears it and the entity follows the account); an organisation-scoped key (with `x-entity-id`) sets the account setting (`true`/`false` only).
+
+- SDK: `getEinvoicingSettings(entityId?)` and `updateEinvoicingSettings({ validateTaxNumbersOnSend }, entityId?)`; new types `EinvoicingSettingsResponse`, `UpdateEinvoicingSettingsInput`.
+- MCP: new tools `get_einvoicing_settings` (read-only) and `update_einvoicing_settings`.
+- CLI: `clearvo einvoicing-settings get` and `clearvo einvoicing-settings set --validate-tax-numbers-on-send true|false|inherit [--entity <id>]`.
+
 ## Unreleased — invoice attachments: list and download (publish after the backend invoice-attachments PR is live)
 
 Supporting files sent with an invoice (`attachments[]` on `POST /v1/send`) are stored outside the invoice and never embedded in the e-invoice XML or PDF; they reach the customer as downloads on the hosted invoice page. `GET /v1/invoices/{id}/attachments` lists them (reference, fileName, mimeType, sizeBytes, sha256, description, externalUrl, `downloadable`, `downloadUrl`, `origin`) and `GET /v1/invoices/{id}/attachments/{index}` returns a stored file byte for byte. Limits when sending: pdf, csv, xlsx, xls, ods, xml, png, jpg and txt (extension and `mimeType` must agree), 10 MB per file, 25 MB in total, 20 per invoice; a breach is a 422 naming the attachment.

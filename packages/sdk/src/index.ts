@@ -113,6 +113,8 @@ export type {
   SetCollectionResponse,
   UpdateRegistrationInput,
   UpdateRegistrationResponse,
+  EinvoicingSettingsResponse,
+  UpdateEinvoicingSettingsInput,
   ReportingObligationRegime,
   RegimeCode,
   RegimeSubmissionMode,

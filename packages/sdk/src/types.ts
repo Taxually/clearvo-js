@@ -2542,6 +2542,34 @@ export interface ListCalculationRequestsResponse {
   groups?: Array<Record<string, unknown>>;
 }
 
+// ── E-Invoicing settings ─────────────────────────────────────────────────────
+
+/** GET/PATCH /v1/einvoicing/settings response. Separate from the Tax Calculations settings. */
+export interface EinvoicingSettingsResponse {
+  ok: boolean;
+  settings: {
+    /**
+     * The value at the level of the key you call with: an entity-scoped key sees that entity's own
+     * choice (`null` = it follows the account setting); an organisation-scoped key sees the account setting.
+     */
+    validateTaxNumbersOnSend: boolean | null;
+    /** What applies to the entity the request names: its own choice, else the account setting, else false. */
+    effectiveValidateTaxNumbersOnSend: boolean;
+  };
+  /** The label and description to show next to the setting. */
+  validateTaxNumbersOnSendCopy: { label: string; description: string };
+}
+
+/**
+ * Body of PATCH /v1/einvoicing/settings. `true` also checks the supplier and customer tax numbers live with the
+ * tax authority whenever an invoice is sent (a problem is only a warning, never a rejection); `false` turns it off.
+ * `null` clears an entity's own choice so it follows the account setting; only an entity-scoped key may send it
+ * (an organisation-scoped key gets 400).
+ */
+export interface UpdateEinvoicingSettingsInput {
+  validateTaxNumbersOnSend: boolean | null;
+}
+
 // ── Tax Reporting obligations ────────────────────────────────────────────────
 
 /** Customer-toggleable reporting regimes surfaced by GET /tax/reporting-obligations. */

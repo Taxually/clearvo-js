@@ -1108,6 +1108,37 @@ export function createProgram(): Command {
     });
   
   // ── clearvo receive simulate ─────────────────────────────────────────────────
+  // clearvo einvoicing-settings get|set — GET/PATCH /v1/einvoicing/settings. The optional live check of the supplier and
+  // customer tax numbers on each invoice sent (off by default; a problem is only a warning). Separate from tax calculation settings.
+  const einvoicingSettings = program
+    .command('einvoicing-settings')
+    .description('E-Invoicing settings, such as the optional live tax-number check on sent invoices (separate from tax calculation settings)');
+  einvoicingSettings
+    .command('get')
+    .description('Show the E-Invoicing settings')
+    .option('--entity <entityId>', 'Entity ID (required for organisation-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/einvoicing/settings', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+  einvoicingSettings
+    .command('set')
+    .description('Turn the live tax-number check on sent invoices on or off')
+    .requiredOption('--validate-tax-numbers-on-send <value>', 'true or false; "inherit" clears an entity\'s own choice so it follows the account (entity-scoped keys only)')
+    .option('--entity <entityId>', 'Entity ID (required for organisation-scoped keys, which set the account setting)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { validateTaxNumbersOnSend: string; entity?: string; pretty?: boolean }) => {
+      const raw = String(opts.validateTaxNumbersOnSend).toLowerCase();
+      const value = raw === 'true' ? true : raw === 'false' ? false : raw === 'inherit' ? null : undefined;
+      if (value === undefined) {
+        console.error('--validate-tax-numbers-on-send must be true, false or inherit');
+        process.exit(1);
+      }
+      const result = await api('PATCH', '/einvoicing/settings', { validateTaxNumbersOnSend: value }, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // Sandbox only: creates sample received invoices / credit notes through the real inbound pipeline.
   const receive = program.command('receive').description('Received (inbound) invoices');
   receive
