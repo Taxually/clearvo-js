@@ -147,6 +147,9 @@ import type {
   SuppressRuleParams,
   SuppressRuleResponse,
   UnsuppressRuleResponse,
+  EnableRuleParams,
+  EnableRuleResponse,
+  DisableRuleResponse,
   ListRuleVersionsResponse,
   SimulateRuleInput,
   SimulateRuleResponse,
@@ -1237,6 +1240,17 @@ export class ClearvoClient {
   /** Remove this key's own scope's suppression of a platform-default rule, if one exists — the default resumes firing for this scope. 404 if no active suppression exists. */
   unsuppressRule(ruleId: string, entityId?: string): Promise<UnsuppressRuleResponse> {
     return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/suppress`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn ON, for this key's own scope, a platform-default (is_system) rule that is off by default (opt-in): listRules({ includeDefaults: true }) shows `defaultEnabled: false`, `enabledForScope` and `canEnable`. The rule then applies at this scope and everywhere beneath it. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule, or one locked by the platform is refused 422 RULE_NOT_ENABLEABLE. */
+  enableRule(ruleId: string, params: EnableRuleParams = {}): Promise<EnableRuleResponse> {
+    const { entityId, ...body } = params;
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn OFF again an opt-in rule this key's own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope. */
+  disableRule(ruleId: string, entityId?: string): Promise<DisableRuleResponse> {
+    return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   /** A rule's own rules_versions history, newest first. */

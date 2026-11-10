@@ -4015,7 +4015,7 @@ const TOOLS = [
         direction: { type: 'string', enum: ['purchase', 'sale'], description: 'Inclusive of direction-less rows — see description.' },
         conditionProperty: { type: 'string', description: 'Only rules with a condition on this catalog property.' },
         conditionValue: { type: 'string', description: 'Combined with conditionProperty — narrows to a condition whose value equals this.' },
-        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing).' },
+        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing). A default that is off by default shows defaultEnabled false, enabledForScope and canEnable; turn it on with enable_rule.' },
         companyCode: { type: 'string', description: 'Only rules scoped to this company code (case-insensitive).' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
@@ -4143,6 +4143,28 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'enable_rule',
+    description: 'Turn ON, for this key\'s own scope, a platform-default rule that is off by default (list_rules with includeDefaults shows defaultEnabled false, enabledForScope and canEnable). Example: the warning shown when a customer\'s tax number is reported not valid by a tax authority register at send time. The rule applies at this scope and everywhere beneath it; it never blocks a send unless it is an error rule. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule and a rule locked by the platform are refused (RULE_NOT_ENABLEABLE). Available on every plan. Audited.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'A rules-engine rule id (UUID) from list_rules with includeDefaults.' },
+        reason: { type: 'string', description: 'Optional free-text note on why this scope turned it on.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'disable_rule',
+    description: 'Turn OFF again an opt-in platform-default rule that this key\'s own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string', description: 'A rules-engine rule id (UUID).' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
       required: ['id'],
     },
   },
@@ -5227,6 +5249,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'unsuppress_rule': {
       const { id, entityId } = args as { id: string; entityId?: string };
       return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'enable_rule': {
+      const { id, reason, entityId } = args as { id: string; reason?: string; entityId?: string };
+      return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, { reason }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'disable_rule': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
     case 'simulate_rule': {
       const { id, entityId, ...body } = args as Record<string, unknown> & { id?: string; entityId?: string };

@@ -3923,7 +3923,7 @@ export interface ListRulesParams {
   conditionProperty?: string;
   /** Combined with conditionProperty — narrows to a condition whose value equals this. */
   conditionValue?: string;
-  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). */
+  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). A default that is off by default (opt-in) also carries `defaultEnabled: false`, `enabledForScope`, `enabledByAncestor` and `canEnable`; turn it on with enableRule(). */
   includeDefaults?: boolean;
   /** Only rules scoped to this company code (case-insensitive). */
   companyCode?: string;
@@ -3957,6 +3957,14 @@ export interface DefaultRuleItem {
   suppressed: boolean;
   /** True when `suppressed` is true but NOT via the caller's own exact scope — a wider scope (this entity's organisation, or its tenant) suppressed it instead. The caller cannot toggle this off directly (canSuppress is also false whenever this is true); they'd need to act from that wider scope. */
   suppressedByAncestor: boolean;
+  /** Only present for a rule that is off by default (opt-in): false. A rule that is on by default omits the four opt-in fields. */
+  defaultEnabled?: boolean;
+  /** Opt-in rules only: on for the caller's scope, through its own enable or a wider scope's. */
+  enabledForScope?: boolean;
+  /** Opt-in rules only: true when `enabledForScope` is true through a wider scope (organisation or tenant) rather than the caller's own. Turn it off from that scope. */
+  enabledByAncestor?: boolean;
+  /** Opt-in rules only: true when the caller's own scope may turn the rule on with enableRule(). */
+  canEnable?: boolean;
   cannotDisableReason: string | null;
   /** Rule-list-item-shaped fields so a default row can render exactly like any other rule row. A validation_rules row has no rules-engine status/enabled/conditions concept at all — it's a standing legal-mandate check, always ACTIVE/enabled, never scoped by transactionDirection, so those three are fixed rather than derived. */
   status: RuleStatus;
@@ -4036,6 +4044,22 @@ export interface SuppressRuleResponse {
 export interface UnsuppressRuleResponse {
   ok: true;
   suppressed: false;
+}
+
+export interface EnableRuleParams {
+  /** Optional free-text note on why this scope turned the rule on (1-2000 chars if present). */
+  reason?: string;
+  entityId?: string;
+}
+
+export interface EnableRuleResponse {
+  ok: true;
+  enabled: true;
+}
+
+export interface DisableRuleResponse {
+  ok: true;
+  enabled: false;
 }
 
 export interface RuleVersionSnapshot {
