@@ -182,6 +182,7 @@ export function createProgram(): Command {
   program
     .command('send <file>')
     .description('Submit an invoice from a JSON file (line items use taxRate/taxAmount, lineNumber, discountPercent|discountAmount, unitOfMeasure, sellerItemId — the retired vatRate/vatAmount keys are stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED and discount/unit/itemCode/exemption with UNKNOWN_FIELD_LINE_RENAMED). Spain VeriFactu (incl. Canary Islands IGIC): an original invoice with no customer.taxId and a total up to EUR 400 is issued as a simplified invoice (F2, customer.name optional); countrySpecific.es.customerIdType (passport, residence_document, residence_certificate, other, not_registered) identifies a buyer without a NIF or EU VAT number; countrySpecific.es.noRecipientIdentification or countrySpecific.es.numRegistroAcuerdoFacturacion is needed above EUR 3,000; set es_tax_territory first with `clearvo registrations update --extra`. Germany: countrySpecific.de.invoiceFormat is ZUGFERD (default), XRECHNUNG or PEPPOL; PEPPOL sends over the Peppol network and needs the seller\'s confirmed Peppol ID, customer.electronicAddress (schemeId + value; never derived from a VAT number) and a buyerReference or orderReference (unreachable buyer: stored NEEDS_INFO with PEPPOL_CUSTOMER_UNREACHABLE and re-send alternatives; credit/debit notes and self-billed invoices cannot use PEPPOL); --dry-run previews the checks without storing anything. POST /v1/send answers HTTP 200 for every stored document: the status (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), stage, reason, issues and customerResponse are in the body. RECEIVED means stored but not processed yet (keep the id and poll `clearvo status`; exit 0). The command exits 1 when the status is REJECTED, or WAITING_FOR_YOU for NEEDS_INFO or UNROUTABLE (errors and next step on stderr, the JSON body on stdout); use --no-throw-on-rejected to exit 0 and branch on status yourself. HTTP errors (400, 401, 403, 409, 429, 503) always exit 1')
+    .option('--clear <path>', 'A dotted field path to delete from the corrected document (repeatable; a path cannot also be given with --field)', (v: string, prev: string[] = []) => [...prev, v])
     .option('--dry-run', 'Preview the resolved per-line tax decision (including a would-be HELD_UNMAPPED_TAX_CODE reason) without persisting anything or submitting to an authority')
     .option('--client-tax-code <code>', 'Header-level clientTaxCode override — your own ERP tax code (see `clearvo tax-codes create`), applied to every line lacking its own clientTaxCode/taxTreatment/taxRate')
     .option('--no-throw-on-rejected', 'Exit 0 when the stored status is REJECTED or WAITING_FOR_YOU for NEEDS_INFO / UNROUTABLE (default: exit 1)')
@@ -468,7 +469,7 @@ export function createProgram(): Command {
     .option('--confirmation-token <token>', 'Confirmation token from the check-first step')
     .option('--entity <id>', 'Entity id (account-scoped keys only)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (id: string, opts: { field?: string[]; fields?: string; dryRun?: boolean; confirmationToken?: string; entity?: string; pretty?: boolean }) => {
+    .action(async (id: string, opts: { field?: string[]; clear?: string[]; fields?: string; dryRun?: boolean; confirmationToken?: string; entity?: string; pretty?: boolean }) => {
       const fields: Record<string, unknown> = {};
       if (opts.fields) {
         try {
@@ -488,11 +489,11 @@ export function createProgram(): Command {
         }
         fields[pair.slice(0, eq)] = pair.slice(eq + 1);
       }
-      if (Object.keys(fields).length === 0) {
-        console.error('Supply at least one --field path=value (or --fields <json>).');
+      if (Object.keys(fields).length === 0 && !(opts.clear && opts.clear.length)) {
+        console.error('Supply at least one --field path=value (or --fields <json>), or --clear <path>.');
         process.exit(1);
       }
-      print(await api('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields, ...(opts.dryRun ? { dryRun: true } : {}), ...(opts.confirmationToken ? { confirmationToken: opts.confirmationToken } : {}) }, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+      print(await api('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields, ...(opts.clear && opts.clear.length ? { clear: opts.clear } : {}), ...(opts.dryRun ? { dryRun: true } : {}), ...(opts.confirmationToken ? { confirmationToken: opts.confirmationToken } : {}) }, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
     });
 
   // MCP twin: list_invoice_attachments (GET /v1/invoices/{id}/attachments). The download has no MCP twin: it is binary.

@@ -1538,13 +1538,14 @@ const TOOLS = [
       'a rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original, and previousInvoiceId names the original); ' +
       'a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be corrected or have values changed in Clearvo (409 SOURCE_LOCKED, errors[]): fix them in the source system and it resubmits; missing values can always be supplied, and amending a reported ES SII registration is allowed from every source. ' +
       'Issued e-invoices are never edited (409 NOT_FIXABLE). 404 when there is no such invoice; 422 INVALID_FIELDS with errors[] ({field, code INVALID_PATH, INVALID_VALUE, NOT_SUPPLIABLE or LOCKED_CHANNEL, message}); 503 FIX_UNAVAILABLE is retryable. Use dryRun to check first. ' +
-      'Returns (200, or 202 while still processing) mode (updated_in_place, new_invoice or amended), invoiceId, previousInvoiceId, status, clearanceStatus, changes (mode supply or change), completed and missingFields.',
+      'Returns (200, or 202 while still processing) mode (updated_in_place, new_invoice or amended), invoiceId, previousInvoiceId, status, clearanceStatus, changes (mode supply, change or clear), completed and missingFields.',
     inputSchema: {
       type: 'object' as const,
       required: ['id', 'fields'],
       properties: {
         id: { type: 'string', description: 'Clearvo invoice ID or reference ID.' },
         fields: { type: 'object', description: 'Dotted field path to new value, for example {"customer.address.country": "DE"}. Array indexes are accepted (lines.0.quantity or lines[0].quantity).', additionalProperties: true },
+        clear: { type: 'array', items: { type: 'string' }, description: 'Dotted paths to delete from the corrected document. There is no null meaning: clear a value by listing its path here. A path cannot also be in fields. A locked source refuses clearing an existing value.' },
         dryRun: { type: 'boolean', description: 'Check only: answers { id, wouldSubmit: { mode, changes } } and changes nothing.' },
         confirmationToken: { type: 'string', description: 'Confirmation token for the check-first step (operation invoice.fix).' },
         entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys.' },
@@ -4566,7 +4567,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'fix_invoice': {
-      const { id, entityId, ...body } = args as { id: string; entityId?: string; fields: Record<string, unknown>; dryRun?: boolean; confirmationToken?: string };
+      const { id, entityId, ...body } = args as { id: string; entityId?: string; fields: Record<string, unknown>; clear?: string[]; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 

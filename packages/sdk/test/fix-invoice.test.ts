@@ -29,6 +29,13 @@ describe('fixInvoice', () => {
     expect(r.wouldSubmit.mode).toBe('updated_in_place');
   });
 
+  it('sends clear paths in the body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    await client().fixInvoice({ id: 'inv_1', fields: {}, clear: ['customer.address.line2'] });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ fields: {}, clear: ['customer.address.line2'] });
+  });
+
   it('surfaces a backend error code', async () => {
     const err = { ok: false, error: { code: 'SOURCE_LOCKED', message: 'Fix it in the source system', retryable: false } };
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => err, text: async () => JSON.stringify(err) }) as unknown as typeof fetch;
