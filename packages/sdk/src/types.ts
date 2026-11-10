@@ -1102,6 +1102,8 @@ export interface FixInvoiceInput {
   id: string;
   /** Dotted field path to new value, for example `{ 'customer.address.country': 'DE' }`. Array indexes are accepted (`lines.0.quantity` or `lines[0].quantity`). For a held invoice supply exactly the `missingFields` listed in the invoice's `resolution`. */
   fields: Record<string, unknown>;
+  /** Paths to delete from the corrected document, for example `['customer.address.line2']`. There is no null meaning: send a path here to clear it. A path cannot also be in `fields`. A locked source refuses clearing an existing value. Send `fields: {}` when only clearing. */
+  clear?: string[];
   /** Check first: answers `FixInvoiceDryRunResponse` and changes nothing. */
   dryRun?: boolean;
   /** The confirmation token for the check-first step of the MCP tool (operation `invoice.fix`). */
@@ -1119,7 +1121,7 @@ export interface FixInvoiceResponse {
   previousInvoiceId?: string;
   status: string;
   clearanceStatus: string;
-  changes: Array<{ field: string; mode: 'supply' | 'change'; newValue: unknown }>;
+  changes: Array<{ field: string; mode: 'supply' | 'change' | 'clear'; newValue: unknown }>;
   /** True when nothing is missing any more. */
   completed: boolean;
   /** What is still missing after this fix. */
@@ -1129,7 +1131,7 @@ export interface FixInvoiceResponse {
 /** Answer to `fixInvoice` with `dryRun: true`. Nothing was changed. */
 export interface FixInvoiceDryRunResponse {
   id: string;
-  wouldSubmit: { mode: FixInvoiceMode; changes: Array<{ field: string; mode: 'supply' | 'change'; newValue: unknown }> };
+  wouldSubmit: { mode: FixInvoiceMode; changes: Array<{ field: string; mode: 'supply' | 'change' | 'clear'; newValue: unknown }> };
 }
 
 export interface SimulateReceivedInvoicesInput {
