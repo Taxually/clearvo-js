@@ -1536,15 +1536,17 @@ const TOOLS = [
       'Put an invoice right by supplying values as dotted field paths, for example {"customer.address.country": "DE"}. Call get_invoice first and read its `resolution` block: ' +
       '`resolution.missingFields` lists exactly what a held invoice still needs (supply those fields and it updates in place and is sent again); ' +
       'a rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original, and previousInvoiceId names the original); ' +
-      'a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be edited in Clearvo: fix them in the source system and it resubmits (409 SOURCE_LOCKED). ' +
-      'Issued e-invoices are never edited (409 NOT_FIXABLE). 404 when there is no such invoice; 422 INVALID_FIELDS when a field is unknown or its value is not valid. ' +
-      'Returns mode (updated_in_place, new_invoice or amended), invoiceId, previousInvoiceId, status, clearanceStatus and changes.',
+      'a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be corrected or have values changed in Clearvo (409 SOURCE_LOCKED, errors[]): fix them in the source system and it resubmits; missing values can always be supplied, and amending a reported ES SII registration is allowed from every source. ' +
+      'Issued e-invoices are never edited (409 NOT_FIXABLE). 404 when there is no such invoice; 422 INVALID_FIELDS with errors[] ({field, code INVALID_PATH, INVALID_VALUE, NOT_SUPPLIABLE or LOCKED_CHANNEL, message}); 503 FIX_UNAVAILABLE is retryable. Use dryRun to check first. ' +
+      'Returns (200, or 202 while still processing) mode (updated_in_place, new_invoice or amended), invoiceId, previousInvoiceId, status, clearanceStatus, changes (mode supply or change), completed and missingFields.',
     inputSchema: {
       type: 'object' as const,
       required: ['id', 'fields'],
       properties: {
         id: { type: 'string', description: 'Clearvo invoice ID or reference ID.' },
-        fields: { type: 'object', description: 'Dotted field path to new value, for example {"customer.address.country": "DE"}.', additionalProperties: true },
+        fields: { type: 'object', description: 'Dotted field path to new value, for example {"customer.address.country": "DE"}. Array indexes are accepted (lines.0.quantity or lines[0].quantity).', additionalProperties: true },
+        dryRun: { type: 'boolean', description: 'Check only: answers { id, wouldSubmit: { mode, changes } } and changes nothing.' },
+        confirmationToken: { type: 'string', description: 'Confirmation token for the check-first step (operation invoice.fix).' },
         entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys.' },
       },
     },
@@ -4564,8 +4566,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'fix_invoice': {
-      const { id, entityId, fields } = args as { id: string; entityId?: string; fields: Record<string, unknown> };
-      return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+      const { id, entityId, ...body } = args as { id: string; entityId?: string; fields: Record<string, unknown>; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'update_business_status': {

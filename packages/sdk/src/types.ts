@@ -1087,6 +1087,12 @@ export interface InvoiceResolution {
   lockedReason: string | null;
   /** What a fix does: updates the invoice in place, creates a corrected invoice, or amends the submitted report. */
   fixMode: FixInvoiceMode | null;
+  /** The stored document the dotted paths in `fix` point into. Set when a fix creates a corrected invoice or amends a report; null otherwise. */
+  editableDocument?: Record<string, unknown> | null;
+  /** The fields that can be changed. Null means free-form: any path in `editableDocument` is accepted. */
+  editableFields?: string[] | null;
+  /** What can be done to the invoice now. */
+  availableActions?: Array<'retry' | 'fix' | 'issue_credit_note' | 'amend_report' | 'cancel_report'>;
 }
 
 export type FixInvoiceMode = 'updated_in_place' | 'new_invoice' | 'amended';
@@ -1094,8 +1100,12 @@ export type FixInvoiceMode = 'updated_in_place' | 'new_invoice' | 'amended';
 export interface FixInvoiceInput {
   /** Clearvo invoice id (or reference id). */
   id: string;
-  /** Dotted field path to new value, for example `{ 'customer.address.country': 'DE' }`. For a held invoice supply exactly the `missingFields` listed in the invoice's `resolution`. */
+  /** Dotted field path to new value, for example `{ 'customer.address.country': 'DE' }`. Array indexes are accepted (`lines.0.quantity` or `lines[0].quantity`). For a held invoice supply exactly the `missingFields` listed in the invoice's `resolution`. */
   fields: Record<string, unknown>;
+  /** Check first: answers `FixInvoiceDryRunResponse` and changes nothing. */
+  dryRun?: boolean;
+  /** The confirmation token for the check-first step of the MCP tool (operation `invoice.fix`). */
+  confirmationToken?: string;
   /** Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;
 }
@@ -1109,7 +1119,17 @@ export interface FixInvoiceResponse {
   previousInvoiceId?: string;
   status: string;
   clearanceStatus: string;
-  changes: Array<{ field: string; mode: string; newValue: unknown }>;
+  changes: Array<{ field: string; mode: 'supply' | 'change'; newValue: unknown }>;
+  /** True when nothing is missing any more. */
+  completed: boolean;
+  /** What is still missing after this fix. */
+  missingFields: InvoiceMissingField[];
+}
+
+/** Answer to `fixInvoice` with `dryRun: true`. Nothing was changed. */
+export interface FixInvoiceDryRunResponse {
+  id: string;
+  wouldSubmit: { mode: FixInvoiceMode; changes: Array<{ field: string; mode: 'supply' | 'change'; newValue: unknown }> };
 }
 
 export interface SimulateReceivedInvoicesInput {

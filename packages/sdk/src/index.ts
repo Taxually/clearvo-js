@@ -259,6 +259,7 @@ export type {
   InvoiceMissingField,
   FixInvoiceInput,
   FixInvoiceResponse,
+  FixInvoiceDryRunResponse,
   FixInvoiceMode,
   UpdateBusinessStatusResponse,
   FrInboundPollResult,

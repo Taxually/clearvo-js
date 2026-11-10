@@ -36,4 +36,11 @@ describe('clearvo invoices fix', () => {
     await createProgram().parseAsync(['node', 'clearvo', 'invoices', 'fix', 'inv_1', '--fields', '{"lines.0.quantity":2}']);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ fields: { 'lines.0.quantity': 2 } });
   });
+
+  it('sends dryRun and the confirmation token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'inv_1' }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    await createProgram().parseAsync(['node', 'clearvo', 'invoices', 'fix', 'inv_1', '--field', 'a=b', '--dry-run', '--confirmation-token', 'tok']);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ fields: { a: 'b' }, dryRun: true, confirmationToken: 'tok' });
+  });
 });

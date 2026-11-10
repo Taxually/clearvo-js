@@ -22,6 +22,7 @@ import type {
   ListInvoiceAttachmentsResponse,
   FixInvoiceInput,
   FixInvoiceResponse,
+  FixInvoiceDryRunResponse,
   DownloadedInvoiceAttachment,
   AddressErasureResult,
   ImportSettlementInput,
@@ -407,9 +408,11 @@ export class ClearvoClient {
    * Errors surface as ClearvoError: 404 (no such invoice), 409 NOT_FIXABLE (issued e-invoices are never edited), 409 SOURCE_LOCKED
    * (API- and ERP-sourced invoices cannot be edited in Clearvo: fix them in the source system and it resubmits), 422 INVALID_FIELDS.
    */
-  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse> {
-    const { id, entityId, fields } = input;
-    return this.request('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields }, entityId ? { 'x-entity-id': entityId } : undefined);
+  fixInvoice(input: FixInvoiceInput & { dryRun: true }): Promise<FixInvoiceDryRunResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse | FixInvoiceDryRunResponse> {
+    const { id, entityId, ...body } = input;
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Tax Calculation ───────────────────────────────────────────────────────────
