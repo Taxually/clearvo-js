@@ -659,6 +659,16 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo coverage ─────────────────────────────────────────────────────────
+  program
+    .command('coverage')
+    .description('List the countries and mandates covered, with status (live, beta, coming_soon, not_supported, no_mandate) and go-live date where confirmed')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      const result = await api('GET', '/coverage');
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo entities ────────────────────────────────────────────────────────
   const entities = program.command('entities').description('Manage entities');
   

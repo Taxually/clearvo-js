@@ -62,9 +62,7 @@ function typePaths(type, prefix, out, depth = 0) {
 const actual = typePaths(checker.getTypeAtLocation(decl), '', new Set());
 
 const REMOVED = 'Removed from the API: the field exists only so a stale caller gets a named 422.';
-const SELLER_ALIAS = 'Deprecated alias of supplier on a sale; the entity address comes from master data and the dispatch address from shipFrom, so the alias keeps the country only.';
-const OMITTED = { clientTaxCode: REMOVED, 'lineItems[].clientTaxCode': REMOVED, 'lineItems[].stripeTaxCode': REMOVED, 'seller.name': SELLER_ALIAS };
-for (const f of ['line1', 'line2', 'city', 'region', 'postalCode']) OMITTED[`seller.address.${f}`] = SELLER_ALIAS;
+const OMITTED = { clientTaxCode: REMOVED, 'lineItems[].clientTaxCode': REMOVED, 'lineItems[].stripeTaxCode': REMOVED };
 
 const missing = [...expected].filter((p) => !actual.has(p) && !(p in OMITTED)).sort();
 const unknown = [...actual].filter((p) => !expected.has(p)).sort();

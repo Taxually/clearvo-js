@@ -12,6 +12,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 - MCP: new tool `fix_invoice` (same schema as the hosted connector).
 - CLI: new command `clearvo invoices fix <id> --field customer.address.country=DE [--field ...] [--clear <path> ...] [--dry-run] | --fields <json>`.
 
+## Unreleased — country coverage list (publish after backend PR 19145 is live)
+
+`GET /v1/coverage` is a public endpoint (no API key) that lists the countries and mandates covered, each with `country`, `name`, `mandate`, a customer-facing `status` (`live`, `beta`, `coming_soon`, `not_supported`, `no_mandate`) and `goLiveDate` (YYYY-MM-DD, or null when not confirmed). A country that is not listed has no confirmed status yet. A 503 with code `COVERAGE_UNAVAILABLE` is temporary and retryable.
+
+- SDK: `listCountryCoverage()`; new types `CountryCoverageEntry`, `CountryCoverageResponse`.
+- MCP: new read-only tool `list_country_coverage` (no input; same as the hosted connector).
+- CLI: `clearvo coverage [--pretty]`.
+
 ## Unreleased — invoice attachments: list and download (publish after the backend invoice-attachments PR is live)
 
 Supporting files sent with an invoice (`attachments[]` on `POST /v1/send`) are stored outside the invoice and never embedded in the e-invoice XML or PDF; they reach the customer as downloads on the hosted invoice page. `GET /v1/invoices/{id}/attachments` lists them (reference, fileName, mimeType, sizeBytes, sha256, description, externalUrl, `downloadable`, `downloadUrl`, `origin`) and `GET /v1/invoices/{id}/attachments/{index}` returns a stored file byte for byte. Limits when sending: pdf, csv, xlsx, xls, ods, xml, png, jpg and txt (extension and `mimeType` must agree), 10 MB per file, 25 MB in total, 20 per invoice; a breach is a 422 naming the attachment.

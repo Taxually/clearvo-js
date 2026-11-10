@@ -465,15 +465,6 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
         },
       },
     },
-    seller: {
-      type: 'object',
-      description: 'DEPRECATED — alias for `supplier` on a sale (its `address` becomes supplier.billingAddress). Not accepted on a purchase (422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE). Use `supplier` instead.',
-      properties: {
-        address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
-        taxId: { type: 'string', description: 'Seller VAT number' },
-      },
-      required: ['address'],
-    },
     lineItems: {
       type: 'array',
       items: {
@@ -1112,8 +1103,7 @@ const TOOLS = [
       'SUPPLIER_TAX_ID_MISMATCH on a mismatch). On a purchase, party roles invert: the entity is the customer and ' +
       'the counterparty (the vendor) goes in supplier, which is REQUIRED (422 SUPPLIER_REQUIRED if omitted) — ' +
       'customer is now optional and entity-side, validated the same way (422 CUSTOMER_TAX_ID_MISMATCH on a ' +
-      'mismatch). seller is a deprecated alias for supplier, accepted on a sale only — rejected with 422 ' +
-      'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
+      'mismatch). The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
       'which block is your own entity. ' +
       'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, taxExpectedFromVendorRate, creditAllowed (vendor tax credited up to the use tax), vendorClaim ({ amount, basis OVERCHARGE_VS_EXPECTED | TAX_NOT_DUE } to claim back from the supplier, or null), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full (a purchase invoice with no statedTaxAmount is treated as charged 0; a purchase order is not); a charge matching no known rate is assumed to be a local tax for the delivery state and compared with taxExpectedFromVendor (an excess is OVERCHARGED with a vendorClaim and flagged for review), and a charge at another state\'s rate is credited only when the delivery state\'s rule allows it, otherwise it is claimed from the supplier (TAX_NOT_DUE); taxVerification.overchargeVsExpected is the charge above the expected tax; the trusted supplier flag does not apply to use tax; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. A state with no local use tax on general purchases is calculated at the state level only.',
@@ -1827,6 +1817,15 @@ const TOOLS = [
       },
       required: ['email', 'role'],
     },
+  },
+  {
+    name: 'list_country_coverage',
+    description:
+      'List the countries and e-invoicing or reporting mandates Taxually covers, with a customer-facing status ' +
+      '(live, beta, coming_soon, not_supported or no_mandate) and the mandate go-live date where it is confirmed. ' +
+      'Use this to answer "do you support e-invoicing in country X" before promising anything. Public, customer-safe ' +
+      'information only: a country that is not listed has no confirmed status yet.',
+    inputSchema: { type: 'object' as const, properties: {} },
   },
   {
     name: 'get_requirements',
@@ -4661,6 +4660,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       formData.append('document', new Blob([buffer], { type: 'application/pdf' }), 'certificate.pdf');
       return callApi('POST', `/tax/exemptions/${encodeURIComponent(certificateId)}/document`, formData, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
+
+    case 'list_country_coverage':
+      return callApi('GET', '/coverage');
 
     case 'get_requirements': {
       const country = args.country as string;

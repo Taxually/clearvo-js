@@ -1256,17 +1256,14 @@ export interface TaxCalcAddressInput {
  *   and it must be one of the entity's registered tax IDs (any country),
  *   rejecting a mismatch with 422
  *   `SUPPLIER_TAX_ID_MISMATCH` (the registered value is never silently
- *   substituted). `seller` is accepted as a deprecated alias for
- *   `supplier` on a sale only.
+ *   substituted).
  * - `'purchase'` — an incoming, input-tax transaction: party roles
  *   invert. The entity is the `customer` (buyer) and the counterparty is
  *   the `supplier` (vendor), which is REQUIRED (422 `SUPPLIER_REQUIRED`
  *   if omitted). `customer` is now OPTIONAL and entity-side — omit it and
  *   Clearvo auto-fills it from your entity's own master data; supply it
  *   and it is validated the same way, rejecting a mismatch with 422
- *   `CUSTOMER_TAX_ID_MISMATCH`. `seller` has no meaning on a purchase and
- *   is rejected outright with 422 `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE`
- *   — use `supplier`, which already means the vendor.
+ *   `CUSTOMER_TAX_ID_MISMATCH`.
  *
  * The response's top-level `entityRole` (`'supplier'` for a sale,
  * `'customer'` for a purchase) tells you which response party block is
@@ -1306,18 +1303,6 @@ export interface TaxCalculateRequest {
    * or `ap_not_enabled` (switch it on).
    */
   transactionDirection?: 'sale' | 'purchase';
-  /**
-   * @deprecated Use `supplier` instead. Deprecated alias for `supplier`
-   * on a `transactionDirection: 'sale'` calculation only — normalised to
-   * `supplier` before validation runs. Rejected with 422
-   * `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE` when sent alongside
-   * `transactionDirection: 'purchase'` (there is no sensible mapping —
-   * use `supplier` there, which already means the vendor).
-   */
-  seller?: {
-    address: { country: string };
-    taxId?: string;
-  };
   /**
    * The supplier party. Required when `transactionDirection` is
    * `'purchase'` — the actual vendor on the purchase invoice (422
@@ -1957,6 +1942,24 @@ export interface TaxNumberValidateResponse {
   name?: string;
   address?: string;
   status: 'VALID' | 'INVALID' | 'UNVERIFIED';
+}
+
+/** One country and mandate on the public coverage list (GET /v1/coverage). */
+export interface CountryCoverageEntry {
+  /** ISO 3166-1 alpha-2 country code. */
+  country: string;
+  name: string;
+  /** The mandate or reporting regime this row describes. */
+  mandate: string;
+  status: 'live' | 'beta' | 'coming_soon' | 'not_supported' | 'no_mandate';
+  /** Mandate go-live date (YYYY-MM-DD) where confirmed, otherwise null. */
+  goLiveDate: string | null;
+}
+
+/** GET /v1/coverage response. Public: needs no API key. A country that is not listed has no confirmed status yet. */
+export interface CountryCoverageResponse {
+  ok: true;
+  data: { countries: CountryCoverageEntry[] };
 }
 
 export interface CountryRequirements {
