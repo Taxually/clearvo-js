@@ -20,6 +20,8 @@ import type {
   DutiesEstimateResult,
   AddressErasureInput,
   ListInvoiceAttachmentsResponse,
+  FixInvoiceInput,
+  FixInvoiceResponse,
   DownloadedInvoiceAttachment,
   AddressErasureResult,
   ImportSettlementInput,
@@ -395,6 +397,19 @@ export class ClearvoClient {
       fileName,
       mimeType: (response.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim(),
     };
+  }
+
+  /**
+   * POST /invoices/{id}/fix: put an invoice right by supplying values as dotted field paths, e.g. `{ 'customer.address.country': 'DE' }`.
+   * Read the invoice's `resolution` first: a held invoice that is missing information takes exactly the listed `missingFields` and
+   * updates in place (`mode: 'updated_in_place'`) and is sent again; a rejected invoice is corrected where its source allows changes
+   * (`mode: 'new_invoice'`, a corrected invoice linked to the original); a submitted e-report is amended (`mode: 'amended'`).
+   * Errors surface as ClearvoError: 404 (no such invoice), 409 NOT_FIXABLE (issued e-invoices are never edited), 409 SOURCE_LOCKED
+   * (API- and ERP-sourced invoices cannot be edited in Clearvo: fix them in the source system and it resubmits), 422 INVALID_FIELDS.
+   */
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse> {
+    const { id, entityId, fields } = input;
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields }, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Tax Calculation ───────────────────────────────────────────────────────────

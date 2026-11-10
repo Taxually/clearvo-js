@@ -1531,6 +1531,25 @@ const TOOLS = [
     },
   },
   {
+    name: 'fix_invoice',
+    description:
+      'Put an invoice right by supplying values as dotted field paths, for example {"customer.address.country": "DE"}. Call get_invoice first and read its `resolution` block: ' +
+      '`resolution.missingFields` lists exactly what a held invoice still needs (supply those fields and it updates in place and is sent again); ' +
+      'a rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original, and previousInvoiceId names the original); ' +
+      'a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be edited in Clearvo: fix them in the source system and it resubmits (409 SOURCE_LOCKED). ' +
+      'Issued e-invoices are never edited (409 NOT_FIXABLE). 404 when there is no such invoice; 422 INVALID_FIELDS when a field is unknown or its value is not valid. ' +
+      'Returns mode (updated_in_place, new_invoice or amended), invoiceId, previousInvoiceId, status, clearanceStatus and changes.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['id', 'fields'],
+      properties: {
+        id: { type: 'string', description: 'Clearvo invoice ID or reference ID.' },
+        fields: { type: 'object', description: 'Dotted field path to new value, for example {"customer.address.country": "DE"}.', additionalProperties: true },
+        entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'update_business_status',
     description:
       'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice. The one shared ' +
@@ -4542,6 +4561,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'poll_fr_inbound': {
       const { entityId } = args as { entityId?: string };
       return callApi('POST', '/fr/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'fix_invoice': {
+      const { id, entityId, fields } = args as { id: string; entityId?: string; fields: Record<string, unknown> };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'update_business_status': {

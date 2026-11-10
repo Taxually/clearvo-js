@@ -1050,6 +1050,66 @@ export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+  /** On `GET /v1/invoices/{id}` only: what can be done to put this invoice right. See {@link InvoiceResolution}. */
+  resolution?: InvoiceResolution;
+}
+
+/** One piece of information a held invoice still needs. Supply it with `fixInvoice` under `field`. */
+export interface InvoiceMissingField {
+  /** Dotted path to send in `fixInvoice`, for example `customer.address.country`. */
+  field: string;
+  /** A human-readable name to show next to an input. */
+  label: string;
+  /** The kind of input to show: for example text, country, date or number. */
+  inputType: string;
+  /** Whether Clearvo accepts a value for this field through `fixInvoice`. */
+  suppliable: boolean;
+}
+
+/**
+ * Returned as `resolution` on `GET /v1/invoices/{id}`: whether and how the invoice can be fixed through `fixInvoice`.
+ * A held invoice that is missing information is completed by supplying exactly `missingFields` (it updates in place and is sent again).
+ * A rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original).
+ * Invoices that arrived through the API or an ERP cannot be edited in Clearvo: fix them in the source system and it resubmits.
+ * Issued e-invoices are never edited; a submitted e-report is amended.
+ */
+export interface InvoiceResolution {
+  /** True when `fixInvoice` can act on this invoice now. */
+  fix: boolean;
+  /** True when the invoice is waiting for information that you can supply. */
+  canSupply: boolean;
+  missingFields: InvoiceMissingField[];
+  /** True when existing values (not only missing ones) can be changed. */
+  canChangeValues: boolean;
+  /** Where the invoice came from, for example the API, an ERP connection or the dashboard. */
+  source: string | null;
+  /** Why the invoice cannot be edited in Clearvo, in plain words, when `fix` is false because of its source. */
+  lockedReason: string | null;
+  /** What a fix does: updates the invoice in place, creates a corrected invoice, or amends the submitted report. */
+  fixMode: FixInvoiceMode | null;
+}
+
+export type FixInvoiceMode = 'updated_in_place' | 'new_invoice' | 'amended';
+
+export interface FixInvoiceInput {
+  /** Clearvo invoice id (or reference id). */
+  id: string;
+  /** Dotted field path to new value, for example `{ 'customer.address.country': 'DE' }`. For a held invoice supply exactly the `missingFields` listed in the invoice's `resolution`. */
+  fields: Record<string, unknown>;
+  /** Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface FixInvoiceResponse {
+  ok: true;
+  mode: FixInvoiceMode;
+  /** The invoice that now carries the fix: the same id for `updated_in_place`, the new corrected invoice for `new_invoice`. */
+  invoiceId: string;
+  /** The original invoice, when `mode` is `new_invoice`. */
+  previousInvoiceId?: string;
+  status: string;
+  clearanceStatus: string;
+  changes: Array<{ field: string; mode: string; newValue: unknown }>;
 }
 
 export interface SimulateReceivedInvoicesInput {

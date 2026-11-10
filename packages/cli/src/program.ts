@@ -458,6 +458,41 @@ export function createProgram(): Command {
       print(await api('GET', `/invoices${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
     });
 
+  // MCP twin: fix_invoice (POST /v1/invoices/{id}/fix).
+  invoices
+    .command('fix <id>')
+    .description('Put an invoice right by supplying values. A held invoice that is missing information takes exactly the missing fields listed in its "resolution" (it updates in place and is sent again); a rejected invoice is corrected where its source allows changes (a corrected invoice is created, linked to the original); a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be edited in Clearvo: fix them in the source system. Issued e-invoices are never edited. <id> is the Clearvo id or the reference id')
+    .option('--field <path=value>', 'A dotted field path and its new value, e.g. customer.address.country=DE (repeatable; sent as text, so postal codes keep leading zeros; use --fields for numbers or booleans)', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--fields <json>', 'All fields as one JSON object, e.g. \'{"customer.address.country":"DE"}\'')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { field?: string[]; fields?: string; entity?: string; pretty?: boolean }) => {
+      const fields: Record<string, unknown> = {};
+      if (opts.fields) {
+        try {
+          const parsed = JSON.parse(opts.fields);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+          Object.assign(fields, parsed);
+        } catch {
+          console.error('--fields must be a JSON object, e.g. \'{"customer.address.country":"DE"}\'.');
+          process.exit(1);
+        }
+      }
+      for (const pair of opts.field ?? []) {
+        const eq = pair.indexOf('=');
+        if (eq < 1) {
+          console.error(`--field "${pair}" must look like path=value, e.g. customer.address.country=DE.`);
+          process.exit(1);
+        }
+        fields[pair.slice(0, eq)] = pair.slice(eq + 1);
+      }
+      if (Object.keys(fields).length === 0) {
+        console.error('Supply at least one --field path=value (or --fields <json>).');
+        process.exit(1);
+      }
+      print(await api('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields }, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
   // MCP twin: list_invoice_attachments (GET /v1/invoices/{id}/attachments). The download has no MCP twin: it is binary.
   invoices
     .command('attachments <id>')
