@@ -1877,6 +1877,24 @@ export interface TaxNumberValidateResponse {
   status: 'VALID' | 'INVALID' | 'UNVERIFIED';
 }
 
+/** One country and mandate on the public coverage list (GET /v1/coverage). */
+export interface CountryCoverageEntry {
+  /** ISO 3166-1 alpha-2 country code. */
+  country: string;
+  name: string;
+  /** The mandate or reporting regime this row describes. */
+  mandate: string;
+  status: 'live' | 'beta' | 'coming_soon' | 'not_supported' | 'no_mandate';
+  /** Mandate go-live date (YYYY-MM-DD) where confirmed, otherwise null. */
+  goLiveDate: string | null;
+}
+
+/** GET /v1/coverage response. Public: needs no API key. A country that is not listed has no confirmed status yet. */
+export interface CountryCoverageResponse {
+  ok: true;
+  data: { countries: CountryCoverageEntry[] };
+}
+
 export interface CountryRequirements {
   country: string;
   countryName: string;

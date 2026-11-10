@@ -32,6 +32,7 @@ import type {
   TaxNumberBatchItem,
   TaxNumberBatchResult,
   CountryRequirements,
+  CountryCoverageResponse,
   Product,
   CreateProductInput,
   UpdateProductInput,
@@ -622,6 +623,14 @@ export class ClearvoClient {
   getRequirements(country: string, filter: { class?: 'format_authority' | 'legal_content' | 'presentation'; mandate?: string } = {}): Promise<CountryRequirements> {
     const query = new URLSearchParams({ country, ...(filter.class ? { class: filter.class } : {}), ...(filter.mandate ? { mandate: filter.mandate } : {}) });
     return this.request('GET', `/requirements?${query.toString()}`);
+  }
+
+  /**
+   * GET /coverage: the countries and mandates covered, each with a customer-facing status and the mandate go-live date where confirmed.
+   * Public (needs no API key). A 503 with code COVERAGE_UNAVAILABLE is temporary: retry.
+   */
+  listCountryCoverage(): Promise<CountryCoverageResponse> {
+    return this.request('GET', '/coverage');
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────
