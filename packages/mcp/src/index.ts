@@ -1043,6 +1043,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'retry_invoice_with_master_data',
+    description:
+      'Retry a REJECTED or NEEDS_INFO invoice using the tax number from the customer master record instead of the one that was sent. ' +
+      'Data sent through the API is otherwise kept; this is the explicit choice to use the master record\'s value. Only the customer tax number changes: ' +
+      'a corrected copy is sent through the normal send path (the usual tax-number checks still run on the master value), the result carries the NEW invoiceId and previousInvoiceId, ' +
+      'and the change is audited. Read get_invoice first: availableActions contains "use_master_data" only when a customer record matches (customerRef, else exact name) ' +
+      'with a tax number different from the sent one. Refusals: 409 NOT_ELIGIBLE, 422 MASTER_CUSTOMER_NOT_FOUND, 422 MASTER_TAX_ID_MISSING, ' +
+      '422 MASTER_TAX_ID_UNCHANGED (update the customer record first). Never blind-retry a refusal. ' +
+      'Check first: call it with dryRun true, show the user what would change, and only after they explicitly say yes call again without dryRun.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID — from submit_invoice, list_invoices or get_invoice.' },
+        dryRun: { type: 'boolean', description: 'Check this request without sending anything: answers with the one field change (customer.taxId, before and after) that would be made.' },
+        confirmationToken: { type: 'string', description: 'Hosted MCP only: the confirmationToken returned by the dryRun of this exact request. Not needed here.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'get_sii_reconciliation',
     description:
       'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
@@ -4437,6 +4458,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const { id, idempotencyKey, ...body } = args as { id: string; idempotencyKey?: string } & Record<string, unknown>;
       const key = idempotencyKey ?? createHash('sha256').update(`cancel|${id}`).digest('hex').slice(0, 64);
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': key });
+    }
+
+    case 'retry_invoice_with_master_data': {
+      const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'get_sii_reconciliation': {

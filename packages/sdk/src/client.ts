@@ -98,6 +98,9 @@ import type {
   AmendReportResponse,
   CancelReportInput,
   CancelReportResponse,
+  RetryWithMasterDataInput,
+  RetryWithMasterDataPreview,
+  RetryWithMasterDataResult,
   GetSiiReconciliationSummaryResponse,
   GetSiiReconciliationResponse,
   QueryRequestParams,
@@ -863,6 +866,18 @@ export class ClearvoClient {
    */
   cancelSiiReport(id: string, input: CancelReportInput, idempotencyKey: string): Promise<CancelReportResponse> {
     return this.request('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, input, { 'x-idempotency-key': idempotencyKey });
+  }
+
+  /**
+   * Retry a REJECTED or NEEDS_INFO outbound invoice using the tax number from the customer master record instead of the
+   * one that was sent. Only `customer.taxId` changes; the corrected copy goes through the normal send validation. Resolves
+   * with the NEW `invoiceId` and `previousInvoiceId` (HTTP 200, or 202 when still processing); with `dryRun: true` it
+   * resolves with the preview and sends nothing. Offered when `availableActions` on the invoice contains `use_master_data`.
+   * Throws a {@link ClearvoError}: 404 not found, 409 NOT_ELIGIBLE, 422 MASTER_CUSTOMER_NOT_FOUND / MASTER_TAX_ID_MISSING /
+   * MASTER_TAX_ID_UNCHANGED, or the send validation error for the corrected copy.
+   */
+  retryInvoiceWithMasterData(id: string, input: RetryWithMasterDataInput = {}, entityId?: string): Promise<RetryWithMasterDataResult | RetryWithMasterDataPreview> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, input, entityHeaders(entityId));
   }
 
   /**

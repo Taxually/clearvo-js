@@ -374,6 +374,23 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo retry-with-master-data <id> ───────────────────────────────────────
+  // Retries a REJECTED / NEEDS_INFO outbound invoice with the customer master record's tax
+  // number in place of the one that was sent. Only customer.taxId changes; the normal send
+  // validation still runs. Use --dry-run to see the change first.
+  program
+    .command('retry-with-master-data <id>')
+    .description("Retry a refused invoice using the customer master record's tax number (only customer.taxId changes)")
+    .option('--dry-run', 'Show the change that would be made without sending anything')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.dryRun) body.dryRun = true;
+      const result = await api('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo business-status <id> ─────────────────────────────────────────────
   // Records a customer-lifecycle ("business") status decision on a received
   // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or

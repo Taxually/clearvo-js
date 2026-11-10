@@ -2896,6 +2896,43 @@ export type CancelReportResponse =
   | { ok: true; id: string; operation: 'BAJA'; communicationId: string; state: string; idempotentReplay?: boolean }
   | { ok: true; id: string; cancelled: true; cancelledAt: string };
 
+/** The invoice actions listed in `availableActions` on GET /v1/invoices/{id}. `use_master_data` is present when a customer record holds a different tax number than the one sent. */
+export type InvoiceAvailableAction = 'use_master_data' | (string & {});
+
+export interface RetryWithMasterDataInput {
+  /** Check the retry without sending anything: answers with the one field change that would be made. */
+  dryRun?: boolean;
+  /** Hosted MCP only: the token a dry run returned. Not needed on the public API. */
+  confirmationToken?: string;
+}
+
+/** The one field changed by a master-data retry: always `customer.taxId`. */
+export interface MasterDataRetryChange {
+  field: 'customer.taxId';
+  before: string | null;
+  after: string;
+}
+
+/** POST /v1/invoices/{id}/retry-with-master-data's 200 (completed) or 202 (re-sent, still processing). */
+export interface RetryWithMasterDataResult {
+  ok: true;
+  /** The NEW invoice. */
+  invoiceId: string;
+  /** The refused invoice that was retried. */
+  previousInvoiceId: string;
+  status: string;
+  clearanceStatus: string;
+  changes: MasterDataRetryChange[];
+  completed: boolean;
+}
+
+/** The 200 answer to a dryRun: nothing was sent. */
+export interface RetryWithMasterDataPreview {
+  ok: true;
+  wouldSubmit: { operation: 'use_master_data'; invoiceId: string };
+  changes: MasterDataRetryChange[];
+}
+
 export interface SiiAuthorityView {
   ranAt: string;
   /** The sandbox tier this run executed under — mock/prewww1/prod. */
