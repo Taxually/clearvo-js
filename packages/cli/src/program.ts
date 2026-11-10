@@ -374,6 +374,23 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo retry-with-master-data <id> ───────────────────────────────────────
+  // Retries a REJECTED / NEEDS_INFO outbound invoice with the customer master record's tax
+  // number in place of the one that was sent. Only customer.taxId changes; the normal send
+  // validation still runs. Use --dry-run to see the change first.
+  program
+    .command('retry-with-master-data <id>')
+    .description("Retry a refused invoice using the customer master record's tax number (only customer.taxId changes)")
+    .option('--dry-run', 'Show the change that would be made without sending anything')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.dryRun) body.dryRun = true;
+      const result = await api('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo business-status <id> ─────────────────────────────────────────────
   // Records a customer-lifecycle ("business") status decision on a received
   // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or
@@ -1977,7 +1994,7 @@ export function createProgram(): Command {
     .option('--direction <direction>', 'purchase or sale — inclusive of direction-less rows, which apply to both')
     .option('--condition-property <property>', 'Only rules with a condition on this catalog property')
     .option('--condition-value <value>', 'Combined with --condition-property — narrows to a condition whose value equals this')
-    .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing)')
+    .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing; an opt-in default shows defaultEnabled false and canEnable, see `rules enable`)')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--company-code <code>', 'Only rules scoped to this company code (case-insensitive)')
     .option('--pretty', 'Pretty-print JSON output')
@@ -2137,6 +2154,29 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
       const result = await api('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('enable <id>')
+    .description('Turn ON, for this key\'s own scope, a platform-default rule that is off by default (opt-in). Find the id via `rules list --include-defaults` (defaultEnabled false, canEnable). Refused 422 RULE_NOT_ENABLEABLE for a rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule, or one locked by the platform')
+    .option('--reason <text>', 'Optional free-text note on why this scope turned it on (1-2000 chars)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { reason?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.reason) body.reason = opts.reason;
+      const result = await api('POST', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('disable <id>')
+    .description('Turn OFF again an opt-in platform-default rule that this key\'s own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 

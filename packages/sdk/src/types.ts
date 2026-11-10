@@ -2981,6 +2981,43 @@ export type CancelReportResponse =
   | { ok: true; id: string; operation: 'BAJA'; communicationId: string; state: string; idempotentReplay?: boolean }
   | { ok: true; id: string; cancelled: true; cancelledAt: string };
 
+/** The invoice actions listed in `availableActions` on GET /v1/invoices/{id}. `use_master_data` is present when a customer record holds a different tax number than the one sent. */
+export type InvoiceAvailableAction = 'use_master_data' | (string & {});
+
+export interface RetryWithMasterDataInput {
+  /** Check the retry without sending anything: answers with the one field change that would be made. */
+  dryRun?: boolean;
+  /** Hosted MCP only: the token a dry run returned. Not needed on the public API. */
+  confirmationToken?: string;
+}
+
+/** The one field changed by a master-data retry: always `customer.taxId`. */
+export interface MasterDataRetryChange {
+  field: 'customer.taxId';
+  before: string | null;
+  after: string;
+}
+
+/** POST /v1/invoices/{id}/retry-with-master-data's 200 (completed) or 202 (re-sent, still processing). */
+export interface RetryWithMasterDataResult {
+  ok: true;
+  /** The NEW invoice. */
+  invoiceId: string;
+  /** The refused invoice that was retried. */
+  previousInvoiceId: string;
+  status: string;
+  clearanceStatus: string;
+  changes: MasterDataRetryChange[];
+  completed: boolean;
+}
+
+/** The 200 answer to a dryRun: nothing was sent. */
+export interface RetryWithMasterDataPreview {
+  ok: true;
+  wouldSubmit: { operation: 'use_master_data'; invoiceId: string };
+  changes: MasterDataRetryChange[];
+}
+
 export interface SiiAuthorityView {
   ranAt: string;
   /** The sandbox tier this run executed under — mock/prewww1/prod. */
@@ -4008,7 +4045,7 @@ export interface ListRulesParams {
   conditionProperty?: string;
   /** Combined with conditionProperty — narrows to a condition whose value equals this. */
   conditionValue?: string;
-  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). */
+  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). A default that is off by default (opt-in) also carries `defaultEnabled: false`, `enabledForScope`, `enabledByAncestor` and `canEnable`; turn it on with enableRule(). */
   includeDefaults?: boolean;
   /** Only rules scoped to this company code (case-insensitive). */
   companyCode?: string;
@@ -4042,6 +4079,14 @@ export interface DefaultRuleItem {
   suppressed: boolean;
   /** True when `suppressed` is true but NOT via the caller's own exact scope — a wider scope (this entity's organisation, or its tenant) suppressed it instead. The caller cannot toggle this off directly (canSuppress is also false whenever this is true); they'd need to act from that wider scope. */
   suppressedByAncestor: boolean;
+  /** Only present for a rule that is off by default (opt-in): false. A rule that is on by default omits the four opt-in fields. */
+  defaultEnabled?: boolean;
+  /** Opt-in rules only: on for the caller's scope, through its own enable or a wider scope's. */
+  enabledForScope?: boolean;
+  /** Opt-in rules only: true when `enabledForScope` is true through a wider scope (organisation or tenant) rather than the caller's own. Turn it off from that scope. */
+  enabledByAncestor?: boolean;
+  /** Opt-in rules only: true when the caller's own scope may turn the rule on with enableRule(). */
+  canEnable?: boolean;
   cannotDisableReason: string | null;
   /** Rule-list-item-shaped fields so a default row can render exactly like any other rule row. A validation_rules row has no rules-engine status/enabled/conditions concept at all — it's a standing legal-mandate check, always ACTIVE/enabled, never scoped by transactionDirection, so those three are fixed rather than derived. */
   status: RuleStatus;
@@ -4121,6 +4166,22 @@ export interface SuppressRuleResponse {
 export interface UnsuppressRuleResponse {
   ok: true;
   suppressed: false;
+}
+
+export interface EnableRuleParams {
+  /** Optional free-text note on why this scope turned the rule on (1-2000 chars if present). */
+  reason?: string;
+  entityId?: string;
+}
+
+export interface EnableRuleResponse {
+  ok: true;
+  enabled: true;
+}
+
+export interface DisableRuleResponse {
+  ok: true;
+  enabled: false;
 }
 
 export interface RuleVersionSnapshot {

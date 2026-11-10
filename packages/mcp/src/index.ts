@@ -1034,6 +1034,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'retry_invoice_with_master_data',
+    description:
+      'Retry a REJECTED or NEEDS_INFO invoice using the tax number from the customer master record instead of the one that was sent. ' +
+      'Data sent through the API is otherwise kept; this is the explicit choice to use the master record\'s value. Only the customer tax number changes: ' +
+      'a corrected copy is sent through the normal send path (the usual tax-number checks still run on the master value), the result carries the NEW invoiceId and previousInvoiceId, ' +
+      'and the change is audited. Read get_invoice first: availableActions contains "use_master_data" only when a customer record matches (customerRef, else exact name) ' +
+      'with a tax number different from the sent one. Refusals: 409 NOT_ELIGIBLE, 422 MASTER_CUSTOMER_NOT_FOUND, 422 MASTER_TAX_ID_MISSING, ' +
+      '422 MASTER_TAX_ID_UNCHANGED (update the customer record first). Never blind-retry a refusal. ' +
+      'Check first: call it with dryRun true, show the user what would change, and only after they explicitly say yes call again without dryRun.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID — from submit_invoice, list_invoices or get_invoice.' },
+        dryRun: { type: 'boolean', description: 'Check this request without sending anything: answers with the one field change (customer.taxId, before and after) that would be made.' },
+        confirmationToken: { type: 'string', description: 'Hosted MCP only: the confirmationToken returned by the dryRun of this exact request. Not needed here.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'get_sii_reconciliation',
     description:
       'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
@@ -4036,7 +4057,7 @@ const TOOLS = [
         direction: { type: 'string', enum: ['purchase', 'sale'], description: 'Inclusive of direction-less rows — see description.' },
         conditionProperty: { type: 'string', description: 'Only rules with a condition on this catalog property.' },
         conditionValue: { type: 'string', description: 'Combined with conditionProperty — narrows to a condition whose value equals this.' },
-        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing).' },
+        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing). A default that is off by default shows defaultEnabled false, enabledForScope and canEnable; turn it on with enable_rule.' },
         companyCode: { type: 'string', description: 'Only rules scoped to this company code (case-insensitive).' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
@@ -4164,6 +4185,28 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'enable_rule',
+    description: 'Turn ON, for this key\'s own scope, a platform-default rule that is off by default (list_rules with includeDefaults shows defaultEnabled false, enabledForScope and canEnable). Example: the warning shown when a customer\'s tax number is reported not valid by a tax authority register at send time. The rule applies at this scope and everywhere beneath it; it never blocks a send unless it is an error rule. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule and a rule locked by the platform are refused (RULE_NOT_ENABLEABLE). Available on every plan. Audited.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'A rules-engine rule id (UUID) from list_rules with includeDefaults.' },
+        reason: { type: 'string', description: 'Optional free-text note on why this scope turned it on.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'disable_rule',
+    description: 'Turn OFF again an opt-in platform-default rule that this key\'s own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string', description: 'A rules-engine rule id (UUID).' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
       required: ['id'],
     },
   },
@@ -4458,6 +4501,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const { id, idempotencyKey, ...body } = args as { id: string; idempotencyKey?: string } & Record<string, unknown>;
       const key = idempotencyKey ?? createHash('sha256').update(`cancel|${id}`).digest('hex').slice(0, 64);
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': key });
+    }
+
+    case 'retry_invoice_with_master_data': {
+      const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'get_sii_reconciliation': {
@@ -5256,6 +5304,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'unsuppress_rule': {
       const { id, entityId } = args as { id: string; entityId?: string };
       return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'enable_rule': {
+      const { id, reason, entityId } = args as { id: string; reason?: string; entityId?: string };
+      return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, { reason }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'disable_rule': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
     case 'simulate_rule': {
       const { id, entityId, ...body } = args as Record<string, unknown> & { id?: string; entityId?: string };

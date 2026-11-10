@@ -169,6 +169,39 @@ describe('ClearvoClient rules engine', () => {
     expect(result.suppressed).toBe(false);
   });
 
+  it('enableRule POSTs /rules-engine/rules/{id}/enable with a reason, forwarding entityId as a header not a body field', async () => {
+    const fetchMock = mockFetch({ ok: true, enabled: true });
+    const client = new ClearvoClient({ apiKey: 'csk_live_acct_x', baseUrl: 'http://x/v1' });
+    const result = await client.enableRule('r1', { reason: 'We want the warning', entityId: 'ent-1' });
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/enable');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['x-entity-id']).toBe('ent-1');
+    const body = JSON.parse(opts.body as string);
+    expect(body).toEqual({ reason: 'We want the warning' });
+    expect(body).not.toHaveProperty('entityId');
+    expect(result.enabled).toBe(true);
+  });
+
+  it('enableRule POSTs an empty body when no reason is given', async () => {
+    const fetchMock = mockFetch({ ok: true, enabled: true });
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    await client.enableRule('r1');
+    const [, opts] = fetchMock.mock.calls[0];
+    expect(JSON.parse(opts.body as string)).toEqual({});
+  });
+
+  it('disableRule DELETEs /rules-engine/rules/{id}/enable', async () => {
+    const fetchMock = mockFetch({ ok: true, enabled: false });
+    const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+    const result = await client.disableRule('r1', 'ent-1');
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/enable');
+    expect(opts.method).toBe('DELETE');
+    expect(opts.headers['x-entity-id']).toBe('ent-1');
+    expect(result.enabled).toBe(false);
+  });
+
   it('listRuleVersions GETs /rules-engine/rules/{id}/versions', async () => {
     const fetchMock = mockFetch({ ok: true, versions: [] });
     const client = new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });

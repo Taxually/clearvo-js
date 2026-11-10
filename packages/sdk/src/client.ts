@@ -102,6 +102,9 @@ import type {
   AmendReportResponse,
   CancelReportInput,
   CancelReportResponse,
+  RetryWithMasterDataInput,
+  RetryWithMasterDataPreview,
+  RetryWithMasterDataResult,
   GetSiiReconciliationSummaryResponse,
   GetSiiReconciliationResponse,
   QueryRequestParams,
@@ -151,6 +154,9 @@ import type {
   SuppressRuleParams,
   SuppressRuleResponse,
   UnsuppressRuleResponse,
+  EnableRuleParams,
+  EnableRuleResponse,
+  DisableRuleResponse,
   ListRuleVersionsResponse,
   SimulateRuleInput,
   SimulateRuleResponse,
@@ -898,6 +904,18 @@ export class ClearvoClient {
   }
 
   /**
+   * Retry a REJECTED or NEEDS_INFO outbound invoice using the tax number from the customer master record instead of the
+   * one that was sent. Only `customer.taxId` changes; the corrected copy goes through the normal send validation. Resolves
+   * with the NEW `invoiceId` and `previousInvoiceId` (HTTP 200, or 202 when still processing); with `dryRun: true` it
+   * resolves with the preview and sends nothing. Offered when `availableActions` on the invoice contains `use_master_data`.
+   * Throws a {@link ClearvoError}: 404 not found, 409 NOT_ELIGIBLE, 422 MASTER_CUSTOMER_NOT_FOUND / MASTER_TAX_ID_MISSING /
+   * MASTER_TAX_ID_UNCHANGED, or the send validation error for the corrected copy.
+   */
+  retryInvoiceWithMasterData(id: string, input: RetryWithMasterDataInput = {}, entityId?: string): Promise<RetryWithMasterDataResult | RetryWithMasterDataPreview> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, input, entityHeaders(entityId));
+  }
+
+  /**
    * The current entity's latest AEAT Spain SII Consulta reconciliation run — id plus the
    * same condensed reassurance-line status the dashboard's Spain SII page shows. Call this
    * first to get an `id` for getSiiReconciliation() below; `id` is null only when the
@@ -1269,6 +1287,17 @@ export class ClearvoClient {
   /** Remove this key's own scope's suppression of a platform-default rule, if one exists — the default resumes firing for this scope. 404 if no active suppression exists. */
   unsuppressRule(ruleId: string, entityId?: string): Promise<UnsuppressRuleResponse> {
     return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/suppress`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn ON, for this key's own scope, a platform-default (is_system) rule that is off by default (opt-in): listRules({ includeDefaults: true }) shows `defaultEnabled: false`, `enabledForScope` and `canEnable`. The rule then applies at this scope and everywhere beneath it. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule, or one locked by the platform is refused 422 RULE_NOT_ENABLEABLE. */
+  enableRule(ruleId: string, params: EnableRuleParams = {}): Promise<EnableRuleResponse> {
+    const { entityId, ...body } = params;
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn OFF again an opt-in rule this key's own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope. */
+  disableRule(ruleId: string, entityId?: string): Promise<DisableRuleResponse> {
+    return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   /** A rule's own rules_versions history, newest first. */

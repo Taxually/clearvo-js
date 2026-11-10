@@ -52,11 +52,11 @@ const READ_ONLY = new Set<string>([
 
 const DESTRUCTIVE = new Set<string>([
   'delete_client_tax_code', 'remove_entity_logo', 'delete_webhook', 'delete_customer', 'delete_supplier', 'erase_customer_address_data',
-  'delete_bank_account', 'unsuppress_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
+  'delete_bank_account', 'unsuppress_rule', 'disable_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
   'cancel_sii_report', 'amend_sii_report', 'reset_field_mappings', 'exclude_reporting_batch_item',
   'confirm_reporting_batch',
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
-  'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi',
+  'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi', 'retry_invoice_with_master_data',
   'update_business_status', 'update_invoice_business_status', 'fix_invoice',
   // Removes one of the customer's own tests from new runs.
   'archive_test_case',
@@ -79,7 +79,7 @@ const NON_IDEMPOTENT = new Set<string>([
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account', 'create_company_code',
   'receive_invoice_document', 'simulate_received_invoices', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
-  'move_rule', 'amend_sii_report',
+  'move_rule', 'amend_sii_report', 'retry_invoice_with_master_data',
   // Each call starts a new run / adds a new test.
   'start_test_run', 'create_test_case',
   // Each call appends a new request to the filing's timeline.
@@ -97,6 +97,7 @@ const OPEN_WORLD = new Set<string>([
   'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
   'create_fr_platform_connect_link',
   'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
+  'retry_invoice_with_master_data',
   // poll_status is a GET that live-polls KSeF/NAV and writes the result back: NOT read-only.
   'poll_status',
   // These verify the credential against the authority live before saving.
