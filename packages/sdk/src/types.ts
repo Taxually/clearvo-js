@@ -1050,6 +1050,88 @@ export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+  /** On `GET /v1/invoices/{id}` only: what can be done to put this invoice right. See {@link InvoiceResolution}. */
+  resolution?: InvoiceResolution;
+}
+
+/** One piece of information a held invoice still needs. Supply it with `fixInvoice` under `field`. */
+export interface InvoiceMissingField {
+  /** Dotted path to send in `fixInvoice`, for example `customer.address.country`. */
+  field: string;
+  /** A human-readable name to show next to an input. */
+  label: string;
+  /** The kind of input to show: for example text, country, date or number. */
+  inputType: string;
+  /** Whether Clearvo accepts a value for this field through `fixInvoice`. */
+  suppliable: boolean;
+}
+
+/**
+ * Returned as `resolution` on `GET /v1/invoices/{id}`: whether and how the invoice can be fixed through `fixInvoice`.
+ * A held invoice that is missing information is completed by supplying exactly `missingFields` (it updates in place and is sent again).
+ * A rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original).
+ * Invoices that arrived through the API or an ERP cannot be edited in Clearvo: fix them in the source system and it resubmits.
+ * Issued e-invoices are never edited; a submitted e-report is amended.
+ */
+export interface InvoiceResolution {
+  /** True when `fixInvoice` can act on this invoice now. */
+  fix: boolean;
+  /** True when the invoice is waiting for information that you can supply. */
+  canSupply: boolean;
+  missingFields: InvoiceMissingField[];
+  /** True when existing values (not only missing ones) can be changed. */
+  canChangeValues: boolean;
+  /** Where the invoice came from, for example the API, an ERP connection or the dashboard. */
+  source: string | null;
+  /** Why the invoice cannot be edited in Clearvo, in plain words, when `fix` is false because of its source. */
+  lockedReason: string | null;
+  /** What a fix does: updates the invoice in place, creates a corrected invoice, or amends the submitted report. */
+  fixMode: FixInvoiceMode | null;
+  /** The stored document the dotted paths in `fix` point into. Set when a fix creates a corrected invoice or amends a report; null otherwise. */
+  editableDocument?: Record<string, unknown> | null;
+  /** The fields that can be changed. Null means free-form: any path in `editableDocument` is accepted. */
+  editableFields?: string[] | null;
+  /** What can be done to the invoice now. */
+  availableActions?: Array<'retry' | 'fix' | 'issue_credit_note' | 'amend_report' | 'cancel_report'>;
+}
+
+export type FixInvoiceMode = 'updated_in_place' | 'new_invoice' | 'amended';
+
+export interface FixInvoiceInput {
+  /** Clearvo invoice id (or reference id). */
+  id: string;
+  /** Dotted field path to new value, for example `{ 'customer.address.country': 'DE' }`. Array indexes are accepted (`lines.0.quantity` or `lines[0].quantity`). For a held invoice supply exactly the `missingFields` listed in the invoice's `resolution`. */
+  fields: Record<string, unknown>;
+  /** Paths to delete from the corrected document, for example `['customer.address.line2']`. There is no null meaning: send a path here to clear it. A path cannot also be in `fields`. A locked source refuses clearing an existing value. Send `fields: {}` when only clearing. */
+  clear?: string[];
+  /** Check first: answers `FixInvoiceDryRunResponse` and changes nothing. */
+  dryRun?: boolean;
+  /** The confirmation token for the check-first step of the MCP tool (operation `invoice.fix`). */
+  confirmationToken?: string;
+  /** Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface FixInvoiceResponse {
+  ok: true;
+  mode: FixInvoiceMode;
+  /** The invoice that now carries the fix: the same id for `updated_in_place`, the new corrected invoice for `new_invoice`. */
+  invoiceId: string;
+  /** The original invoice, when `mode` is `new_invoice`. */
+  previousInvoiceId?: string;
+  status: string;
+  clearanceStatus: string;
+  changes: Array<{ field: string; mode: 'supply' | 'change' | 'clear'; newValue: unknown }>;
+  /** True when nothing is missing any more. */
+  completed: boolean;
+  /** What is still missing after this fix. */
+  missingFields: InvoiceMissingField[];
+}
+
+/** Answer to `fixInvoice` with `dryRun: true`. Nothing was changed. */
+export interface FixInvoiceDryRunResponse {
+  id: string;
+  wouldSubmit: { mode: FixInvoiceMode; changes: Array<{ field: string; mode: 'supply' | 'change' | 'clear'; newValue: unknown }> };
 }
 
 export interface SimulateReceivedInvoicesInput {
@@ -1174,17 +1256,14 @@ export interface TaxCalcAddressInput {
  *   and it must be one of the entity's registered tax IDs (any country),
  *   rejecting a mismatch with 422
  *   `SUPPLIER_TAX_ID_MISMATCH` (the registered value is never silently
- *   substituted). `seller` is accepted as a deprecated alias for
- *   `supplier` on a sale only.
+ *   substituted).
  * - `'purchase'` — an incoming, input-tax transaction: party roles
  *   invert. The entity is the `customer` (buyer) and the counterparty is
  *   the `supplier` (vendor), which is REQUIRED (422 `SUPPLIER_REQUIRED`
  *   if omitted). `customer` is now OPTIONAL and entity-side — omit it and
  *   Clearvo auto-fills it from your entity's own master data; supply it
  *   and it is validated the same way, rejecting a mismatch with 422
- *   `CUSTOMER_TAX_ID_MISMATCH`. `seller` has no meaning on a purchase and
- *   is rejected outright with 422 `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE`
- *   — use `supplier`, which already means the vendor.
+ *   `CUSTOMER_TAX_ID_MISMATCH`.
  *
  * The response's top-level `entityRole` (`'supplier'` for a sale,
  * `'customer'` for a purchase) tells you which response party block is
@@ -1224,18 +1303,6 @@ export interface TaxCalculateRequest {
    * or `ap_not_enabled` (switch it on).
    */
   transactionDirection?: 'sale' | 'purchase';
-  /**
-   * @deprecated Use `supplier` instead. Deprecated alias for `supplier`
-   * on a `transactionDirection: 'sale'` calculation only — normalised to
-   * `supplier` before validation runs. Rejected with 422
-   * `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE` when sent alongside
-   * `transactionDirection: 'purchase'` (there is no sensible mapping —
-   * use `supplier` there, which already means the vendor).
-   */
-  seller?: {
-    address: { country: string };
-    taxId?: string;
-  };
   /**
    * The supplier party. Required when `transactionDirection` is
    * `'purchase'` — the actual vendor on the purchase invoice (422
@@ -1875,6 +1942,24 @@ export interface TaxNumberValidateResponse {
   name?: string;
   address?: string;
   status: 'VALID' | 'INVALID' | 'UNVERIFIED';
+}
+
+/** One country and mandate on the public coverage list (GET /v1/coverage). */
+export interface CountryCoverageEntry {
+  /** ISO 3166-1 alpha-2 country code. */
+  country: string;
+  name: string;
+  /** The mandate or reporting regime this row describes. */
+  mandate: string;
+  status: 'live' | 'beta' | 'coming_soon' | 'not_supported' | 'no_mandate';
+  /** Mandate go-live date (YYYY-MM-DD) where confirmed, otherwise null. */
+  goLiveDate: string | null;
+}
+
+/** GET /v1/coverage response. Public: needs no API key. A country that is not listed has no confirmed status yet. */
+export interface CountryCoverageResponse {
+  ok: true;
+  data: { countries: CountryCoverageEntry[] };
 }
 
 export interface CountryRequirements {
@@ -3960,7 +4045,7 @@ export interface ListRulesParams {
   conditionProperty?: string;
   /** Combined with conditionProperty — narrows to a condition whose value equals this. */
   conditionValue?: string;
-  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). */
+  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). A default that is off by default (opt-in) also carries `defaultEnabled: false`, `enabledForScope`, `enabledByAncestor` and `canEnable`; turn it on with enableRule(). */
   includeDefaults?: boolean;
   /** Only rules scoped to this company code (case-insensitive). */
   companyCode?: string;
@@ -3994,6 +4079,14 @@ export interface DefaultRuleItem {
   suppressed: boolean;
   /** True when `suppressed` is true but NOT via the caller's own exact scope — a wider scope (this entity's organisation, or its tenant) suppressed it instead. The caller cannot toggle this off directly (canSuppress is also false whenever this is true); they'd need to act from that wider scope. */
   suppressedByAncestor: boolean;
+  /** Only present for a rule that is off by default (opt-in): false. A rule that is on by default omits the four opt-in fields. */
+  defaultEnabled?: boolean;
+  /** Opt-in rules only: on for the caller's scope, through its own enable or a wider scope's. */
+  enabledForScope?: boolean;
+  /** Opt-in rules only: true when `enabledForScope` is true through a wider scope (organisation or tenant) rather than the caller's own. Turn it off from that scope. */
+  enabledByAncestor?: boolean;
+  /** Opt-in rules only: true when the caller's own scope may turn the rule on with enableRule(). */
+  canEnable?: boolean;
   cannotDisableReason: string | null;
   /** Rule-list-item-shaped fields so a default row can render exactly like any other rule row. A validation_rules row has no rules-engine status/enabled/conditions concept at all — it's a standing legal-mandate check, always ACTIVE/enabled, never scoped by transactionDirection, so those three are fixed rather than derived. */
   status: RuleStatus;
@@ -4073,6 +4166,22 @@ export interface SuppressRuleResponse {
 export interface UnsuppressRuleResponse {
   ok: true;
   suppressed: false;
+}
+
+export interface EnableRuleParams {
+  /** Optional free-text note on why this scope turned the rule on (1-2000 chars if present). */
+  reason?: string;
+  entityId?: string;
+}
+
+export interface EnableRuleResponse {
+  ok: true;
+  enabled: true;
+}
+
+export interface DisableRuleResponse {
+  ok: true;
+  enabled: false;
 }
 
 export interface RuleVersionSnapshot {

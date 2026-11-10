@@ -475,6 +475,44 @@ export function createProgram(): Command {
       print(await api('GET', `/invoices${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
     });
 
+  // MCP twin: fix_invoice (POST /v1/invoices/{id}/fix).
+  invoices
+    .command('fix <id>')
+    .description('Put an invoice right by supplying values. A held invoice that is missing information takes exactly the missing fields listed in its "resolution" (it updates in place and is sent again); a rejected invoice is corrected where its source allows changes (a corrected invoice is created, linked to the original); a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be corrected or have values changed in Clearvo (fix them in the source system), but missing values can always be supplied. Issued e-invoices are never edited. <id> is the Clearvo id or the reference id')
+    .option('--field <path=value>', 'A dotted field path and its new value, e.g. customer.address.country=DE (repeatable; sent as text, so postal codes keep leading zeros; use --fields for numbers or booleans)', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--fields <json>', 'All fields as one JSON object, e.g. \'{"customer.address.country":"DE"}\'')
+    .option('--clear <path>', 'A dotted field path to delete from the corrected document (repeatable; a path cannot also be given with --field)', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--dry-run', 'Check only: show what the fix would do and change nothing')
+    .option('--confirmation-token <token>', 'Confirmation token from the check-first step')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { field?: string[]; clear?: string[]; fields?: string; dryRun?: boolean; confirmationToken?: string; entity?: string; pretty?: boolean }) => {
+      const fields: Record<string, unknown> = {};
+      if (opts.fields) {
+        try {
+          const parsed = JSON.parse(opts.fields);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+          Object.assign(fields, parsed);
+        } catch {
+          console.error('--fields must be a JSON object, e.g. \'{"customer.address.country":"DE"}\'.');
+          process.exit(1);
+        }
+      }
+      for (const pair of opts.field ?? []) {
+        const eq = pair.indexOf('=');
+        if (eq < 1) {
+          console.error(`--field "${pair}" must look like path=value, e.g. customer.address.country=DE.`);
+          process.exit(1);
+        }
+        fields[pair.slice(0, eq)] = pair.slice(eq + 1);
+      }
+      if (Object.keys(fields).length === 0 && !(opts.clear && opts.clear.length)) {
+        console.error('Supply at least one --field path=value (or --fields <json>), or --clear <path>.');
+        process.exit(1);
+      }
+      print(await api('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields, ...(opts.clear && opts.clear.length ? { clear: opts.clear } : {}), ...(opts.dryRun ? { dryRun: true } : {}), ...(opts.confirmationToken ? { confirmationToken: opts.confirmationToken } : {}) }, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
   // MCP twin: list_invoice_attachments (GET /v1/invoices/{id}/attachments). The download has no MCP twin: it is binary.
   invoices
     .command('attachments <id>')
@@ -638,6 +676,16 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo coverage ─────────────────────────────────────────────────────────
+  program
+    .command('coverage')
+    .description('List the countries and mandates covered, with status (live, beta, coming_soon, not_supported, no_mandate) and go-live date where confirmed')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      const result = await api('GET', '/coverage');
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo entities ────────────────────────────────────────────────────────
   const entities = program.command('entities').description('Manage entities');
   
@@ -1946,7 +1994,7 @@ export function createProgram(): Command {
     .option('--direction <direction>', 'purchase or sale — inclusive of direction-less rows, which apply to both')
     .option('--condition-property <property>', 'Only rules with a condition on this catalog property')
     .option('--condition-value <value>', 'Combined with --condition-property — narrows to a condition whose value equals this')
-    .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing)')
+    .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing; an opt-in default shows defaultEnabled false and canEnable, see `rules enable`)')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--company-code <code>', 'Only rules scoped to this company code (case-insensitive)')
     .option('--pretty', 'Pretty-print JSON output')
@@ -2106,6 +2154,29 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
       const result = await api('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('enable <id>')
+    .description('Turn ON, for this key\'s own scope, a platform-default rule that is off by default (opt-in). Find the id via `rules list --include-defaults` (defaultEnabled false, canEnable). Refused 422 RULE_NOT_ENABLEABLE for a rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule, or one locked by the platform')
+    .option('--reason <text>', 'Optional free-text note on why this scope turned it on (1-2000 chars)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { reason?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.reason) body.reason = opts.reason;
+      const result = await api('POST', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('disable <id>')
+    .description('Turn OFF again an opt-in platform-default rule that this key\'s own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 

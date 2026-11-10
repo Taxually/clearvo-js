@@ -20,6 +20,9 @@ import type {
   DutiesEstimateResult,
   AddressErasureInput,
   ListInvoiceAttachmentsResponse,
+  FixInvoiceInput,
+  FixInvoiceResponse,
+  FixInvoiceDryRunResponse,
   DownloadedInvoiceAttachment,
   AddressErasureResult,
   ImportSettlementInput,
@@ -32,6 +35,7 @@ import type {
   TaxNumberBatchItem,
   TaxNumberBatchResult,
   CountryRequirements,
+  CountryCoverageResponse,
   Product,
   CreateProductInput,
   UpdateProductInput,
@@ -150,6 +154,9 @@ import type {
   SuppressRuleParams,
   SuppressRuleResponse,
   UnsuppressRuleResponse,
+  EnableRuleParams,
+  EnableRuleResponse,
+  DisableRuleResponse,
   ListRuleVersionsResponse,
   SimulateRuleInput,
   SimulateRuleResponse,
@@ -400,6 +407,26 @@ export class ClearvoClient {
     };
   }
 
+  /**
+   * POST /invoices/{id}/fix: put an invoice right by supplying values as dotted field paths, e.g. `{ 'customer.address.country': 'DE' }`.
+   * Read the invoice's `resolution` first: a held invoice that is missing information takes exactly the listed `missingFields` and
+   * updates in place (`mode: 'updated_in_place'`) and is sent again; a rejected invoice is corrected where its source allows changes
+   * (`mode: 'new_invoice'`, a corrected invoice linked to the original); a submitted e-report is amended (`mode: 'amended'`).
+   * An amend of a reported ES SII registration is allowed from every source. `clear: ['path']` deletes a value from the corrected
+   * document (a path cannot be in both `fields` and `clear`). With `dryRun: true` it changes nothing and answers `{ id, wouldSubmit }`.
+   * Success is 200, or 202 while the invoice is still being processed.
+   * Errors surface as ClearvoError: 404 (no such invoice), 409 NOT_FIXABLE (issued e-invoices are never edited), 409 SOURCE_LOCKED
+   * (API- and ERP-sourced invoices cannot be corrected or have values changed, or cleared, in Clearvo: fix them in the source system and
+   * it resubmits; missing values can always be supplied), 422 INVALID_FIELDS (`errors[]`: INVALID_PATH, INVALID_VALUE, NOT_SUPPLIABLE,
+   * LOCKED_CHANNEL), 503 FIX_UNAVAILABLE (retryable).
+   */
+  fixInvoice(input: FixInvoiceInput & { dryRun: true }): Promise<FixInvoiceDryRunResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse | FixInvoiceDryRunResponse> {
+    const { id, entityId, ...body } = input;
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
   // ── Tax Calculation ───────────────────────────────────────────────────────────
 
   calculateTax(input: TaxCalculateRequest): Promise<TaxCalculateResponse> {
@@ -625,6 +652,14 @@ export class ClearvoClient {
   getRequirements(country: string, filter: { class?: 'format_authority' | 'legal_content' | 'presentation'; mandate?: string } = {}): Promise<CountryRequirements> {
     const query = new URLSearchParams({ country, ...(filter.class ? { class: filter.class } : {}), ...(filter.mandate ? { mandate: filter.mandate } : {}) });
     return this.request('GET', `/requirements?${query.toString()}`);
+  }
+
+  /**
+   * GET /coverage: the countries and mandates covered, each with a customer-facing status and the mandate go-live date where confirmed.
+   * Public (needs no API key). A 503 with code COVERAGE_UNAVAILABLE is temporary: retry.
+   */
+  listCountryCoverage(): Promise<CountryCoverageResponse> {
+    return this.request('GET', '/coverage');
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────
@@ -1252,6 +1287,17 @@ export class ClearvoClient {
   /** Remove this key's own scope's suppression of a platform-default rule, if one exists — the default resumes firing for this scope. 404 if no active suppression exists. */
   unsuppressRule(ruleId: string, entityId?: string): Promise<UnsuppressRuleResponse> {
     return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/suppress`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn ON, for this key's own scope, a platform-default (is_system) rule that is off by default (opt-in): listRules({ includeDefaults: true }) shows `defaultEnabled: false`, `enabledForScope` and `canEnable`. The rule then applies at this scope and everywhere beneath it. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule, or one locked by the platform is refused 422 RULE_NOT_ENABLEABLE. */
+  enableRule(ruleId: string, params: EnableRuleParams = {}): Promise<EnableRuleResponse> {
+    const { entityId, ...body } = params;
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn OFF again an opt-in rule this key's own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope. */
+  disableRule(ruleId: string, entityId?: string): Promise<DisableRuleResponse> {
+    return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   /** A rule's own rules_versions history, newest first. */

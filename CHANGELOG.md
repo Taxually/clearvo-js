@@ -4,6 +4,34 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+## Unreleased — `seller` removed from tax calculation requests (matches the published API)
+
+The deprecated `seller` alias of `supplier` is gone from the published `POST /v1/tax/calculate` request, so it is gone from the SDK `TaxCalculateRequest` type and the MCP `calculate_tax` input schema. Send `supplier` (on a sale it is optional and filled from your entity's master data).
+
+## Unreleased — opt-in platform rules: turn a default-off rule on (publish after the backend opt-in rules PR is live)
+
+A platform default rule can now be off by default. A business turns one on for its own scope (and everything beneath it) with `POST /v1/rules-engine/rules/{id}/enable` and off again with `DELETE` on the same path. The first one is `CUSTOMER_TAX_NUMBER_NOT_VALID_AT_AUTHORITY`: when it is on, a sent invoice whose customer tax number the tax authority reports as not valid gets a warning (the invoice is still sent; an authority that cannot be reached never warns). Rules can read the new read-only property `customerTaxNumberAuthorityStatus` (`valid`, `invalid`, `unconfirmed` or null) on invoices. The existing default-on format rule `INVALID_CUSTOMER_TAX_ID_GENERAL` can be switched off with suppress, as before.
+
+- SDK: `enableRule(id, { reason?, entityId? })` and `disableRule(id, entityId?)`; new types `EnableRuleParams`, `EnableRuleResponse`, `DisableRuleResponse`. `listRules({ includeDefaults: true })` default items gain optional `defaultEnabled`, `enabledForScope`, `enabledByAncestor` and `canEnable` (present for an opt-in rule). Enabling a rule that is on by default, a legal-mandate rule or a platform-locked rule is a 422 `RULE_NOT_ENABLEABLE`, thrown as a `ClearvoError`.
+- MCP: new tools `enable_rule` and `disable_rule` (same schema as the hosted connector); `list_rules` documents the new default fields.
+- CLI: `clearvo rules enable <id> [--reason <text>] [--entity <id>]` and `clearvo rules disable <id> [--entity <id>]`.
+
+## Unreleased — fix an invoice with one call (publish after the backend fix-invoice PR is live)
+
+`POST /v1/invoices/{id}/fix` with `{ "fields": { "<dotted path>": value } }` puts an invoice right. A held invoice that is missing information is completed by supplying exactly the fields listed in its `resolution.missingFields`: it updates in place and is sent again (`mode: "updated_in_place"`). A rejected invoice is corrected where its source allows changes: a corrected invoice is created, linked to the original (`mode: "new_invoice"`, `previousInvoiceId`). A submitted e-report is amended (`mode: "amended"`). Invoices that arrived through the API or an ERP cannot be edited in Clearvo (409 `SOURCE_LOCKED`): fix them in the source system and it resubmits. Issued e-invoices are never edited (409 `NOT_FIXABLE`). 422 `INVALID_FIELDS` lists `errors[]` (`INVALID_PATH`, `INVALID_VALUE`, `NOT_SUPPLIABLE`, `LOCKED_CHANNEL`); 503 `FIX_UNAVAILABLE` is retryable. `clear: [path, ...]` deletes a value from the corrected document (no null meaning; a path cannot also be in `fields`; a locked source refuses clearing an existing value; `changes[].mode` is then `clear`). `dryRun: true` checks first and changes nothing (`{ id, wouldSubmit }`); `confirmationToken` is the MCP check-first gate. API- and ERP-sourced invoices cannot be corrected or have values changed in Clearvo, but missing values can always be supplied and amending a reported ES SII registration is allowed from every source. `GET /v1/invoices/{id}` now carries a `resolution` block (`fix`, `canSupply`, `missingFields`, `canChangeValues`, `source`, `lockedReason`, `fixMode`, `editableDocument`, `editableFields`, `availableActions`).
+
+- SDK: `fixInvoice({ id, fields, clear?, dryRun?, confirmationToken?, entityId? })`; new types `FixInvoiceInput`, `FixInvoiceResponse`, `FixInvoiceMode`, `InvoiceResolution`, `InvoiceMissingField`; `InvoiceRecordTimestamps.resolution`.
+- MCP: new tool `fix_invoice` (same schema as the hosted connector).
+- CLI: new command `clearvo invoices fix <id> --field customer.address.country=DE [--field ...] [--clear <path> ...] [--dry-run] | --fields <json>`.
+
+## Unreleased — country coverage list (publish after backend PR 19145 is live)
+
+`GET /v1/coverage` is a public endpoint (no API key) that lists the countries and mandates covered, each with `country`, `name`, `mandate`, a customer-facing `status` (`live`, `beta`, `coming_soon`, `not_supported`, `no_mandate`) and `goLiveDate` (YYYY-MM-DD, or null when not confirmed). A country that is not listed has no confirmed status yet. A 503 with code `COVERAGE_UNAVAILABLE` is temporary and retryable.
+
+- SDK: `listCountryCoverage()`; new types `CountryCoverageEntry`, `CountryCoverageResponse`.
+- MCP: new read-only tool `list_country_coverage` (no input; same as the hosted connector).
+- CLI: `clearvo coverage [--pretty]`.
+
 ## Unreleased — invoice attachments: list and download (publish after the backend invoice-attachments PR is live)
 
 Supporting files sent with an invoice (`attachments[]` on `POST /v1/send`) are stored outside the invoice and never embedded in the e-invoice XML or PDF; they reach the customer as downloads on the hosted invoice page. `GET /v1/invoices/{id}/attachments` lists them (reference, fileName, mimeType, sizeBytes, sha256, description, externalUrl, `downloadable`, `downloadUrl`, `origin`) and `GET /v1/invoices/{id}/attachments/{index}` returns a stored file byte for byte. Limits when sending: pdf, csv, xlsx, xls, ods, xml, png, jpg and txt (extension and `mimeType` must agree), 10 MB per file, 25 MB in total, 20 per invoice; a breach is a 422 naming the attachment.
@@ -27,7 +55,7 @@ The `calculate_tax` MCP tool and the SDK's `TaxCalculateRequest` described only 
 - SDK: new `TaxCalcAddressInput` (street `line1`, `line2`, `city`, `region`, `postalCode`, `country`) for `supplier` and `customer` billing and shipping addresses. `TaxCalculateRequest` gains `date`, `transactionDate`, `orderDate`, `shippedAt`, `fulfilledAt`, `taxReportingCurrency`, `merchantRef`, `paymentMethod`, `orderDiscount`, `isMarketplaceFacilitatedSale`, `transactionType`, `relatedCalculationId`, `externalOriginalReference` and `shippingMode`; each line gains `productCode`, `productDescription`, `taxCode`, `discount`, `discountAmount`, `statedTaxAmount`, `recoverablePercentOverride` and `screenSizeInches`. All optional, nothing removed.
 - MCP: the stdio server's `calculate_tax` and `quote_duties` input schema is now the same as the hosted connector's, so every field above, the customer shipping address, the document stage, per-line ship-from and the rest are visible to an agent. A street and city give a US address street-level rates; names, emails and phone numbers are not accepted by the API and are not added.
 - CLI: `clearvo calculate <file>` sends the file as the request body, so it accepts the new fields without a change.
-- Two new CI checks (`npm run test:calculate-sdk-parity`, `npm run test:calculate-parity --workspace packages/mcp`) fail when the SDK type or the MCP tool lacks a field of the published request in `openapi.json`, declares one it does not have, or keeps a stale deliberate omission. The omissions are the removed `clientTaxCode` and `stripeTaxCode` fields and the deprecated `seller` alias beyond its country.
+- Two new CI checks (`npm run test:calculate-sdk-parity`, `npm run test:calculate-parity --workspace packages/mcp`) fail when the SDK type or the MCP tool lacks a field of the published request in `openapi.json`, declares one it does not have, or keeps a stale deliberate omission. The omissions are the removed `clientTaxCode` and `stripeTaxCode` fields (the `seller` alias is gone from the API and from the SDK).
 
 ## Unreleased — French receiving and buyer actions (publish after backend PR 18784 is live)
 

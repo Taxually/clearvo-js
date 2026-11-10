@@ -465,15 +465,6 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
         },
       },
     },
-    seller: {
-      type: 'object',
-      description: 'DEPRECATED — alias for `supplier` on a sale (its `address` becomes supplier.billingAddress). Not accepted on a purchase (422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE). Use `supplier` instead.',
-      properties: {
-        address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
-        taxId: { type: 'string', description: 'Seller VAT number' },
-      },
-      required: ['address'],
-    },
     lineItems: {
       type: 'array',
       items: {
@@ -1133,8 +1124,7 @@ const TOOLS = [
       'SUPPLIER_TAX_ID_MISMATCH on a mismatch). On a purchase, party roles invert: the entity is the customer and ' +
       'the counterparty (the vendor) goes in supplier, which is REQUIRED (422 SUPPLIER_REQUIRED if omitted) — ' +
       'customer is now optional and entity-side, validated the same way (422 CUSTOMER_TAX_ID_MISMATCH on a ' +
-      'mismatch). seller is a deprecated alias for supplier, accepted on a sale only — rejected with 422 ' +
-      'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
+      'mismatch). The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
       'which block is your own entity. ' +
       'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, taxExpectedFromVendorRate, creditAllowed (vendor tax credited up to the use tax), vendorClaim ({ amount, basis OVERCHARGE_VS_EXPECTED | TAX_NOT_DUE } to claim back from the supplier, or null), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full (a purchase invoice with no statedTaxAmount is treated as charged 0; a purchase order is not); a charge matching no known rate is assumed to be a local tax for the delivery state and compared with taxExpectedFromVendor (an excess is OVERCHARGED with a vendorClaim and flagged for review), and a charge at another state\'s rate is credited only when the delivery state\'s rule allows it, otherwise it is claimed from the supplier (TAX_NOT_DUE); taxVerification.overchargeVsExpected is the charge above the expected tax; the trusted supplier flag does not apply to use tax; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. A state with no local use tax on general purchases is calculated at the state level only.',
@@ -1552,6 +1542,28 @@ const TOOLS = [
     },
   },
   {
+    name: 'fix_invoice',
+    description:
+      'Put an invoice right by supplying values as dotted field paths, for example {"customer.address.country": "DE"}. Call get_invoice first and read its `resolution` block: ' +
+      '`resolution.missingFields` lists exactly what a held invoice still needs (supply those fields and it updates in place and is sent again); ' +
+      'a rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original, and previousInvoiceId names the original); ' +
+      'a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be corrected or have values changed in Clearvo (409 SOURCE_LOCKED, errors[]): fix them in the source system and it resubmits; missing values can always be supplied, and amending a reported ES SII registration is allowed from every source. ' +
+      'Issued e-invoices are never edited (409 NOT_FIXABLE). 404 when there is no such invoice; 422 INVALID_FIELDS with errors[] ({field, code INVALID_PATH, INVALID_VALUE, NOT_SUPPLIABLE or LOCKED_CHANNEL, message}); 503 FIX_UNAVAILABLE is retryable. Use dryRun to check first. ' +
+      'Returns (200, or 202 while still processing) mode (updated_in_place, new_invoice or amended), invoiceId, previousInvoiceId, status, clearanceStatus, changes (mode supply, change or clear), completed and missingFields.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['id', 'fields'],
+      properties: {
+        id: { type: 'string', description: 'Clearvo invoice ID or reference ID.' },
+        fields: { type: 'object', description: 'Dotted field path to new value, for example {"customer.address.country": "DE"}. Array indexes are accepted (lines.0.quantity or lines[0].quantity).', additionalProperties: true },
+        clear: { type: 'array', items: { type: 'string' }, description: 'Dotted paths to delete from the corrected document. There is no null meaning: clear a value by listing its path here. A path cannot also be in fields. A locked source refuses clearing an existing value.' },
+        dryRun: { type: 'boolean', description: 'Check only: answers { id, wouldSubmit: { mode, changes } } and changes nothing.' },
+        confirmationToken: { type: 'string', description: 'Confirmation token for the check-first step (operation invoice.fix).' },
+        entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'update_business_status',
     description:
       'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice. The one shared ' +
@@ -1826,6 +1838,15 @@ const TOOLS = [
       },
       required: ['email', 'role'],
     },
+  },
+  {
+    name: 'list_country_coverage',
+    description:
+      'List the countries and e-invoicing or reporting mandates Taxually covers, with a customer-facing status ' +
+      '(live, beta, coming_soon, not_supported or no_mandate) and the mandate go-live date where it is confirmed. ' +
+      'Use this to answer "do you support e-invoicing in country X" before promising anything. Public, customer-safe ' +
+      'information only: a country that is not listed has no confirmed status yet.',
+    inputSchema: { type: 'object' as const, properties: {} },
   },
   {
     name: 'get_requirements',
@@ -4036,7 +4057,7 @@ const TOOLS = [
         direction: { type: 'string', enum: ['purchase', 'sale'], description: 'Inclusive of direction-less rows — see description.' },
         conditionProperty: { type: 'string', description: 'Only rules with a condition on this catalog property.' },
         conditionValue: { type: 'string', description: 'Combined with conditionProperty — narrows to a condition whose value equals this.' },
-        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing).' },
+        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing). A default that is off by default shows defaultEnabled false, enabledForScope and canEnable; turn it on with enable_rule.' },
         companyCode: { type: 'string', description: 'Only rules scoped to this company code (case-insensitive).' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
@@ -4164,6 +4185,28 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'enable_rule',
+    description: 'Turn ON, for this key\'s own scope, a platform-default rule that is off by default (list_rules with includeDefaults shows defaultEnabled false, enabledForScope and canEnable). Example: the warning shown when a customer\'s tax number is reported not valid by a tax authority register at send time. The rule applies at this scope and everywhere beneath it; it never blocks a send unless it is an error rule. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule and a rule locked by the platform are refused (RULE_NOT_ENABLEABLE). Available on every plan. Audited.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'A rules-engine rule id (UUID) from list_rules with includeDefaults.' },
+        reason: { type: 'string', description: 'Optional free-text note on why this scope turned it on.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'disable_rule',
+    description: 'Turn OFF again an opt-in platform-default rule that this key\'s own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string', description: 'A rules-engine rule id (UUID).' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
       required: ['id'],
     },
   },
@@ -4570,6 +4613,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/fr/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'fix_invoice': {
+      const { id, entityId, ...body } = args as { id: string; entityId?: string; fields: Record<string, unknown>; clear?: string[]; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'update_business_status': {
       const { id, entityId, ...body } = args as { id: string; entityId?: string } & Record<string, unknown>;
       return callApi('PATCH', `/invoices/${encodeURIComponent(id)}/business-status`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
@@ -4660,6 +4708,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       formData.append('document', new Blob([buffer], { type: 'application/pdf' }), 'certificate.pdf');
       return callApi('POST', `/tax/exemptions/${encodeURIComponent(certificateId)}/document`, formData, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
+
+    case 'list_country_coverage':
+      return callApi('GET', '/coverage');
 
     case 'get_requirements': {
       const country = args.country as string;
@@ -5253,6 +5304,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'unsuppress_rule': {
       const { id, entityId } = args as { id: string; entityId?: string };
       return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'enable_rule': {
+      const { id, reason, entityId } = args as { id: string; reason?: string; entityId?: string };
+      return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, { reason }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'disable_rule': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
     case 'simulate_rule': {
       const { id, entityId, ...body } = args as Record<string, unknown> & { id?: string; entityId?: string };

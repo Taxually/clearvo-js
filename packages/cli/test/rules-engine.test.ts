@@ -186,6 +186,30 @@ describe('clearvo rules / adjustments CLI', () => {
     expect(opts.headers['x-entity-id']).toBe('ent-1');
   });
 
+  it('"rules enable <id> --reason ..." POSTs /rules-engine/rules/{id}/enable with the reason', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, enabled: true }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findCommand(createProgram(), ['rules', 'enable']).parseAsync(['r1', '--reason', 'We want the warning'], { from: 'user' });
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/enable');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body as string)).toEqual({ reason: 'We want the warning' });
+  });
+
+  it('"rules disable <id>" DELETEs /rules-engine/rules/{id}/enable', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, enabled: false }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await findCommand(createProgram(), ['rules', 'disable']).parseAsync(['r1', '--entity', 'ent-1'], { from: 'user' });
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://x/v1/rules-engine/rules/r1/enable');
+    expect(opts.method).toBe('DELETE');
+    expect(opts.headers['x-entity-id']).toBe('ent-1');
+  });
+
   it('"rules simulate" without an id and without --draft exits without calling the API', async () => {
     const fetchMock = vi.fn();
     global.fetch = fetchMock as unknown as typeof fetch;
