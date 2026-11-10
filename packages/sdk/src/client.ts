@@ -20,6 +20,9 @@ import type {
   DutiesEstimateResult,
   AddressErasureInput,
   ListInvoiceAttachmentsResponse,
+  FixInvoiceInput,
+  FixInvoiceResponse,
+  FixInvoiceDryRunResponse,
   DownloadedInvoiceAttachment,
   AddressErasureResult,
   ImportSettlementInput,
@@ -396,6 +399,26 @@ export class ClearvoClient {
       fileName,
       mimeType: (response.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim(),
     };
+  }
+
+  /**
+   * POST /invoices/{id}/fix: put an invoice right by supplying values as dotted field paths, e.g. `{ 'customer.address.country': 'DE' }`.
+   * Read the invoice's `resolution` first: a held invoice that is missing information takes exactly the listed `missingFields` and
+   * updates in place (`mode: 'updated_in_place'`) and is sent again; a rejected invoice is corrected where its source allows changes
+   * (`mode: 'new_invoice'`, a corrected invoice linked to the original); a submitted e-report is amended (`mode: 'amended'`).
+   * An amend of a reported ES SII registration is allowed from every source. `clear: ['path']` deletes a value from the corrected
+   * document (a path cannot be in both `fields` and `clear`). With `dryRun: true` it changes nothing and answers `{ id, wouldSubmit }`.
+   * Success is 200, or 202 while the invoice is still being processed.
+   * Errors surface as ClearvoError: 404 (no such invoice), 409 NOT_FIXABLE (issued e-invoices are never edited), 409 SOURCE_LOCKED
+   * (API- and ERP-sourced invoices cannot be corrected or have values changed, or cleared, in Clearvo: fix them in the source system and
+   * it resubmits; missing values can always be supplied), 422 INVALID_FIELDS (`errors[]`: INVALID_PATH, INVALID_VALUE, NOT_SUPPLIABLE,
+   * LOCKED_CHANNEL), 503 FIX_UNAVAILABLE (retryable).
+   */
+  fixInvoice(input: FixInvoiceInput & { dryRun: true }): Promise<FixInvoiceDryRunResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse | FixInvoiceDryRunResponse> {
+    const { id, entityId, ...body } = input;
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Tax Calculation ───────────────────────────────────────────────────────────
