@@ -33,7 +33,7 @@ export interface McpToolAnnotations {
 const READ_ONLY = new Set<string>([
   'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
   'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_entities',
-  'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements',
+  'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements', 'list_country_coverage',
   'list_invoices', 'get_invoice', 'list_invoice_attachments', 'list_products', 'list_webhooks', 'list_registrations',
   'get_registration_field_definitions', 'get_entity_fact_definitions', 'list_tax_calculations', 'list_calculation_requests', 'get_query_fields',
   'get_setup_status', 'get_tax_settings', 'get_reporting_obligations', 'list_reporting_batches', 'list_customers', 'list_customer_reference_types', 'list_exemption_certificates',
@@ -57,7 +57,7 @@ const DESTRUCTIVE = new Set<string>([
   'confirm_reporting_batch',
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi',
-  'update_business_status', 'update_invoice_business_status',
+  'update_business_status', 'update_invoice_business_status', 'fix_invoice',
   // Removes one of the customer's own tests from new runs.
   'archive_test_case',
   // Grant access / open an outbound data channel.

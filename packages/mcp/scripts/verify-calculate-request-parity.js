@@ -29,14 +29,11 @@ if (!OPENAPI) fail('No openapi.json found: set CLEARVO_MARKETING_OPENAPI_PATH (o
 if (!fs.existsSync(SERVER)) fail(`Missing ${path.relative(ROOT, SERVER)} — run "npm run build" first.`);
 
 const REMOVED = 'Removed from the API: the field exists only so a stale caller gets a named 422, so an agent must never send it.';
-const SELLER_ALIAS = 'Deprecated alias of supplier on a sale; the entity address comes from master data and the dispatch address from shipFrom, so the alias keeps the country only.';
 const OMITTED = {
   clientTaxCode: REMOVED,
   'lineItems[].clientTaxCode': REMOVED,
   'lineItems[].stripeTaxCode': REMOVED,
-  'seller.name': SELLER_ALIAS,
 };
-for (const f of ['line1', 'line2', 'city', 'region', 'postalCode']) OMITTED[`seller.address.${f}`] = SELLER_ALIAS;
 
 // Accepted by the API but deliberately not published or typed: a deprecated loose hint that agents have always been able to send.
 const UNDOCUMENTED_IN_TOOL = { 'customer.type': 'Deprecated loose B2B/B2C hint: accepted by the API, kept in the tool, not in the published document or the SDK type.', 'supplier.type': 'Same as customer.type.' };
