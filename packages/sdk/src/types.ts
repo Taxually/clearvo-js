@@ -1050,6 +1050,11 @@ export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+  /**
+   * True exactly when `voidInvoice` would void this invoice now (never transmitted, not already voided, reporting batch not
+   * confirmed or submitted). Decide whether to offer a void from this, never from `status`. Absent on a server older than this field.
+   */
+  canVoid?: boolean;
   /** On `GET /v1/invoices/{id}` only: what can be done to put this invoice right. See {@link InvoiceResolution}. */
   resolution?: InvoiceResolution;
 }

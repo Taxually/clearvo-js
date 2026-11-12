@@ -1062,6 +1062,7 @@ const TOOLS = [
       'Voidable: anything never sent, including held, needs-info, set-up-needed, unsupported/no-mandate and an invoice our own validation rejected before sending. ' +
       'Not voidable: anything transmitted (pending, delivered, accepted, an authority rejection, cancelled): 409 CANNOT_VOID_<STATUS>; correct those with a credit note or the correction tools. ' +
       '409 BATCH_LOCKED / BATCH_ALREADY_SUBMITTED if its reporting batch is confirmed or submitted. Voiding an already voided invoice answers 200 with result already_voided. 404 if unknown. ' +
+      'get_invoice and list_invoices carry canVoid, true exactly when this call would void the invoice now: check it instead of guessing from the status. ' +
       'Sending the same invoice again afterwards is accepted and carries a PREVIOUSLY_VOIDED warning. On the invoice status model a voided invoice reads as status SKIPPED, reason MERCHANT_VOIDED. Requires a write-scoped API key.',
     inputSchema: {
       type: 'object' as const,
@@ -1915,6 +1916,7 @@ const TOOLS = [
       'Filter by country, status, reason, customer response, or date. ' +
       'An invoice held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
       'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), and per invoice `status`, `stage`, `reason`, `statusLabel`, `terminal`, `issues[]`, `customerResponse` and authority reference numbers. ' +
+      'Every invoice carries canVoid (boolean): true exactly when void_invoice would void it right now; never decide that from the status yourself. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING or WAITING_FOR_YOU, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
       'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
@@ -1953,7 +1955,7 @@ const TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt and canVoid, true exactly when void_invoice would void it now), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
