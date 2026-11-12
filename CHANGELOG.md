@@ -41,6 +41,7 @@ Supporting files sent with an invoice (`attachments[]` on `POST /v1/send`) are s
 - SDK: `listInvoiceAttachments(id)` and `downloadInvoiceAttachment(id, index)` (returns `{ data: Buffer, fileName, mimeType }`; a backend error such as `ATTACHMENT_NOT_FOUND` or `AMBIGUOUS_REFERENCE` is thrown as a `ClearvoError`). New types `InvoiceAttachment`, `ListInvoiceAttachmentsResponse`, `DownloadedInvoiceAttachment`, `CustomerAttachment` (limits and 422 codes in its doc comment); `SubmitInvoiceInput.attachments`.
 - MCP: new read-only tool `list_invoice_attachments` (same schema as the hosted connector). There is no download tool: the file is binary.
 - CLI: `clearvo invoices attachments <id>` and `clearvo invoices download-attachment <id> <index> [--out <path>]`.
+
 ## Unreleased — hosted invoice page on invoices, and revoke (publish after the backend hosted-link PR is live)
 
 `GET /v1/invoices` rows and `GET /v1/invoices/{id}` now carry `hostedPage { sentToCustomer, sentAt, url, expiresAt }`: the customer-facing invoice page, with the current customer link while one is live (`url` is `null` when there is none). `DELETE /v1/invoices/{id}/hosted-page` revokes every link of the invoice (`{ revoked }`; the invoice is untouched).

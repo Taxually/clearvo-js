@@ -1561,6 +1561,9 @@ const TOOLS = [
         confirmationToken: { type: 'string', description: 'Confirmation token for the check-first step (operation invoice.fix).' },
         entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys.' },
       },
+    },
+  },
+  {
     name: 'revoke_invoice_hosted_page',
     description:
       'Revoke every hosted-page link of one invoice (the customer link in the email the customer received, any link shown in get_invoice hostedPage.url, and dashboard staff links). ' +
@@ -4631,6 +4634,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'fix_invoice': {
       const { id, entityId, ...body } = args as { id: string; entityId?: string; fields: Record<string, unknown>; clear?: string[]; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'revoke_invoice_hosted_page': {
       const { id, entityId } = args as { id: string; entityId?: string };
       return callApi('DELETE', `/invoices/${encodeURIComponent(id)}/hosted-page`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);

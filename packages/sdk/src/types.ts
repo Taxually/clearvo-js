@@ -1036,6 +1036,8 @@ export interface CustomerAttachment {
   mimeType?: string;
   /** File name with an accepted extension. */
   fileName?: string;
+}
+
 /** The customer-facing invoice page of one invoice, as `GET /v1/invoices` and `GET /v1/invoices/{id}` report it. */
 export interface InvoiceHostedPage {
   /** True once the customer has been emailed the link. */
