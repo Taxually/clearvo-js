@@ -8,7 +8,7 @@
 // the build if any tool in this server's tools/list lacks an annotation.
 //
 // Differences from the hosted copy: get_br_credentials / poll_br_inbound are
-// stdio-only tool names (the hosted connector exposes trigger_br_poll instead).
+// stdio-only tool names (the hosted connector exposes trigger_br_poll, which this server has too).
 //
 // Classification rules (from each tool's real HTTP verb, not its name):
 //   readOnlyHint    true : no state change on Clearvo (GET tools, plus the two
@@ -32,13 +32,13 @@ export interface McpToolAnnotations {
 
 const READ_ONLY = new Set<string>([
   'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
-  'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_entities',
+  'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_tax_categories', 'list_entities',
   'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements', 'list_country_coverage',
   'list_invoices', 'get_invoice', 'list_invoice_attachments', 'list_products', 'list_webhooks', 'list_registrations',
   'get_registration_field_definitions', 'get_entity_fact_definitions', 'list_tax_calculations', 'list_calculation_requests', 'get_query_fields',
   'get_setup_status', 'get_tax_settings', 'get_reporting_obligations', 'list_reporting_batches', 'list_customers', 'list_customer_reference_types', 'list_exemption_certificates',
   'list_suppliers', 'list_bank_accounts', 'list_company_codes', 'get_sii_reconciliation', 'get_inbound_batch',
-  'get_inbound_email_address', 'get_bulk_upload_status', 'list_mandate_transactions', 'list_bulk_upload_errors',
+  'get_inbound_email_address', 'get_usage', 'get_bulk_upload_status', 'get_bulk_upload_columns', 'list_bulk_upload_rows', 'list_mandate_transactions', 'list_bulk_upload_errors',
   'get_tax_calculation_import_status', 'list_tax_calculation_import_errors', 'get_pt_monthly_saft',
   'get_rules_engine_schema', 'list_rules', 'get_rule', 'list_rule_versions', 'get_rules_trace',
   'list_platform_rule_changes', 'list_rule_property_definitions', 'list_rule_templates', 'get_rule_template',
@@ -55,6 +55,8 @@ const DESTRUCTIVE = new Set<string>([
   'delete_bank_account', 'unsuppress_rule', 'disable_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
   'cancel_sii_report', 'amend_sii_report', 'reset_field_mappings', 'exclude_reporting_batch_item',
   'confirm_reporting_batch',
+  // Releases, voids, leaves out or re-sends the invoices of a reviewed CSV upload; revoking a hosted-page link cannot be undone.
+  'confirm_bulk_upload', 'discard_bulk_upload', 'exclude_bulk_upload_row', 'retry_bulk_upload', 'revoke_invoice_hosted_page',
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi', 'retry_invoice_with_master_data',
   'update_business_status', 'update_invoice_business_status', 'fix_invoice',
@@ -73,7 +75,7 @@ const DESTRUCTIVE = new Set<string>([
 
 const NON_IDEMPOTENT = new Set<string>([
   'calculate_tax', 'propose_manual_adjustment', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
-  'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
+  'poll_fr_inbound', 'poll_ro_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
   'create_fr_platform_connect_link',
   'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch',
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account', 'create_company_code',
@@ -88,13 +90,16 @@ const NON_IDEMPOTENT = new Set<string>([
   'upload_filing_data_file', 'replace_filing_data_file',
   // Second call fails (409: batch no longer awaiting confirmation).
   'confirm_tax_calculation_import', 'confirm_reporting_batch',
+  // A second call fails (409: no longer awaiting review / nothing left to retry / link already revoked).
+  'confirm_bulk_upload', 'discard_bulk_upload', 'exclude_bulk_upload_row', 'retry_bulk_upload', 'revoke_invoice_hosted_page',
 ]);
 
 const OPEN_WORLD = new Set<string>([
   // Data files and processing go to the filing processing partner.
   'upload_filing_data_file', 'replace_filing_data_file', 'delete_filing_data_file', 'process_filing_upload_month',
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
-  'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
+  'validate_tax_numbers_batch', 'poll_fr_inbound', 'poll_ro_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
+  'confirm_bulk_upload', 'retry_bulk_upload',
   'create_fr_platform_connect_link',
   'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
   'retry_invoice_with_master_data',

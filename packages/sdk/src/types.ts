@@ -2908,6 +2908,8 @@ export interface GetReportingBatchResponse {
 export interface ConfirmReportingBatchInput {
   /** The batch's CURRENT snapshotVersion from getReportingBatch(). */
   snapshotVersion: number;
+  /** Check only: answers what would be submitted and changes nothing. */
+  dryRun?: boolean;
 }
 
 export interface ConfirmReportingBatchResponse {
@@ -2918,8 +2920,10 @@ export interface ConfirmReportingBatchResponse {
 }
 
 export interface ExcludeFromReportingBatchInput {
-  /** A `records[].id` from getReportingBatch(). */
-  transactionId: string;
+  /** A `records[].id` from getReportingBatch(). Exactly one of transactionId / communicationId is required. */
+  transactionId?: string;
+  /** A pending A1/Baja ledger communication id (from amend/cancel SII report) to leave out of this batch's envelope. */
+  communicationId?: string;
   /** Required, non-empty — written to the audit trail. */
   reason: string;
 }
@@ -6106,3 +6110,109 @@ export interface TestCaseCatalogue {
   limits: { titleMax: number; textMax: number; stepsMax: number; casesMax: number; casesUsed: number };
   disclaimer?: string;
 }
+
+// ── MCP parity: the remaining hosted-connector tools (SDK twins) ─────────────
+// Response bodies for these routes carry more fields than the SDK pins down; the
+// index signature keeps them reachable without a cast.
+
+/** Fields shared by every loosely-typed response below. */
+export interface LooseResponse {
+  [key: string]: unknown;
+}
+
+export interface ListTaxCategoriesParams {
+  /** Also return retired categories (active=false, with replacedBy naming the successor). */
+  includeDeprecated?: boolean;
+}
+export type ListTaxCategoriesResponse = LooseResponse;
+
+/** GET /usage — billable tax-calculation usage against the plan allowance for the current period. */
+export interface GetUsageResponse {
+  usage: {
+    plan: string;
+    billingStatus: string;
+    period: { start: string; end: string } | null;
+    used: number;
+    included: number | null;
+    remaining: number | null;
+    [key: string]: unknown;
+  };
+}
+
+export type EntityLogoContentType = 'image/png' | 'image/jpeg' | 'image/webp';
+export interface UploadEntityLogoInput {
+  /** Raw image bytes (a Buffer/Uint8Array/Blob). PNG, JPEG or WEBP, up to 2 MB, 32x32 to 2000x2000 px. */
+  image: Blob | ArrayBuffer | Uint8Array;
+  contentType: EntityLogoContentType;
+}
+export type EntityLogoResponse = LooseResponse;
+
+/** POST /ro/inbound/poll and POST /br/inbound/poll: a per-run report. */
+export type PollInboundResponse = LooseResponse;
+export type BrDocumentFamily = 'nfe' | 'nfse';
+
+export interface ReceiveInvoiceDocumentInput {
+  /** Base64-encoded PDF (hybrid e-invoice such as ZUGFeRD/Factur-X) or bare CII/UBL XML bytes. No data: URI prefix. */
+  documentBase64: string;
+  fileName?: string;
+  /** Declared MIME type, e.g. "application/pdf" or "application/xml". */
+  contentType?: string;
+  /** ISO country of the registration the document is received under; defaults to the establishment country. */
+  country?: string;
+  entityId?: string;
+}
+export interface ReceiveInvoiceDocumentResponse extends LooseResponse {
+  /** E_INVOICE / E_INVOICE_WITH_FLAGS is legally sufficient; FORMAT_ERROR / PROFILE_NOT_SUFFICIENT / NOT_AN_EINVOICE are stored for manual review. */
+  validationOutcome?: string;
+  /** True when byte-identical content was already received: the same id comes back. */
+  duplicate?: boolean;
+}
+export type GetInboundBatchResponse = LooseResponse;
+export interface GetInboundEmailAddressResponse extends LooseResponse {
+  /** null until one has been issued from the dashboard. */
+  address?: string | null;
+}
+
+export type GetBulkUploadColumnsResponse = LooseResponse;
+
+export type BulkUploadRowOutcome =
+  | 'ACCEPTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'HELD' | 'NO_OBLIGATION' | 'SKIPPED_DUPLICATE' | 'ERRORED'
+  | 'READY_TO_SEND' | 'SKIPPED' | 'VOIDED';
+export interface ListBulkUploadRowsParams {
+  /** Only rows with this outcome. */
+  outcome?: BulkUploadRowOutcome;
+  /** Only rows whose record has this clearance status. */
+  status?: string;
+  /** Page number, 1-based (default 1). */
+  page?: number;
+  /** Results per page (default 50, max 500). */
+  limit?: number;
+  entityId?: string;
+}
+export type ListBulkUploadRowsResponse = LooseResponse;
+
+export interface ConfirmBulkUploadInput {
+  /** The upload's CURRENT snapshotVersion from getBulkUploadStatus(). */
+  snapshotVersion: number;
+  /** Check only: answers what would be released and changes nothing. */
+  dryRun?: boolean;
+  entityId?: string;
+}
+export interface RetryBulkUploadInput {
+  /** Check only: answers what would be retried and changes nothing. */
+  dryRun?: boolean;
+  entityId?: string;
+}
+export type BulkUploadActionResponse = LooseResponse;
+
+export interface RevokeInvoiceHostedPageResponse {
+  /** How many links were revoked (0 when they were all revoked already). */
+  revoked: number;
+}
+
+export interface UpdateRulePropertyDefinitionInput {
+  label?: string;
+  /** true deprecates, false reactivates. Omit to leave the deprecation status unchanged. */
+  deprecate?: boolean;
+}
+export type UpdateRulePropertyDefinitionResponse = LooseResponse;

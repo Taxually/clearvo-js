@@ -66,6 +66,28 @@ import type {
   TestRunRecord,
   ListTestRunsResponse,
   ListTestCasesResponse,
+  ListTaxCategoriesParams,
+  ListTaxCategoriesResponse,
+  GetUsageResponse,
+  EntityLogoContentType,
+  UploadEntityLogoInput,
+  EntityLogoResponse,
+  PollInboundResponse,
+  BrDocumentFamily,
+  ReceiveInvoiceDocumentInput,
+  ReceiveInvoiceDocumentResponse,
+  GetInboundBatchResponse,
+  GetInboundEmailAddressResponse,
+  GetBulkUploadColumnsResponse,
+  BulkUploadRowOutcome,
+  ListBulkUploadRowsParams,
+  ListBulkUploadRowsResponse,
+  ConfirmBulkUploadInput,
+  RetryBulkUploadInput,
+  BulkUploadActionResponse,
+  RevokeInvoiceHostedPageResponse,
+  UpdateRulePropertyDefinitionInput,
+  UpdateRulePropertyDefinitionResponse,
   CreateTestCaseInput,
   UpdateTestCaseInput,
   TestCaseWriteResponse,
@@ -1652,5 +1674,105 @@ export class ClearvoClient {
     if (format === 'json') return (await response.json()) as FilingUploadTemplate;
     if (format === 'csv') return response.text();
     return response.arrayBuffer();
+  }
+
+  // ── MCP parity: SDK twins of the remaining hosted-connector tools ─────────
+
+  /** GET /tax/categories: the product tax categories (slugs) a calculation accepts as taxCategory. */
+  listTaxCategories(params: ListTaxCategoriesParams = {}): Promise<ListTaxCategoriesResponse> {
+    return this.request('GET', `/tax/categories${params.includeDeprecated ? '?include=deprecated' : ''}`);
+  }
+
+  /** GET /usage: billable tax-calculation usage against the plan allowance for the current billing period. */
+  getUsage(): Promise<GetUsageResponse> {
+    return this.request('GET', '/usage');
+  }
+
+  /** POST /entities/{id}/logo: upload or replace an entity's own logo (PNG, JPEG or WEBP, up to 2 MB, 32x32 to 2000x2000 px). */
+  uploadEntityLogo(entityId: string, input: UploadEntityLogoInput): Promise<EntityLogoResponse> {
+    const formData = new FormData();
+    const blob = input.image instanceof Blob ? input.image : new Blob([input.image as ArrayBuffer], { type: input.contentType });
+    formData.append('file', blob, `logo.${input.contentType.split('/')[1]}`);
+    return this.request('POST', `/entities/${encodeURIComponent(entityId)}/logo`, formData);
+  }
+
+  /** DELETE /entities/{id}/logo: remove an entity's logo; invoices fall back to the platform logo. */
+  removeEntityLogo(entityId: string): Promise<EntityLogoResponse> {
+    return this.request('DELETE', `/entities/${encodeURIComponent(entityId)}/logo`);
+  }
+
+  /** POST /ro/inbound/poll: fetch the invoices ANAF e-Factura has delivered to this entity's CUI now, instead of waiting for the automatic poll. */
+  pollRoInbound(entityId?: string): Promise<PollInboundResponse> {
+    return this.request('POST', '/ro/inbound/poll', {}, entityHeaders(entityId));
+  }
+
+  /** POST /br/inbound/poll (goods, "nfe", default) or /br/nfse/inbound/poll (services, "nfse"): manual Brazil poll, rate-limited per entity and per CNPJ root (429 with a retry time). */
+  triggerBrPoll(entityId?: string, documentFamily?: BrDocumentFamily): Promise<PollInboundResponse> {
+    const path = documentFamily === 'nfse' ? '/br/nfse/inbound/poll' : '/br/inbound/poll';
+    return this.request('POST', path, {}, entityHeaders(entityId));
+  }
+
+  /** POST /receive: submit a received (inbound) invoice document (hybrid PDF or CII/UBL XML) that arrived outside Clearvo. */
+  receiveInvoiceDocument(input: ReceiveInvoiceDocumentInput): Promise<ReceiveInvoiceDocumentResponse> {
+    const { documentBase64, fileName, contentType, country, entityId } = input;
+    return this.request('POST', '/receive', { fileBase64: documentBase64, fileName, contentType, country }, entityHeaders(entityId));
+  }
+
+  /** GET /receive/bulk/{batchId}: poll one async inbound bulk-receive batch. */
+  getInboundBatch(batchId: string, entityId?: string): Promise<GetInboundBatchResponse> {
+    return this.request('GET', `/receive/bulk/${encodeURIComponent(batchId)}`, undefined, entityHeaders(entityId));
+  }
+
+  /** GET /de/inbound-address: the entity's DE inbound forwarding email address (null until issued from the dashboard). */
+  getInboundEmailAddress(entityId?: string): Promise<GetInboundEmailAddressResponse> {
+    return this.request('GET', '/de/inbound-address', undefined, entityHeaders(entityId));
+  }
+
+  /** GET /send/bulk/columns: the CSV columns accepted by submitInvoicesBulk. Read this before building a CSV. */
+  getBulkUploadColumns(entityId?: string): Promise<GetBulkUploadColumnsResponse> {
+    return this.request('GET', '/send/bulk/columns', undefined, entityHeaders(entityId));
+  }
+
+  /** GET /send/bulk/{batchId}/rows: paginated per-invoice results of one bulk upload batch. */
+  listBulkUploadRows(batchId: string, params: ListBulkUploadRowsParams = {}): Promise<ListBulkUploadRowsResponse> {
+    const { entityId, ...query } = params;
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) qs.set(key, String(value));
+    }
+    const q = qs.toString();
+    return this.request('GET', `/send/bulk/${encodeURIComponent(batchId)}/rows${q ? `?${q}` : ''}`, undefined, entityHeaders(entityId));
+  }
+
+  /** POST /send/bulk/{batchId}/confirm: release a CSV upload held for review. 409 BATCH_STALE if snapshotVersion is out of date; 409 NOT_AWAITING_REVIEW if already confirmed or voided. */
+  confirmBulkUpload(batchId: string, input: ConfirmBulkUploadInput): Promise<BulkUploadActionResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', `/send/bulk/${encodeURIComponent(batchId)}/confirm`, body, entityHeaders(entityId));
+  }
+
+  /** POST /send/bulk/{batchId}/discard: void a CSV upload held for review (nothing is sent; the same file can be uploaded again). */
+  discardBulkUpload(batchId: string, entityId?: string): Promise<BulkUploadActionResponse> {
+    return this.request('POST', `/send/bulk/${encodeURIComponent(batchId)}/discard`, {}, entityHeaders(entityId));
+  }
+
+  /** POST /send/bulk/{batchId}/rows/{rowNumber}/exclude: leave one invoice out of a CSV upload held for review. Returns the new snapshotVersion. */
+  excludeBulkUploadRow(batchId: string, rowNumber: number, entityId?: string): Promise<BulkUploadActionResponse> {
+    return this.request('POST', `/send/bulk/${encodeURIComponent(batchId)}/rows/${encodeURIComponent(String(rowNumber))}/exclude`, {}, entityHeaders(entityId));
+  }
+
+  /** POST /send/bulk/{batchId}/retry: put the invoices a confirmed upload's release stopped on back in line and send them again. */
+  retryBulkUpload(batchId: string, input: RetryBulkUploadInput = {}): Promise<BulkUploadActionResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', `/send/bulk/${encodeURIComponent(batchId)}/retry`, body, entityHeaders(entityId));
+  }
+
+  /** DELETE /invoices/{id}/hosted-page: revoke every hosted-page link of one invoice (the invoice itself is untouched). */
+  revokeInvoiceHostedPage(id: string, entityId?: string): Promise<RevokeInvoiceHostedPageResponse> {
+    return this.request('DELETE', `/invoices/${encodeURIComponent(id)}/hosted-page`, undefined, entityHeaders(entityId));
+  }
+
+  /** PATCH /rules-engine/properties/{id}: edit a custom property definition's label, or deprecate/reactivate it. */
+  updateRulePropertyDefinition(id: string, input: UpdateRulePropertyDefinitionInput, entityId?: string): Promise<UpdateRulePropertyDefinitionResponse> {
+    return this.request('PATCH', `/rules-engine/properties/${encodeURIComponent(id)}`, input, entityHeaders(entityId));
   }
 }

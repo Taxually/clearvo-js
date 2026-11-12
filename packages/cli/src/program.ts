@@ -1551,10 +1551,12 @@ export function createProgram(): Command {
   brInbound
     .command('poll')
     .description('Manually trigger a Distribuição DFe poll cycle for this entity')
+    .option('--document-family <family>', 'nfe (goods, default) or nfse (services)')
     .option('--entity <entityId>', 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { entity?: string; pretty?: boolean }) => {
-      const result = await api('POST', '/br/inbound/poll', {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+    .action(async (opts: { documentFamily?: string; entity?: string; pretty?: boolean }) => {
+      const path = opts.documentFamily === 'nfse' ? '/br/nfse/inbound/poll' : '/br/inbound/poll';
+      const result = await api('POST', path, {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 
@@ -2950,6 +2952,216 @@ export function createProgram(): Command {
       const res = await apiFile(`/filings/upload/template?format=${opts.format}`, entityHdr(opts.entity));
       if (opts.format === 'xlsx') writeOut(opts.out, new Uint8Array(await res.arrayBuffer()), 'the template');
       else writeOut(opts.out, await res.text(), 'the template');
+    });
+
+  // ── MCP parity: CLI twins of the remaining hosted-connector tools ─────────
+  const eh = (entity?: string): Record<string, string> | undefined => (entity ? { 'x-entity-id': entity } : undefined);
+
+  program
+    .command('usage')
+    .description('Billable tax-calculation usage against the plan allowance for the current billing period')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      print(await api('GET', '/usage'), !!opts.pretty);
+    });
+
+  program
+    .command('tax-categories')
+    .description('List the product tax categories (slugs) a calculation accepts as taxCategory')
+    .option('--include-deprecated', 'Also list deprecated categories')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { includeDeprecated?: boolean; pretty?: boolean }) => {
+      print(await api('GET', `/tax/categories${opts.includeDeprecated ? '?include=deprecated' : ''}`), !!opts.pretty);
+    });
+
+  const entityLogo = entities.command('logo').description("An entity's own invoice logo");
+  entityLogo
+    .command('upload <entityId> <file>')
+    .description('Upload or replace the entity logo (PNG, JPEG or WEBP, up to 2 MB, 32x32 to 2000x2000 px)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (entityId: string, file: string, opts: { pretty?: boolean }) => {
+      const ext = file.toLowerCase().split('.').pop();
+      const contentType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : undefined;
+      if (!contentType) {
+        console.error('Error: the logo file must be .png, .jpg, .jpeg or .webp.');
+        process.exit(1);
+      }
+      const bytes = readFileSync(file);
+      if (bytes.length > 2 * 1024 * 1024) {
+        console.error('Error: the logo file is larger than the 2 MB limit.');
+        process.exit(1);
+      }
+      const formData = new FormData();
+      formData.append('file', new Blob([new Uint8Array(bytes)], { type: contentType }), basename(file));
+      print(await api('POST', `/entities/${encodeURIComponent(entityId)}/logo`, formData), !!opts.pretty);
+    });
+  entityLogo
+    .command('remove <entityId>')
+    .description('Remove the entity logo; invoices fall back to the platform logo')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (entityId: string, opts: { pretty?: boolean }) => {
+      print(await api('DELETE', `/entities/${encodeURIComponent(entityId)}/logo`), !!opts.pretty);
+    });
+
+  const ro = program.command('ro').description('Romania e-Factura');
+  ro
+    .command('poll')
+    .description('Fetch the invoices ANAF e-Factura has delivered to this entity now, instead of waiting for the automatic poll')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('POST', '/ro/inbound/poll', {}, eh(opts.entity)), !!opts.pretty);
+    });
+
+  receive
+    .command('document <file>')
+    .description('Submit a received invoice document (hybrid PDF or CII/UBL XML) that arrived outside Clearvo')
+    .option('--content-type <type>', 'Declared MIME type (default: from the file extension)')
+    .option('--country <code>', 'ISO country of the registration the document is received under (default: the establishment country)')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { contentType?: string; country?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {
+        fileBase64: readFileSync(file).toString('base64'),
+        fileName: basename(file),
+        contentType: opts.contentType ?? (file.toLowerCase().endsWith('.xml') ? 'application/xml' : 'application/pdf'),
+      };
+      if (opts.country) body.country = opts.country.toUpperCase();
+      print(await api('POST', '/receive', body, eh(opts.entity)), !!opts.pretty);
+    });
+  receive
+    .command('batch <batchId>')
+    .description('Poll one async inbound bulk-receive batch')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/receive/bulk/${encodeURIComponent(batchId)}`, undefined, eh(opts.entity)), !!opts.pretty);
+    });
+  receive
+    .command('inbound-address')
+    .description("The entity's German inbound forwarding email address")
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', '/de/inbound-address', undefined, eh(opts.entity)), !!opts.pretty);
+    });
+
+  program
+    .command('bulk-upload-columns')
+    .description('The CSV columns accepted by send-bulk. Read this before building a CSV')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', '/send/bulk/columns', undefined, eh(opts.entity)), !!opts.pretty);
+    });
+  program
+    .command('bulk-upload-rows <batchId>')
+    .description('Paginated per-invoice results of one bulk upload batch')
+    .option('--outcome <outcome>', 'Only rows with this outcome')
+    .option('--status <status>', 'Only rows whose record has this clearance status')
+    .option('--page <n>', 'Page number (default 1)')
+    .option('--limit <n>', 'Results per page (default 50, max 500)')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { outcome?: string; status?: string; page?: string; limit?: string; entity?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.outcome) qs.set('outcome', opts.outcome);
+      if (opts.status) qs.set('status', opts.status);
+      if (opts.page) qs.set('page', opts.page);
+      if (opts.limit) qs.set('limit', opts.limit);
+      const q = qs.toString();
+      print(await api('GET', `/send/bulk/${encodeURIComponent(batchId)}/rows${q ? `?${q}` : ''}`, undefined, eh(opts.entity)), !!opts.pretty);
+    });
+  program
+    .command('bulk-upload-confirm <batchId>')
+    .description('Release a CSV upload held for review (409 BATCH_STALE if --snapshot-version is out of date)')
+    .requiredOption('--snapshot-version <n>', "The upload's current snapshotVersion from bulk-upload-status")
+    .option('--dry-run', 'Check only: show what would be released and change nothing')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { snapshotVersion: string; dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { snapshotVersion: Number(opts.snapshotVersion) };
+      if (opts.dryRun) body.dryRun = true;
+      print(await api('POST', `/send/bulk/${encodeURIComponent(batchId)}/confirm`, body, eh(opts.entity)), !!opts.pretty);
+    });
+  program
+    .command('bulk-upload-discard <batchId>')
+    .description('Void a CSV upload held for review (nothing is sent; the same file can be uploaded again)')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('POST', `/send/bulk/${encodeURIComponent(batchId)}/discard`, {}, eh(opts.entity)), !!opts.pretty);
+    });
+  program
+    .command('bulk-upload-exclude-row <batchId> <rowNumber>')
+    .description('Leave one invoice out of a CSV upload held for review; returns the new snapshotVersion')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, rowNumber: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('POST', `/send/bulk/${encodeURIComponent(batchId)}/rows/${encodeURIComponent(rowNumber)}/exclude`, {}, eh(opts.entity)), !!opts.pretty);
+    });
+  program
+    .command('bulk-upload-retry <batchId>')
+    .description("Put the invoices a confirmed upload's release stopped on back in line and send them again")
+    .option('--dry-run', 'Check only: show what would be retried and change nothing')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: { dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.dryRun) body.dryRun = true;
+      print(await api('POST', `/send/bulk/${encodeURIComponent(batchId)}/retry`, body, eh(opts.entity)), !!opts.pretty);
+    });
+
+  invoices
+    .command('revoke-hosted-page <id>')
+    .description('Revoke every hosted-page link of one invoice (the invoice itself is untouched)')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('DELETE', `/invoices/${encodeURIComponent(id)}/hosted-page`, undefined, eh(opts.entity)), !!opts.pretty);
+    });
+
+  const reportingBatches = program.command('reporting-batches').description('Reporting batches awaiting review (SII and other batching regimes)');
+  reportingBatches
+    .command('confirm <id>')
+    .description('Confirm a closed or ready_for_review batch for submission (409 BATCH_STALE if --snapshot-version is out of date)')
+    .requiredOption('--snapshot-version <n>', "The batch's current snapshotVersion")
+    .option('--dry-run', 'Check only: show what would be submitted and change nothing')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { snapshotVersion: string; dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { snapshotVersion: Number(opts.snapshotVersion) };
+      if (opts.dryRun) body.dryRun = true;
+      print(await api('POST', `/reporting-batches/${encodeURIComponent(id)}/confirm`, body, eh(opts.entity)), !!opts.pretty);
+    });
+  reportingBatches
+    .command('exclude <id>')
+    .description('Move one record out of a closed or ready_for_review batch into the next open batch')
+    .option('--transaction-id <id>', 'A records[].id from the batch')
+    .option('--communication-id <id>', 'A pending amend/cancel communication id to leave out instead')
+    .option('--reason <text>', 'Why it is left out')
+    .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { transactionId?: string; communicationId?: string; reason?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.transactionId) body.transactionId = opts.transactionId;
+      if (opts.communicationId) body.communicationId = opts.communicationId;
+      if (opts.reason) body.reason = opts.reason;
+      print(await api('POST', `/reporting-batches/${encodeURIComponent(id)}/exclude`, body, eh(opts.entity)), !!opts.pretty);
+    });
+
+  ruleProperties
+    .command('update <id>')
+    .description("Edit a custom property's label, or deprecate/reactivate it (propertyKey and dataType are immutable)")
+    .option('--label <label>')
+    .option('--deprecate <bool>', 'true deprecates, false reactivates', (v: string) => v !== 'false')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { label?: string; deprecate?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.label !== undefined) body.label = opts.label;
+      if (opts.deprecate !== undefined) body.deprecate = opts.deprecate;
+      print(await api('PATCH', `/rules-engine/properties/${encodeURIComponent(id)}`, body, eh(opts.entity)), !!opts.pretty);
     });
 
   return program;
