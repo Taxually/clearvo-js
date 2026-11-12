@@ -382,14 +382,17 @@ export interface LineItemInput {
   unitPrice: number;
   /**
    * Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales
-   * tax alike. ALWAYS required, even when clientTaxCode is supplied: a
-   * missing or out-of-range value is a 400 naming this field. A positive
+   * tax alike. Optional: a rate you send is used as it is (out of range is a
+   * 400 naming this field); omitted, it is the line's tax code rate, else it
+   * is worked out from `taxAmount` (cent rounding allowed for, the
+   * jurisdiction's published rates preferred); a line that cannot be worked
+   * out is rejected asking for it. A positive
    * rate with no clientTaxCode/taxTreatment is reported as a domestic
    * taxable supply at that rate; a 0% rate with neither is rejected with
    * 400 ZERO_RATE_NEEDS_TAX_TREATMENT. The retired `vatRate` name is
    * rejected with 422 UNKNOWN_FIELD_VAT_RENAMED — there is no silent alias.
    */
-  taxRate: number;
+  taxRate?: number;
   /**
    * Optional tax amount for this line; computed as taxRate × line total
    * when omitted. The retired `vatAmount` name is rejected by the API with

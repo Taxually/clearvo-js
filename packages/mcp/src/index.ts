@@ -774,7 +774,7 @@ const TOOLS = [
               description: { type: 'string' },
               quantity: { type: 'number' },
               unitPrice: { type: 'number', description: 'Unit price excluding tax' },
-              taxRate: { type: 'number', description: 'REQUIRED. Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales tax alike. Always required, even when clientTaxCode is supplied — missing or out of range is a 400 naming this field. Replaces the retired vatRate (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED). A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate — the client\'s rate is authoritative and never rejected as unrecognised. A bare 0% with neither is held NEEDS_INFO asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode; it is never guessed.' },
+              taxRate: { type: 'number', description: 'Optional. Tax rate as a percentage, 0–100 (e.g. 22 for 22%) — VAT, GST or sales tax alike. A rate you send is used as it is (out of range is a 400 naming this field); omitted, it is the line\'s tax code rate, else it is worked out from taxAmount (cent rounding allowed for, the jurisdiction\'s published rates preferred); a line that cannot be worked out is rejected asking for it. Replaces the retired vatRate (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED). A positive rate with no clientTaxCode/taxTreatment is reported as a domestic taxable supply at that rate. A bare 0% with neither is held NEEDS_INFO asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode; it is never guessed.' },
               taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED).' },
               clientTaxCode: {
                 type: 'string',
@@ -793,7 +793,7 @@ const TOOLS = [
               unitOfMeasure: { type: 'string', description: 'UN/ECE Recommendation 20 unit code, e.g. "EA", "HUR", "KGM". Replaces the retired `unit` (stored REJECTED with UNKNOWN_FIELD_LINE_RENAMED).' },
               sellerItemId: { type: 'string', description: 'Your own item identifier / SKU for this line (EN16931 BT-155). Replaces the retired `itemCode` (stored REJECTED with UNKNOWN_FIELD_LINE_RENAMED).' },
             },
-            required: ['description', 'quantity', 'unitPrice', 'taxRate'],
+            required: ['description', 'quantity', 'unitPrice'],
           },
         },
         totalAmount: { type: 'number', description: 'Net total excluding tax' },

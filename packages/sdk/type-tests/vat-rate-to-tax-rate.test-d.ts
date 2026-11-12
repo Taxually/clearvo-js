@@ -22,12 +22,10 @@ void _valid;
 const _validDiscountAmount: LineItemInput = { description: 'Widget', quantity: 1, unitPrice: 100, taxRate: 22, discountAmount: 5 };
 void _validDiscountAmount;
 
-// `taxRate` is ALWAYS required (0–100), even when clientTaxCode is supplied —
-// the backend returns 400 for a missing/out-of-range rate. Omitting it is a
-// compile error (TS2741 missing property).
-// @ts-expect-error — `taxRate` is required on every line, clientTaxCode or not.
-const _rejectsMissingTaxRate: LineItemInput = { description: 'Widget', quantity: 1, unitPrice: 100, clientTaxCode: 'A1' };
-void _rejectsMissingTaxRate;
+// `taxRate` is optional: a sent rate is used as it is, else the tax code's rate,
+// else it is worked out from `taxAmount`.
+const _acceptsMissingTaxRate: LineItemInput = { description: 'Widget', quantity: 1, unitPrice: 100, taxAmount: 22, clientTaxCode: 'A1' };
+void _acceptsMissingTaxRate;
 
 // `vatRate` is no longer a valid line property — TypeScript's excess-property
 // check on an object literal rejects it.
