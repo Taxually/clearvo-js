@@ -43,6 +43,36 @@ function parseClassificationCodes(values: string[]): Array<{ system: string; cod
   });
 }
 
+
+/**
+ * Deprecation awareness: a call to a deprecated endpoint is answered with `Deprecation`, `Sunset` and `Link` headers.
+ * Returns the one-line warning for it, or null when the response carries neither header. Repeated in the SDK
+ * (packages/sdk/src/deprecation.ts); keep the two in step.
+ */
+export function deprecationWarning(headers: { get(name: string): string | null } | undefined, method: string, path: string, baseUrl: string): { surface: string; message: string } | null {
+  if (!headers) return null;
+  const deprecation = headers.get('deprecation');
+  const sunset = headers.get('sunset');
+  if (!deprecation && !sunset) return null;
+  const idLike = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d+|[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*)$/i;
+  const templated = path.split('?')[0].split('/').map((seg) => (seg && idLike.test(seg) && !/^v\d+$/.test(seg) ? '{id}' : seg)).join('/');
+  const surface = `${method.toUpperCase()} /v1${templated}`;
+  const sunsetDate = sunset ? new Date(sunset) : null;
+  const link = headers.get('link') ?? '';
+  const target = (rel: string): string | null => {
+    for (const part of link.split(/,(?=\s*<)/)) {
+      const m = /<([^>]*)>(.*)/.exec(part.trim());
+      if (m && new RegExp(`rel="?(?:[^";]*\\s)?${rel}(?:\\s[^";]*)?"?`, 'i').test(m[2])) return /^https?:\/\//i.test(m[1]) ? m[1] : `${baseUrl.replace(/\/v1\/?$/, '')}${m[1]}`;
+    }
+    return null;
+  };
+  const replacement = target('successor-version');
+  const notice = target('deprecation');
+  const message = `Warning: ${surface} is deprecated${sunsetDate && !Number.isNaN(sunsetDate.getTime()) ? ` and stops working on ${sunsetDate.toISOString().slice(0, 10)}` : ''}.` +
+    `${replacement ? ` Use ${replacement} instead.` : ''}${notice ? ` Details: ${notice}` : ''}`;
+  return { surface, message };
+}
+
 export function createProgram(): Command {
   
   const CONFIG_PATH = join(homedir(), '.clearvo', 'config.json');
@@ -54,7 +84,7 @@ export function createProgram(): Command {
     return process.env.CLEARVO_BASE_URL ?? 'https://api.clearvo.io/v1';
   }
   
-  function getApiKey(): string {
+  function findApiKey(): string | undefined {
     const key = process.env.CLEARVO_API_KEY;
     if (key) return key;
     try {
@@ -63,17 +93,36 @@ export function createProgram(): Command {
     } catch {
       // config file absent — that's fine
     }
+    return undefined;
+  }
+
+  function getApiKey(): string {
+    const key = findApiKey();
+    if (key) return key;
     console.error('Error: CLEARVO_API_KEY is not set.');
     console.error('Set it as an environment variable or in ~/.clearvo/config.json');
     console.error('Get a key at https://app.clearvo.io/settings');
     process.exit(1);
   }
   
+  // Deprecated endpoints already warned about in this run: one stderr warning per endpoint.
+  // CLEARVO_NO_DEPRECATION_WARNINGS=1 silences them.
+  const warnedSurfaces = new Set<string>();
+  function warnIfDeprecated(res: { headers?: { get(name: string): string | null } }, method: string, path: string): void {
+    if (process.env.CLEARVO_NO_DEPRECATION_WARNINGS) return;
+    const w = deprecationWarning(res.headers, method, path, getBaseUrl());
+    if (!w || warnedSurfaces.has(w.surface)) return;
+    warnedSurfaces.add(w.surface);
+    console.error(w.message);
+  }
+
+  /** `keyOptional`: a public route (deprecations, changelog) that works without an API key; the key is sent when one is configured. */
   async function api(
     method: string,
     path: string,
     body?: unknown,
-    extraHeaders?: Record<string, string>
+    extraHeaders?: Record<string, string>,
+    keyOptional = false
   ): Promise<unknown> {
     // FormData (e.g. bulk CSV upload) must not get a JSON Content-Type or be stringified —
     // fetch sets the correct multipart boundary itself when the body is a FormData instance.
@@ -81,13 +130,14 @@ export function createProgram(): Command {
     const res = await fetch(`${getBaseUrl()}${path}`, {
       method,
       headers: {
-        'x-api-key': getApiKey(),
+        ...(keyOptional ? (findApiKey() ? { 'x-api-key': findApiKey() as string } : {}) : { 'x-api-key': getApiKey() }),
         ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         'Accept': 'application/json',
         ...extraHeaders,
       },
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
+    warnIfDeprecated(res, method, path);
     const data = await res.json().catch(() => ({})) as Record<string, unknown>;
     if (!res.ok) {
       // `error` is a string on most routes and an object ({ code, message }) on a /v1/send rejection.
@@ -122,6 +172,7 @@ export function createProgram(): Command {
   /** A GET that returns a file (CSV, XLSX, PDF/image) rather than JSON. Exits on a non-2xx response, printing the error like api(). */
   async function apiFile(path: string, extraHeaders?: Record<string, string>): Promise<Response> {
     const res = await fetch(`${getBaseUrl()}${path}`, { method: 'GET', headers: { 'x-api-key': getApiKey(), ...extraHeaders } });
+    warnIfDeprecated(res, 'GET', path);
     if (!res.ok) {
       const data = await res.json().catch(() => ({})) as Record<string, unknown>;
       console.error(`HTTP ${res.status}: ${data.message ?? data.detail ?? data.error ?? 'Unknown error'}${typeof data.error === 'string' && (data.message || data.detail) ? `\nCode: ${data.error}` : ''}`);
@@ -686,6 +737,48 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo deprecations / changelog (public: no API key needed) ─────────────
+  const deprecations = program.command('deprecations').description('API deprecations: what is being removed, when, and the replacement');
+
+  deprecations
+    .command('list')
+    .description('List deprecated endpoints, fields and error codes with replacement, sunset date and days left (works without an API key)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      const result = await api('GET', '/deprecations', undefined, undefined, true);
+      print(result, !!opts.pretty);
+    });
+
+  const changelog = program.command('changelog').description('The public API changelog');
+
+  changelog
+    .command('list')
+    .description('List public API changelog entries, newest first (works without an API key)')
+    .option('--limit <n>', 'Entries per page, 1 to 100 (default 20)')
+    .option('--cursor <cursor>', 'The nextCursor of the previous page')
+    .option('--all', 'Follow nextCursor and return every entry (ignores --cursor)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { limit?: string; cursor?: string; all?: boolean; pretty?: boolean }) => {
+      const query = (cursor?: string): string => {
+        const qs = new URLSearchParams();
+        if (opts.limit) qs.set('limit', opts.limit);
+        if (cursor) qs.set('cursor', cursor);
+        return qs.toString() ? `?${qs.toString()}` : '';
+      };
+      if (!opts.all) {
+        print(await api('GET', `/changelog${query(opts.cursor)}`, undefined, undefined, true), !!opts.pretty);
+        return;
+      }
+      const entries: unknown[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await api('GET', `/changelog${query(cursor)}`, undefined, undefined, true) as { data?: unknown[]; nextCursor?: string | null };
+        entries.push(...(page.data ?? []));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      print({ ok: true, data: entries, nextCursor: null }, !!opts.pretty);
+    });
+
   // ── clearvo entities ────────────────────────────────────────────────────────
   const entities = program.command('entities').description('Manage entities');
   
@@ -1131,7 +1224,7 @@ export function createProgram(): Command {
     .command('create')
     .description('Register a new webhook endpoint')
     .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
-    .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending,invoice.unroutable', '*')
+    .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending,invoice.unroutable,deprecation.notice', '*')
     .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; statuses?: string; pretty?: boolean }) => {
