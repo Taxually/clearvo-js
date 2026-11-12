@@ -15,7 +15,7 @@ An invoice that has not been transmitted can be voided: it becomes VOIDED (termi
 - SDK: `voidInvoice(id, { reason? }, entityId?)`, `voidInvoices({ ids, reason? }, entityId?)`, `voidBulkUpload(batchId, { reason? }, entityId?)`, `voidReportingBatch(id, { reason? }, entityId?)`; new types `VoidInvoiceInput`, `VoidInvoicesInput`, `VoidInvoiceResponse`, `VoidInvoicesResponse`, `VoidBatchResponse`, `VoidItem`, `VoidItemVoided`, `VoidItemSkipped`, `VoidedStatus`.
 - MCP: new tools `void_invoice` and `void_invoices` (the latter takes exactly one of `ids`, `batchId`, `reportingBatchId`; same schema as the hosted connector).
 - CLI: `clearvo void-invoice <id>`, `clearvo void-invoices <ids...>`, `clearvo void-bulk-upload <batchId>`, `clearvo void-reporting-batch <id>`, each with `[--reason <text>] [--entity <id>] [--pretty]`.
-- Follow-up once the marketing OpenAPI documents the void routes: regenerate the contract file (`npm run generate:from-openapi`) so `InvoiceReason` gains `MERCHANT_VOIDED`, and add it to the MCP `list_invoices` reason enum in the same commit (`test:send-contract` keeps the two equal).
+- The generated contract file and the MCP `list_invoices` reason enum now carry `MERCHANT_VOIDED` in place of `MERCHANT_DISCARDED`, matching the published OpenAPI (the old DISCARDED name is still accepted by the API as a filter).
 
 ## Unreleased — `seller` removed from tax calculation requests (matches the published API)
 

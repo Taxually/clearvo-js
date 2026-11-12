@@ -1118,7 +1118,7 @@ const TOOLS = [
       'RECEIVED (stored, still processing), PENDING (stage queued: not sent yet; awaiting_authority: sent, wait for the answer), ACCUMULATED (in a periodic report, not yet filed): wait, do nothing; ' +
       'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
       'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_AWAITING_ORIGINAL (a credit note waiting for its original invoice; `originalInvoiceId` names it), HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
-      'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_DISCARDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
+      'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_VOIDED, a voided invoice) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
       '`customerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resend the corrected document to POST /v1/send with the same invoice number. ' +
@@ -1934,7 +1934,7 @@ const TOOLS = [
         },
         reason: {
           type: 'string',
-          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
+          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_VOIDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
           description: 'Filter by the specific reason behind the status. The old stored names (EXCLUDED, DISCARDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are both accepted.',
         },
         businessStatus: {
