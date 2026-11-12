@@ -1050,6 +1050,11 @@ export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+  /**
+   * True exactly when `voidInvoice` would void this invoice now (never transmitted, not already voided, reporting batch not
+   * confirmed or submitted). Decide whether to offer a void from this, never from `status`. Absent on a server older than this field.
+   */
+  canVoid?: boolean;
   /** On `GET /v1/invoices/{id}` only: what can be done to put this invoice right. See {@link InvoiceResolution}. */
   resolution?: InvoiceResolution;
 }
@@ -3016,6 +3021,72 @@ export interface RetryWithMasterDataPreview {
   ok: true;
   wouldSubmit: { operation: 'use_master_data'; invoiceId: string };
   changes: MasterDataRetryChange[];
+}
+
+/** Optional free-text reason (up to 1000 characters), stored with who voided the invoice and when. */
+export interface VoidInvoiceInput {
+  reason?: string;
+}
+
+export interface VoidInvoicesInput {
+  /** 1 to 500 invoice ids. */
+  ids: string[];
+  reason?: string;
+}
+
+/** The stored status a void writes. A voided invoice reads as `status: 'SKIPPED'`, `reason: 'MERCHANT_VOIDED'` on the invoice status model; the old DISCARDED reads as VOIDED. */
+export type VoidedStatus = 'VOIDED';
+
+/** POST /v1/invoices/{id}/void's 200. Voiding twice answers the same shape with `result: 'already_voided'`. */
+export interface VoidInvoiceResponse {
+  ok: true;
+  id: string;
+  result: 'voided' | 'already_voided';
+  status: VoidedStatus;
+  voidedAt: string | null;
+  voidedBy: string | null;
+  voidReason: string | null;
+}
+
+/** An invoice that was voided (or already was) in a bulk, upload-batch or reporting-batch void. */
+export interface VoidItemVoided {
+  id: string;
+  result: 'voided' | 'already_voided';
+  status: VoidedStatus;
+  voidedAt: string | null;
+  voidedBy: string | null;
+  voidReason: string | null;
+}
+
+/**
+ * An invoice that could not be voided; it never stops the others. `code` is CANNOT_VOID_<STATUS> (already transmitted, for
+ * example CANNOT_VOID_COMPLETED), BATCH_LOCKED or BATCH_ALREADY_SUBMITTED (its reporting batch is confirmed or submitted),
+ * or NOT_FOUND. `status` is the invoice's current stored status when known.
+ */
+export interface VoidItemSkipped {
+  id: string;
+  result: 'skipped';
+  code: string;
+  reason: string;
+  status?: string;
+}
+
+export type VoidItem = VoidItemVoided | VoidItemSkipped;
+
+/** POST /v1/invoices/void's 200: always 200, with one item per id. */
+export interface VoidInvoicesResponse {
+  ok: true;
+  voided: number;
+  alreadyVoided: number;
+  skipped: number;
+  items: VoidItem[];
+}
+
+/** POST /v1/send/bulk/{batchId}/void's and POST /v1/reporting-batches/{id}/void's 200. */
+export interface VoidBatchResponse extends VoidInvoicesResponse {
+  batchId: string;
+  /** Upload batches only: invoices of a batch still awaiting review that were discarded first (same as discarding the upload). */
+  discardedInvoices?: number;
 }
 
 export interface SiiAuthorityView {

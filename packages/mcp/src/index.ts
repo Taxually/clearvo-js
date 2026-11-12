@@ -1055,6 +1055,44 @@ const TOOLS = [
     },
   },
   {
+    name: 'void_invoice',
+    description:
+      'Void one invoice that has not been transmitted: it becomes VOIDED (terminal, never sent, its invoice number is free again; the record is kept, not deleted). ' +
+      'Works for every source (API, CSV upload, connector, dashboard) and for an invoice waiting in a reporting batch (it leaves the batch for good). ' +
+      'Voidable: anything never sent, including held, needs-info, set-up-needed, unsupported/no-mandate and an invoice our own validation rejected before sending. ' +
+      'Not voidable: anything transmitted (pending, delivered, accepted, an authority rejection, cancelled): 409 CANNOT_VOID_<STATUS>; correct those with a credit note or the correction tools. ' +
+      '409 BATCH_LOCKED / BATCH_ALREADY_SUBMITTED if its reporting batch is confirmed or submitted. Voiding an already voided invoice answers 200 with result already_voided. 404 if unknown. ' +
+      'get_invoice and list_invoices carry canVoid, true exactly when this call would void the invoice now: check it instead of guessing from the status. ' +
+      'Sending the same invoice again afterwards is accepted and carries a PREVIOUSLY_VOIDED warning. On the invoice status model a voided invoice reads as status SKIPPED, reason MERCHANT_VOIDED. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice id (from submit_invoice, list_invoices or get_invoice).' },
+        reason: { type: 'string', description: 'Optional free-text reason (up to 1000 characters), stored with who voided it and when.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'void_invoices',
+    description:
+      'Void many invoices that have not been transmitted, in one call (1 to 500 ids), or every untransmitted invoice of one CSV upload (batchId) or one reporting batch (reportingBatchId). ' +
+      'Pass exactly one of ids, batchId or reportingBatchId. Each invoice is handled on its own: a transmitted one is skipped with code CANNOT_VOID_<STATUS> and never stops the others. ' +
+      'Returns voided, alreadyVoided, skipped and a per-invoice items array. Voiding takes an invoice out of its reporting batch for good; a batch left empty becomes voided. ' +
+      'Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, description: 'Invoice ids to void (at most 500).' },
+        batchId: { type: 'string', description: 'A CSV upload (batch) id: void every untransmitted invoice of that upload.' },
+        reportingBatchId: { type: 'string', description: 'A reporting batch id (from list_reporting_batches): void every invoice waiting in it.' },
+        reason: { type: 'string', description: 'Optional free-text reason (up to 1000 characters).' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'get_sii_reconciliation',
     description:
       'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
@@ -1081,7 +1119,7 @@ const TOOLS = [
       'RECEIVED (stored, still processing), PENDING (stage queued: not sent yet; awaiting_authority: sent, wait for the answer), ACCUMULATED (in a periodic report, not yet filed): wait, do nothing; ' +
       'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
       'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_AWAITING_ORIGINAL (a credit note waiting for its original invoice; `originalInvoiceId` names it), HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
-      'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_DISCARDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
+      'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_VOIDED, a voided invoice) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
       '`customerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resend the corrected document to POST /v1/send with the same invoice number. ' +
@@ -1878,6 +1916,7 @@ const TOOLS = [
       'Filter by country, status, reason, customer response, or date. ' +
       'An invoice held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
       'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), and per invoice `status`, `stage`, `reason`, `statusLabel`, `terminal`, `issues[]`, `customerResponse` and authority reference numbers. ' +
+      'Every invoice carries canVoid (boolean): true exactly when void_invoice would void it right now; never decide that from the status yourself. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING or WAITING_FOR_YOU, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
       'Received documents (direction inbound, e.g. an inbound Peppol invoice) also carry intakeChannel, receivedAt, ' +
@@ -1897,7 +1936,7 @@ const TOOLS = [
         },
         reason: {
           type: 'string',
-          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
+          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_VOIDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
           description: 'Filter by the specific reason behind the status. The old stored names (EXCLUDED, DISCARDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are both accepted.',
         },
         businessStatus: {
@@ -1916,7 +1955,7 @@ const TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt and canVoid, true exactly when void_invoice would void it now), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
@@ -4506,6 +4545,22 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'retry_invoice_with_master_data': {
       const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'void_invoice': {
+      const { id, reason, entityId } = args as { id: string; reason?: string; entityId?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/void`, { ...(reason !== undefined ? { reason } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'void_invoices': {
+      const { ids, batchId, reportingBatchId, reason, entityId } = args as { ids?: string[]; batchId?: string; reportingBatchId?: string; reason?: string; entityId?: string };
+      const given = [ids, batchId, reportingBatchId].filter((v) => v !== undefined).length;
+      if (given !== 1) return { ok: false, error: { code: 'VOID_TARGET_REQUIRED', message: 'Pass exactly one of ids, batchId or reportingBatchId.' } };
+      const headers = entityId ? { 'x-entity-id': String(entityId) } : undefined;
+      const body = reason !== undefined ? { reason } : {};
+      if (batchId) return callApi('POST', `/send/bulk/${encodeURIComponent(batchId)}/void`, body, headers);
+      if (reportingBatchId) return callApi('POST', `/reporting-batches/${encodeURIComponent(reportingBatchId)}/void`, body, headers);
+      return callApi('POST', '/invoices/void', { ids, ...body }, headers);
     }
 
     case 'get_sii_reconciliation': {

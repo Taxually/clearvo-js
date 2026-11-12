@@ -391,6 +391,56 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo void-invoice <id> / void-invoices <ids...> / void-bulk-upload <batchId> / void-reporting-batch <id> ──
+  // Void invoices that have not been transmitted: they become VOIDED (never sent, invoice number free again, record kept).
+  // A transmitted invoice is refused 409 CANNOT_VOID_<STATUS>; a bulk, upload or reporting-batch void skips it and carries on.
+  const voidBody = (opts: { reason?: string }, extra: Record<string, unknown> = {}) => ({ ...extra, ...(opts.reason !== undefined ? { reason: opts.reason } : {}) });
+  type VoidOpts = { reason?: string; entity?: string; pretty?: boolean };
+
+  program
+    .command('void-invoice <id>')
+    .description('Void one invoice that has not been transmitted (VOIDED: never sent, its number free again, record kept). A transmitted one is refused 409 CANNOT_VOID_<STATUS>; voiding twice answers already_voided')
+    .option('--reason <text>', 'Free-text reason, up to 1000 characters')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: VoidOpts) => {
+      const result = await api('POST', `/invoices/${encodeURIComponent(id)}/void`, voidBody(opts), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('void-invoices <ids...>')
+    .description('Void many invoices that have not been transmitted (1 to 500 ids). A transmitted one is skipped with CANNOT_VOID_<STATUS> and never stops the others')
+    .option('--reason <text>', 'Free-text reason, up to 1000 characters')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (ids: string[], opts: VoidOpts) => {
+      const result = await api('POST', '/invoices/void', voidBody(opts, { ids }), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('void-bulk-upload <batchId>')
+    .description('Void every untransmitted invoice of a CSV upload (an upload still awaiting review is discarded first)')
+    .option('--reason <text>', 'Free-text reason, up to 1000 characters')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (batchId: string, opts: VoidOpts) => {
+      const result = await api('POST', `/send/bulk/${encodeURIComponent(batchId)}/void`, voidBody(opts), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  program
+    .command('void-reporting-batch <id>')
+    .description('Void every invoice waiting in a reporting batch (e-reporting). A confirmed or submitted batch refuses each invoice (BATCH_LOCKED / BATCH_ALREADY_SUBMITTED)')
+    .option('--reason <text>', 'Free-text reason, up to 1000 characters')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: VoidOpts) => {
+      const result = await api('POST', `/reporting-batches/${encodeURIComponent(id)}/void`, voidBody(opts), opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo business-status <id> ─────────────────────────────────────────────
   // Records a customer-lifecycle ("business") status decision on a received
   // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or
@@ -451,8 +501,8 @@ export function createProgram(): Command {
   invoices
     .command('list')
     .description('List invoices with their status, stage, reason, issues and customerResponse. Filter by status (one of ten), reason (the specific cause) and the buyer\'s decision')
-    .option('--status <status>', 'RECEIVED | PENDING | WAITING_FOR_YOU | WAITING_FOR_PLATFORM | ACCUMULATED | COMPLETED | REJECTED | CANCELLED | SKIPPED | NOT_APPLICABLE')
-    .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, HELD_UNMAPPED_TAX_CODE, SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED are also accepted)')
+    .option('--status <status>', 'RECEIVED | PENDING | WAITING_FOR_YOU | WAITING_FOR_PLATFORM | ACCUMULATED | COMPLETED | REJECTED | CANCELLED | SKIPPED | NOT_APPLICABLE (a voided invoice is SKIPPED with reason MERCHANT_VOIDED)')
+    .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, HELD_UNMAPPED_TAX_CODE, SKIP_RULE, MERCHANT_VOIDED (a voided invoice), REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED are also accepted)')
     .option('--customer-response <value>', 'The buyer\'s decision: in_review | approved | partially_approved | disputed | refused (a regime\'s own native code is also accepted)')
     .option('--country <code>', 'ISO 3166-1 alpha-2 country code')
     .option('--limit <n>', 'Results per page (default 25, max 100)')
