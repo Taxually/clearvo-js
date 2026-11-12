@@ -42,6 +42,14 @@ Supporting files sent with an invoice (`attachments[]` on `POST /v1/send`) are s
 - MCP: new read-only tool `list_invoice_attachments` (same schema as the hosted connector). There is no download tool: the file is binary.
 - CLI: `clearvo invoices attachments <id>` and `clearvo invoices download-attachment <id> <index> [--out <path>]`.
 
+## Unreleased — hosted invoice page on invoices, and revoke (publish after the backend hosted-link PR is live)
+
+`GET /v1/invoices` rows and `GET /v1/invoices/{id}` now carry `hostedPage { sentToCustomer, sentAt, url, expiresAt }`: the customer-facing invoice page, with the current customer link while one is live (`url` is `null` when there is none). `DELETE /v1/invoices/{id}/hosted-page` revokes every link of the invoice (`{ revoked }`; the invoice is untouched).
+
+- SDK: new types `InvoiceHostedPage`, `RevokeHostedPageResponse`; `InvoiceRecordTimestamps.hostedPage`; `revokeHostedPage(id, entityId?)`.
+- MCP: new tool `revoke_invoice_hosted_page`; `list_invoices` and `get_invoice` descriptions cover `hostedPage`.
+- CLI: new command `clearvo revoke-hosted-page <id> [--entity <entityId>]`.
+
 ## Unreleased — erase a customer's address data on request (publish after backend PR 18786 is live)
 
 `POST /v1/tax/address-erasure` removes the address lines and the customer display name (at `level: "full"` also the city) that a customer's committed calculations kept, on request. Name the calculation by `calculationId` or by the order `reference` (the merchantRef, or an idempotency key such as `woo-order-123`); credit notes pointing at it are included. Amounts, tax, jurisdiction, region, postal code and country are never changed, and repeating the call changes nothing. Street lines are otherwise kept for as long as the calculation needs them.
