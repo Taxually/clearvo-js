@@ -1055,6 +1055,43 @@ const TOOLS = [
     },
   },
   {
+    name: 'void_invoice',
+    description:
+      'Void one invoice that has not been transmitted: it becomes VOIDED (terminal, never sent, its invoice number is free again; the record is kept, not deleted). ' +
+      'Works for every source (API, CSV upload, connector, dashboard) and for an invoice waiting in a reporting batch (it leaves the batch for good). ' +
+      'Voidable: anything never sent, including held, needs-info, set-up-needed, unsupported/no-mandate and an invoice our own validation rejected before sending. ' +
+      'Not voidable: anything transmitted (pending, delivered, accepted, an authority rejection, cancelled): 409 CANNOT_VOID_<STATUS>; correct those with a credit note or the correction tools. ' +
+      '409 BATCH_LOCKED / BATCH_ALREADY_SUBMITTED if its reporting batch is confirmed or submitted. Voiding an already voided invoice answers 200 with result already_voided. 404 if unknown. ' +
+      'Sending the same invoice again afterwards is accepted and carries a PREVIOUSLY_VOIDED warning. On the invoice status model a voided invoice reads as status SKIPPED, reason MERCHANT_VOIDED. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice id (from submit_invoice, list_invoices or get_invoice).' },
+        reason: { type: 'string', description: 'Optional free-text reason (up to 1000 characters), stored with who voided it and when.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'void_invoices',
+    description:
+      'Void many invoices that have not been transmitted, in one call (1 to 500 ids), or every untransmitted invoice of one CSV upload (batchId) or one reporting batch (reportingBatchId). ' +
+      'Pass exactly one of ids, batchId or reportingBatchId. Each invoice is handled on its own: a transmitted one is skipped with code CANNOT_VOID_<STATUS> and never stops the others. ' +
+      'Returns voided, alreadyVoided, skipped and a per-invoice items array. Voiding takes an invoice out of its reporting batch for good; a batch left empty becomes voided. ' +
+      'Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, description: 'Invoice ids to void (at most 500).' },
+        batchId: { type: 'string', description: 'A CSV upload (batch) id: void every untransmitted invoice of that upload.' },
+        reportingBatchId: { type: 'string', description: 'A reporting batch id (from list_reporting_batches): void every invoice waiting in it.' },
+        reason: { type: 'string', description: 'Optional free-text reason (up to 1000 characters).' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'get_sii_reconciliation',
     description:
       'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
@@ -4506,6 +4543,22 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'retry_invoice_with_master_data': {
       const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'void_invoice': {
+      const { id, reason, entityId } = args as { id: string; reason?: string; entityId?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/void`, { ...(reason !== undefined ? { reason } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'void_invoices': {
+      const { ids, batchId, reportingBatchId, reason, entityId } = args as { ids?: string[]; batchId?: string; reportingBatchId?: string; reason?: string; entityId?: string };
+      const given = [ids, batchId, reportingBatchId].filter((v) => v !== undefined).length;
+      if (given !== 1) return { ok: false, error: { code: 'VOID_TARGET_REQUIRED', message: 'Pass exactly one of ids, batchId or reportingBatchId.' } };
+      const headers = entityId ? { 'x-entity-id': String(entityId) } : undefined;
+      const body = reason !== undefined ? { reason } : {};
+      if (batchId) return callApi('POST', `/send/bulk/${encodeURIComponent(batchId)}/void`, body, headers);
+      if (reportingBatchId) return callApi('POST', `/reporting-batches/${encodeURIComponent(reportingBatchId)}/void`, body, headers);
+      return callApi('POST', '/invoices/void', { ids, ...body }, headers);
     }
 
     case 'get_sii_reconciliation': {

@@ -23,6 +23,11 @@ import type {
   FixInvoiceInput,
   FixInvoiceResponse,
   FixInvoiceDryRunResponse,
+  VoidInvoiceInput,
+  VoidInvoicesInput,
+  VoidInvoiceResponse,
+  VoidInvoicesResponse,
+  VoidBatchResponse,
   DownloadedInvoiceAttachment,
   AddressErasureResult,
   ImportSettlementInput,
@@ -913,6 +918,46 @@ export class ClearvoClient {
    */
   retryInvoiceWithMasterData(id: string, input: RetryWithMasterDataInput = {}, entityId?: string): Promise<RetryWithMasterDataResult | RetryWithMasterDataPreview> {
     return this.request('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, input, entityHeaders(entityId));
+  }
+
+  /**
+   * Void one invoice that has not been transmitted: it becomes VOIDED (terminal, never sent, its invoice number is free
+   * again; the record is kept, not deleted). Works for every source and for an invoice waiting in a reporting batch (it
+   * leaves the batch for good). Voiding twice answers the same shape with `result: 'already_voided'`. Sending the same
+   * invoice again afterwards is accepted and carries a PREVIOUSLY_VOIDED warning. Needs a write-scoped key. Throws a
+   * {@link ClearvoError}: 404 NOT_FOUND, 409 CANNOT_VOID_<STATUS> (already transmitted: pending, delivered, accepted, an
+   * authority rejection, cancelled) or BATCH_LOCKED / BATCH_ALREADY_SUBMITTED (its reporting batch is confirmed or submitted).
+   */
+  voidInvoice(id: string, input: VoidInvoiceInput = {}, entityId?: string): Promise<VoidInvoiceResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/void`, input, entityHeaders(entityId));
+  }
+
+  /**
+   * Void many invoices that have not been transmitted (1 to 500 ids). Always resolves (HTTP 200) with a per-invoice
+   * `items` array: an invoice that was already transmitted is skipped with `code` CANNOT_VOID_<STATUS> and never stops
+   * the others. Throws a {@link ClearvoError} 400 for a missing, empty or oversized `ids`.
+   */
+  voidInvoices(input: VoidInvoicesInput, entityId?: string): Promise<VoidInvoicesResponse> {
+    return this.request('POST', '/invoices/void', input, entityHeaders(entityId));
+  }
+
+  /**
+   * Void every invoice of a CSV upload (bulk upload batch) that has not been transmitted. An upload still awaiting review
+   * is discarded first (same as discarding it); a confirmed upload has its not-yet-sent invoices voided and the sent ones
+   * skipped with their reason. Throws a {@link ClearvoError} 404 when no such batch exists for this entity.
+   */
+  voidBulkUpload(batchId: string, input: VoidInvoiceInput = {}, entityId?: string): Promise<VoidBatchResponse> {
+    return this.request('POST', `/send/bulk/${encodeURIComponent(batchId)}/void`, input, entityHeaders(entityId));
+  }
+
+  /**
+   * Void every invoice waiting in a reporting batch (e-reporting). Voiding takes an invoice out of its batch for good; a
+   * batch left with no invoices becomes 'voided'. A confirmed or submitted batch skips each invoice (BATCH_LOCKED /
+   * BATCH_ALREADY_SUBMITTED) and changes nothing. To move one invoice to the next batch instead, use
+   * excludeFromReportingBatch. Throws a {@link ClearvoError} 404 when no such batch exists for this entity.
+   */
+  voidReportingBatch(id: string, input: VoidInvoiceInput = {}, entityId?: string): Promise<VoidBatchResponse> {
+    return this.request('POST', `/reporting-batches/${encodeURIComponent(id)}/void`, input, entityHeaders(entityId));
   }
 
   /**

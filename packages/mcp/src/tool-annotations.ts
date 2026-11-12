@@ -58,6 +58,8 @@ const DESTRUCTIVE = new Set<string>([
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi', 'retry_invoice_with_master_data',
   'update_business_status', 'update_invoice_business_status', 'fix_invoice',
+  // A void is permanent: the invoice never goes out.
+  'void_invoice', 'void_invoices',
   // Removes one of the customer's own tests from new runs.
   'archive_test_case',
   // Grant access / open an outbound data channel.
@@ -80,6 +82,8 @@ const NON_IDEMPOTENT = new Set<string>([
   'receive_invoice_document', 'simulate_received_invoices', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
   'move_rule', 'amend_sii_report', 'retry_invoice_with_master_data',
+  // Voiding an already voided invoice answers 200 already_voided; a transmitted one is refused 409.
+  'void_invoice', 'void_invoices',
   // Each call starts a new run / adds a new test.
   'start_test_run', 'create_test_case',
   // Each call appends a new request to the filing's timeline.
