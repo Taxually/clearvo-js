@@ -37,3 +37,8 @@ void seq;
 void to;
 void prev;
 void why;
+
+// The merged statuses: the old names are gone.
+// @ts-expect-error HELD_UNMAPPED_TAX_CODE is no longer a returned InvoiceReason
+const goneReason: InvoiceReason = 'HELD_UNMAPPED_TAX_CODE';
+void goneReason;

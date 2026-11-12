@@ -59,12 +59,11 @@ export const INVOICE_STAGES = [
 ] as const satisfies readonly InvoiceStage[];
 
 /**
- * Why an invoice has its status — including HELD_UNMAPPED_TAX_CODE, the
- * tax-code-mapping hard cut's own reason for an unrecognised
- * clientTaxCode/taxTreatment. Mirrors components.schemas.InvoiceReason.enum
+ * Why an invoice has its status — including SETUP_NEEDED (an unmapped
+ * tax code, a missing credential or a switched-off obligation; the cause is in errorCode). Mirrors components.schemas.InvoiceReason.enum
  * in openapi.json exactly.
  */
-export type InvoiceReason = 'RECEIVED' | 'PENDING' | 'UNROUTABLE' | 'DELIVERED' | 'ACCEPTED' | 'REJECTED' | 'DUPLICATE' | 'UNDELIVERED' | 'HELD_AWAITING_AUTHORIZATION' | 'HELD_AWAITING_ORIGINAL' | 'SETUP_NEEDED' | 'HELD_UNKNOWN_MANDATE' | 'HELD_UNMAPPED_TAX_CODE' | 'NOT_SUPPORTED' | 'NO_MANDATE' | 'NO_OBLIGATION' | 'ACCUMULATED' | 'NEEDS_INFO' | 'OBLIGATION_DISABLED' | 'HELD_PLATFORM_FAULT' | 'HELD_UNMAPPED_DECISION' | 'CANCELLED' | 'RECEIVED_NEEDS_REVIEW' | 'AWAITING_RELEASE' | 'MERCHANT_DISCARDED' | 'REGISTERED_WITH_ERRORS' | 'SKIP_RULE';
+export type InvoiceReason = 'RECEIVED' | 'PENDING' | 'UNROUTABLE' | 'DELIVERED' | 'ACCEPTED' | 'REJECTED' | 'DUPLICATE' | 'UNDELIVERED' | 'HELD_AWAITING_AUTHORIZATION' | 'HELD_AWAITING_ORIGINAL' | 'SETUP_NEEDED' | 'HELD_UNKNOWN_MANDATE' | 'NOT_SUPPORTED' | 'NO_MANDATE' | 'NO_OBLIGATION' | 'ACCUMULATED' | 'NEEDS_INFO' | 'HELD_PLATFORM_FAULT' | 'HELD_UNMAPPED_DECISION' | 'CANCELLED' | 'RECEIVED_NEEDS_REVIEW' | 'AWAITING_RELEASE' | 'MERCHANT_DISCARDED' | 'REGISTERED_WITH_ERRORS' | 'SKIP_RULE';
 
 export const INVOICE_REASONS = [
   'RECEIVED',
@@ -79,13 +78,11 @@ export const INVOICE_REASONS = [
   'HELD_AWAITING_ORIGINAL',
   'SETUP_NEEDED',
   'HELD_UNKNOWN_MANDATE',
-  'HELD_UNMAPPED_TAX_CODE',
   'NOT_SUPPORTED',
   'NO_MANDATE',
   'NO_OBLIGATION',
   'ACCUMULATED',
   'NEEDS_INFO',
-  'OBLIGATION_DISABLED',
   'HELD_PLATFORM_FAULT',
   'HELD_UNMAPPED_DECISION',
   'CANCELLED',
