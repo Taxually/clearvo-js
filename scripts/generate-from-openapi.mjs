@@ -85,8 +85,8 @@ function generate(openapi) {
     }
     enums[name] = schema.enum.filter((v) => v !== null);
   }
-  if (!enums.InvoiceReason.includes('HELD_UNMAPPED_TAX_CODE')) {
-    throw new Error(`openapi.json's InvoiceReason.enum no longer contains 'HELD_UNMAPPED_TAX_CODE' — the tax-code-mapping hard cut depends on it.`);
+  if (!enums.InvoiceReason.includes('SETUP_NEEDED')) {
+    throw new Error(`openapi.json's InvoiceReason.enum no longer contains 'SETUP_NEEDED' — unmapped tax codes and switched-off obligations are held under it.`);
   }
 
   const taxCodesPath = openapi.paths?.['/tax/codes'];
@@ -137,9 +137,8 @@ ${tsStringArray(enums.InvoiceStage)}
 ] as const satisfies readonly InvoiceStage[];
 
 /**
- * Why an invoice has its status — including HELD_UNMAPPED_TAX_CODE, the
- * tax-code-mapping hard cut's own reason for an unrecognised
- * clientTaxCode/taxTreatment. Mirrors components.schemas.InvoiceReason.enum
+ * Why an invoice has its status — including SETUP_NEEDED (an unmapped
+ * tax code, a missing credential or a switched-off obligation; the cause is in errorCode). Mirrors components.schemas.InvoiceReason.enum
  * in openapi.json exactly.
  */
 export type InvoiceReason = ${tsUnion(enums.InvoiceReason)};

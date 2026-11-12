@@ -183,13 +183,13 @@ export interface SendResult extends InvoiceStatusFields {
   warnings?: Array<{ code: string; message?: string; [k: string]: unknown }>;
   message?: string;
   /**
-   * The country the document was routed to. Null for HELD_UNMAPPED_TAX_CODE (also on an idempotent replay): a held document has no
+   * The country the document was routed to. Null while held as SETUP_NEEDED for an unmapped tax code (also on an idempotent replay): a held document has no
    * tax treatment, so no mandate and no country until its tax code is mapped.
    */
   country?: string | null;
-  /** Present only when reason is HELD_UNMAPPED_TAX_CODE — the resolver's own error code. */
+  /** Present when reason is SETUP_NEEDED or NEEDS_INFO: the specific cause, for example TAX_CODE_UNMAPPED, OBLIGATION_DISABLED or a credential cause. */
   errorCode?: string;
-  /** Present only when reason is HELD_UNMAPPED_TAX_CODE — the machine-readable diagnostic for which code wasn't configured and where to fix it. */
+  /** Present only when reason is SETUP_NEEDED with errorCode TAX_CODE_UNMAPPED — the machine-readable diagnostic for which code wasn't configured and where to fix it. */
   unmappedTaxCode?: UnmappedTaxCodeReason;
   /** Echoed back only when the request set dryRun: true — no record was persisted. */
   dryRun?: boolean;
@@ -293,6 +293,13 @@ import type { SimulationScenarioId } from './simulation-scenarios.js';
 export type { InvoiceStatus, InvoiceStage, InvoiceReason } from './generated/openapi-tax-code-contract.js';
 export { INVOICE_STATUSES, INVOICE_STAGES, INVOICE_REASONS } from './generated/openapi-tax-code-contract.js';
 import type { InvoiceStatus, InvoiceStage, InvoiceReason } from './generated/openapi-tax-code-contract.js';
+
+/**
+ * Old reason names the API still accepts as filter input for one release; both mean SETUP_NEEDED (the cause is in errorCode:
+ * TAX_CODE_UNMAPPED or OBLIGATION_DISABLED). Never returned. Use SETUP_NEEDED.
+ * @deprecated
+ */
+export type DeprecatedInvoiceReasonAlias = 'HELD_UNMAPPED_TAX_CODE' | 'OBLIGATION_DISABLED';
 
 /** A problem the authority or the platform reported on an invoice that was otherwise taken (for example Spain SII "accepted with errors"). */
 export interface Issue {
@@ -400,7 +407,7 @@ export interface LineItemInput {
    * RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code),
    * configured in advance via createClientTaxCode. Mutually exclusive with
    * `taxTreatment`. An unrecognised code for this entity is never
-   * rejected outright — the invoice is held (status HELD_UNMAPPED_TAX_CODE)
+   * rejected outright — the invoice is held (reason SETUP_NEEDED, errorCode TAX_CODE_UNMAPPED)
    * with a machine-readable reason instead.
    */
   clientTaxCode?: string;
@@ -630,7 +637,7 @@ export interface SubmitInvoiceInput {
    * Preview the resolved per-line tax decision without creating a record,
    * generating XML, or enqueueing anything to an authority. The response
    * echoes dryRun: true plus `lines[]` (including a would-be
-   * HELD_UNMAPPED_TAX_CODE outcome). It also runs every rule phase of a real
+   * SETUP_NEEDED hold for an unmapped tax code). It also runs every rule phase of a real
    * send for every country and format, with no side effects: `errors[]`,
    * `warnings[]`, `corrections[]` and `rulesetVersion`, each finding with a
    * `fix`. A document a real send would reject is `ok: false` (it used to
@@ -854,7 +861,7 @@ export interface LineTaxResolution {
 /**
  * The machine-readable diagnostic returned when a line/shipping/
  * allowance-charge's clientTaxCode or taxTreatment isn't configured for
- * this entity yet — sets status to HELD_UNMAPPED_TAX_CODE rather than
+ * this entity yet — holds the document as SETUP_NEEDED (errorCode TAX_CODE_UNMAPPED) rather than
  * rejecting the request.
  */
 export interface UnmappedTaxCodeReason {
@@ -899,8 +906,8 @@ export interface ListInvoicesParams {
   country?: string;
   /** One of the ten statuses ({@link InvoiceStatus}). */
   status?: InvoiceStatus;
-  /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. */
-  reason?: InvoiceReason;
+  /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. HELD_UNMAPPED_TAX_CODE and OBLIGATION_DISABLED are deprecated aliases of SETUP_NEEDED (accepted for one release, never returned). */
+  reason?: InvoiceReason | DeprecatedInvoiceReasonAlias;
   /** Filter on the buyer's decision: in_review, approved, partially_approved, disputed or refused. A regime's own native code (for example PAYMENT_SENT) is also accepted. */
   businessStatus?: CustomerResponseStatus | (string & {});
   /** ISO 8601 timestamp — only invoices whose Clearvo-side created_at is strictly after this. A monotonic ingestion cursor, distinct from issueDate; most relevant for Mexico CFDIs given SAT's own multi-day publishing lag. */
@@ -1041,7 +1048,7 @@ export interface CustomerAttachment {
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
 export interface InvoiceRecordTimestamps {
   /**
-   * Null while the invoice is held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE): the tax code decides the tax treatment and the
+   * Null while the invoice is held for an unmapped tax code (SETUP_NEEDED, errorCode TAX_CODE_UNMAPPED): the tax code decides the tax treatment and the
    * treatment decides the mandate, so until the code is mapped the invoice has no country. The `country` filter on listInvoices never matches it.
    */
   country?: string | null;
@@ -2362,7 +2369,7 @@ export interface Webhook {
   url: string;
   events: string[];
   /** Only for `invoice.status_changed`: the statuses delivered. Empty means every status change. */
-  statuses?: Array<InvoiceStatus | InvoiceReason>;
+  statuses?: Array<InvoiceStatus | InvoiceReason | DeprecatedInvoiceReasonAlias>;
   entityId: string | null;
   active: boolean;
   createdAt: string;
@@ -2376,7 +2383,7 @@ export interface CreateWebhookInput {
    */
   events?: WebhookEventName[] | string[];
   /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
-  statuses?: Array<InvoiceStatus | InvoiceReason>;
+  statuses?: Array<InvoiceStatus | InvoiceReason | DeprecatedInvoiceReasonAlias>;
 }
 
 export interface CreateWebhookResponse extends Webhook {
@@ -2393,7 +2400,7 @@ export interface TestWebhookInput {
   /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending, .business_status_changed or .status_changed. */
   event?: string;
   /** Only with event `invoice.status_changed`: the new status the sample reports (default: the invoice's own status, else ACCEPTED). */
-  to?: InvoiceStatus | InvoiceReason;
+  to?: InvoiceStatus | InvoiceReason | DeprecatedInvoiceReasonAlias;
   /** Build the payload from one of your own invoices instead of sample values. */
   invoiceId?: string;
 }

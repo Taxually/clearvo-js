@@ -37,3 +37,9 @@ void seq;
 void to;
 void prev;
 void why;
+
+// The merged statuses: the old names are not returned reasons, but still valid filter input.
+// @ts-expect-error HELD_UNMAPPED_TAX_CODE is no longer a returned InvoiceReason
+const goneReason: InvoiceReason = 'HELD_UNMAPPED_TAX_CODE';
+const aliasFilter: import('../src/types.js').DeprecatedInvoiceReasonAlias = 'OBLIGATION_DISABLED';
+void goneReason; void aliasFilter;

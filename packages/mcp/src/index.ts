@@ -584,7 +584,7 @@ const TOOLS = [
       'response also carries `status` (one of ten: RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]`, `customerResponse`, ' +
       '`mandate`, `reviewRequired` and `nextStep`. A 200 means the document is STORED, not that it was accepted: ' +
       'a well-formed document is always stored first, and a validation failure, a missing setup or a not-yet-supported country becomes a status on the stored record, not a lost request. ' +
-      'Read `status`, `stage`, `reason` and `terminal`. `status` says who has to move it: RECEIVED and PENDING (stage queued or awaiting_authority) and ACCUMULATED: Clearvo or the authority is working on it, wait; WAITING_FOR_YOU: you or the user can fix it, and it never expires; WAITING_FOR_PLATFORM: Clearvo resolves it, nothing for you to do; COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED, CANCELLED, SKIPPED and NOT_APPLICABLE: finished. `reason` is the specific cause (for example NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, HELD_AWAITING_AUTHORIZATION). ' +
+      'Read `status`, `stage`, `reason` and `terminal`. `status` says who has to move it: RECEIVED and PENDING (stage queued or awaiting_authority) and ACCUMULATED: Clearvo or the authority is working on it, wait; WAITING_FOR_YOU: you or the user can fix it, and it never expires; WAITING_FOR_PLATFORM: Clearvo resolves it, nothing for you to do; COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED, CANCELLED, SKIPPED and NOT_APPLICABLE: finished. `reason` is the specific cause (for example NEEDS_INFO, SETUP_NEEDED, HELD_AWAITING_AUTHORIZATION; for SETUP_NEEDED the cause is in `errorCode`, e.g. TAX_CODE_UNMAPPED or OBLIGATION_DISABLED). ' +
       'When the document is waiting (WAITING_FOR_YOU or WAITING_FOR_PLATFORM), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
       'Held documents are released automatically once the cause is fixed; poll_status (or an invoice.status_changed webhook) shows the move. ' +
       'A document for a country that is not enabled for your account yet (including live Portugal submissions) is stored 200 WAITING_FOR_PLATFORM (reason HELD_AWAITING_AUTHORIZATION): it is held and released automatically once the country is enabled for your account, so there is nothing to resend; a document dated before a mandate\'s support start is NOT_APPLICABLE (reason NOT_SUPPORTED, final, never submitted later). ' +
@@ -679,10 +679,10 @@ const TOOLS = [
       'by country inference. A positive taxRate with neither is reported as a domestic taxable supply at that rate ' +
       '(the client\'s rate is authoritative and never rejected as unrecognised); a bare 0% with neither is held NEEDS_INFO ' +
       'asking why it is zero — state exempt/zero_rated/reverse_charge or a clientTaxCode. An unrecognised ' +
-      'clientTaxCode never rejects the invoice — it is accepted and held (status WAITING_FOR_YOU, reason HELD_UNMAPPED_TAX_CODE) with a ' +
+      'clientTaxCode never rejects the invoice — it is accepted and held (status WAITING_FOR_YOU, reason SETUP_NEEDED, errorCode TAX_CODE_UNMAPPED) with a ' +
       'machine-readable unmappedTaxCode diagnostic until the code is configured; such a held document has no mandate and no country yet, so `country` is null on the response ' +
       '(and on a replay) and `unmappedTaxCode` carries optional `codeName` and `codeRate` (percent) when the source system can name the code, e.g. a Xero tax rate. Set dryRun=true to preview each line\'s resolved ' +
-      'tax decision (including a would-be HELD_UNMAPPED_TAX_CODE) without submitting anything for real.',
+      'tax decision (including a would-be SETUP_NEEDED hold for an unmapped tax code) without submitting anything for real.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -778,7 +778,7 @@ const TOOLS = [
               taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED).' },
               clientTaxCode: {
                 type: 'string',
-                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (reason HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
+                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (reason SETUP_NEEDED, errorCode TAX_CODE_UNMAPPED) with a machine-readable reason instead.',
               },
               taxTreatment: {
                 type: 'string',
@@ -873,7 +873,7 @@ const TOOLS = [
         },
         dryRun: {
           type: 'boolean',
-          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be HELD_UNMAPPED_TAX_CODE outcome) so you can validate a clientTaxCode/taxTreatment setup before really submitting. It also runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, returning the same errors[], warnings[], corrections[] (the auto-corrections it would apply) and rulesetVersion; each finding carries a fix (where the value lives: invoice, supplier_profile or customer_record, and when known its label, type and options). Tax number checks are format-only. It does not generate or submit the document.',
+          description: 'Preview the resolved per-line tax decision without creating a record, generating XML, or submitting to an authority. The response echoes dryRun=true plus each line\'s taxResolution (including a would-be SETUP_NEEDED hold for an unmapped tax code) so you can validate a clientTaxCode/taxTreatment setup before really submitting. It also runs every rule phase of a real send (validation, mandate resolution, supplier identity, post-decision rules), for every country and format, with no side effects, returning the same errors[], warnings[], corrections[] (the auto-corrections it would apply) and rulesetVersion; each finding carries a fix (where the value lives: invoice, supplier_profile or customer_record, and when known its label, type and options). Tax number checks are format-only. It does not generate or submit the document.',
         },
         notifyCustomer: {
           type: 'boolean',
@@ -1079,11 +1079,11 @@ const TOOLS = [
       'Check the status of a document previously submitted via submit_invoice. Reads the stored status only: it never calls the authority, so it is safe to repeat. ' +
       'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns `status` (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]` and `customerResponse`. `status` says who the document is waiting for: ' +
       'RECEIVED (stored, still processing), PENDING (stage queued: not sent yet; awaiting_authority: sent, wait for the answer), ACCUMULATED (in a periodic report, not yet filed): wait, do nothing; ' +
-      'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
+      'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED (cause in errorCode: TAX_CODE_UNMAPPED, OBLIGATION_DISABLED or a credential cause), UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
       'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_AWAITING_ORIGINAL (a credit note waiting for its original invoice; `originalInvoiceId` names it), HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
       'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_DISCARDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
       '`customerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
-      'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
+      'A waiting document is not a dead end: for NEEDS_INFO and SETUP_NEEDED fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resend the corrected document to POST /v1/send with the same invoice number. ' +
       'For Italy SDI, Poland KSeF, Romania ANAF: poll every 30 seconds for up to 5 minutes after submission. ' +
       'For Spain SII and real-time reporting countries (Hungary, Greece): status is usually immediate. ' +
@@ -1876,7 +1876,7 @@ const TOOLS = [
     description:
       'List invoices previously submitted through Clearvo. ' +
       'Filter by country, status, reason, customer response, or date. ' +
-      'An invoice held for an unmapped tax code (HELD_UNMAPPED_TAX_CODE) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
+      'An invoice held for an unmapped tax code (SETUP_NEEDED, errorCode TAX_CODE_UNMAPPED) has no tax treatment, so no mandate and no country yet: its country and transactionId are null and the country filter never matches it. ' +
       'Returns submission timestamps, ingestedAt (the instant the platform first ingested the document, stamped once and never changed; rule windows are judged against it), and per invoice `status`, `stage`, `reason`, `statusLabel`, `terminal`, `issues[]`, `customerResponse` and authority reference numbers. ' +
       'Use this to audit submitted invoices, find invoices that are still PENDING or WAITING_FOR_YOU, ' +
       'or identify REJECTED invoices that need to be resubmitted. ' +
@@ -1897,8 +1897,8 @@ const TOOLS = [
         },
         reason: {
           type: 'string',
-          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
-          description: 'Filter by the specific reason behind the status. The old stored names (EXCLUDED, DISCARDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are both accepted.',
+          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE', 'HELD_UNMAPPED_TAX_CODE', 'OBLIGATION_DISABLED'],
+          description: 'Filter by the specific reason behind the status. The old stored names (EXCLUDED, DISCARDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are both accepted. HELD_UNMAPPED_TAX_CODE and OBLIGATION_DISABLED are deprecated aliases of SETUP_NEEDED, accepted for one release and never returned.',
         },
         businessStatus: {
           type: 'string',
@@ -3760,7 +3760,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — header row plus up to 500 data rows. See the transaction_date/currency/country/net_amount/tax_amount required columns and the optional source_reference/tax_code columns documented for POST /v1/send/bulk. tax_code is the entity\'s own client tax code (mapped in advance via create_client_tax_code/list_client_tax_codes); a BLANK tax_code gets the platform default \'S\', which must itself be registered — otherwise every such row is held (reason HELD_UNMAPPED_TAX_CODE, reason.codeSource \'default\', message naming the fix: register \'S\' or fill tax_code per row). A freshly onboarded entity with no codes registered yet should expect exactly this on its first upload.' },
+        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — header row plus up to 500 data rows. See the transaction_date/currency/country/net_amount/tax_amount required columns and the optional source_reference/tax_code columns documented for POST /v1/send/bulk. tax_code is the entity\'s own client tax code (mapped in advance via create_client_tax_code/list_client_tax_codes); a BLANK tax_code gets the platform default \'S\', which must itself be registered — otherwise every such row is held (reason SETUP_NEEDED, errorCode TAX_CODE_UNMAPPED, reason.codeSource \'default\', message naming the fix: register \'S\' or fill tax_code per row). A freshly onboarded entity with no codes registered yet should expect exactly this on its first upload.' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['csvContent'],
