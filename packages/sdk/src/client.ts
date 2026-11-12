@@ -3,6 +3,7 @@ import type {
   ClearvoClientOptions,
   Entity,
   CreateEntityInput,
+  ListEntitiesParams,
   CreateEntityResponse,
   UpdateEntityInput,
   SendResult,
@@ -17,6 +18,13 @@ import type {
   DutiesResult,
   EstimateDutiesInput,
   DutiesEstimateResult,
+  AddressErasureInput,
+  ListInvoiceAttachmentsResponse,
+  FixInvoiceInput,
+  FixInvoiceResponse,
+  FixInvoiceDryRunResponse,
+  DownloadedInvoiceAttachment,
+  AddressErasureResult,
   ImportSettlementInput,
   ImportSettlementResult,
   ImportSettlementList,
@@ -27,6 +35,7 @@ import type {
   TaxNumberBatchItem,
   TaxNumberBatchResult,
   CountryRequirements,
+  CountryCoverageResponse,
   Product,
   CreateProductInput,
   UpdateProductInput,
@@ -93,6 +102,9 @@ import type {
   AmendReportResponse,
   CancelReportInput,
   CancelReportResponse,
+  RetryWithMasterDataInput,
+  RetryWithMasterDataPreview,
+  RetryWithMasterDataResult,
   GetSiiReconciliationSummaryResponse,
   GetSiiReconciliationResponse,
   QueryRequestParams,
@@ -114,6 +126,8 @@ import type {
   ListMandateTransactionsResponse,
   SetFrCredentialsInput,
   FrCredentialsResponse,
+  CreateFrPlatformConnectLinkInput,
+  FrPlatformConnectLinkResponse,
   SetItProfileInput,
   ItProfileResponse,
   UpdateBusinessStatusInput,
@@ -140,6 +154,9 @@ import type {
   SuppressRuleParams,
   SuppressRuleResponse,
   UnsuppressRuleResponse,
+  EnableRuleParams,
+  EnableRuleResponse,
+  DisableRuleResponse,
   ListRuleVersionsResponse,
   SimulateRuleInput,
   SimulateRuleResponse,
@@ -362,6 +379,54 @@ export class ClearvoClient {
     return this.request('GET', `/invoices${q ? `?${q}` : ''}`);
   }
 
+  /**
+   * GET /invoices/{id}/attachments: the supporting files sent with an invoice you issued or received on one. `id` is the Clearvo id or the
+   * reference id (409 AMBIGUOUS_REFERENCE when a reference matches several: use the Clearvo id; 404 INVOICE_NOT_FOUND). Attachments are
+   * never part of the e-invoice document. A stored file has `downloadable: true`; a link-only one carries `externalUrl`.
+   */
+  listInvoiceAttachments(id: string): Promise<ListInvoiceAttachmentsResponse> {
+    return this.request('GET', `/invoices/${encodeURIComponent(id)}/attachments`);
+  }
+
+  /**
+   * GET /invoices/{id}/attachments/{index}: one stored supporting file, byte for byte. `index` is the `index` from `listInvoiceAttachments`.
+   * Errors surface as ClearvoError: 404 INVOICE_NOT_FOUND, 404 ATTACHMENT_NOT_FOUND (no such position, or a link-only attachment),
+   * 409 AMBIGUOUS_REFERENCE, 500 ATTACHMENT_UNAVAILABLE (retryable).
+   */
+  async downloadInvoiceAttachment(id: string, index: number): Promise<DownloadedInvoiceAttachment> {
+    const response = await this.requestFile(`/invoices/${encodeURIComponent(id)}/attachments/${encodeURIComponent(String(index))}`);
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(disposition);
+    const plain = /filename\s*=\s*"?([^";]+)"?/.exec(disposition);
+    let fileName: string | null = null;
+    try { fileName = star ? decodeURIComponent(star[1].trim()) : plain ? plain[1].trim() : null; } catch { fileName = plain ? plain[1].trim() : null; }
+    return {
+      data: Buffer.from(await response.arrayBuffer()),
+      fileName,
+      mimeType: (response.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim(),
+    };
+  }
+
+  /**
+   * POST /invoices/{id}/fix: put an invoice right by supplying values as dotted field paths, e.g. `{ 'customer.address.country': 'DE' }`.
+   * Read the invoice's `resolution` first: a held invoice that is missing information takes exactly the listed `missingFields` and
+   * updates in place (`mode: 'updated_in_place'`) and is sent again; a rejected invoice is corrected where its source allows changes
+   * (`mode: 'new_invoice'`, a corrected invoice linked to the original); a submitted e-report is amended (`mode: 'amended'`).
+   * An amend of a reported ES SII registration is allowed from every source. `clear: ['path']` deletes a value from the corrected
+   * document (a path cannot be in both `fields` and `clear`). With `dryRun: true` it changes nothing and answers `{ id, wouldSubmit }`.
+   * Success is 200, or 202 while the invoice is still being processed.
+   * Errors surface as ClearvoError: 404 (no such invoice), 409 NOT_FIXABLE (issued e-invoices are never edited), 409 SOURCE_LOCKED
+   * (API- and ERP-sourced invoices cannot be corrected or have values changed, or cleared, in Clearvo: fix them in the source system and
+   * it resubmits; missing values can always be supplied), 422 INVALID_FIELDS (`errors[]`: INVALID_PATH, INVALID_VALUE, NOT_SUPPLIABLE,
+   * LOCKED_CHANNEL), 503 FIX_UNAVAILABLE (retryable).
+   */
+  fixInvoice(input: FixInvoiceInput & { dryRun: true }): Promise<FixInvoiceDryRunResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse>;
+  fixInvoice(input: FixInvoiceInput): Promise<FixInvoiceResponse | FixInvoiceDryRunResponse> {
+    const { id, entityId, ...body } = input;
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
   // ── Tax Calculation ───────────────────────────────────────────────────────────
 
   calculateTax(input: TaxCalculateRequest): Promise<TaxCalculateResponse> {
@@ -401,6 +466,16 @@ export class ClearvoClient {
     return this.request('POST', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, input, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
+  /**
+   * Erase a customer's stored address lines and display name from committed calculations, on request (POST /v1/tax/address-erasure).
+   * Name the calculation by `calculationId` or by the order `reference` (credit notes pointing at it are included). `level` `street`
+   * (default) removes the address lines and the name; `full` also removes the city. Amounts, tax, jurisdiction, region, postal code
+   * and country are never changed, and repeating the call changes nothing. A 404 `CALCULATION_NOT_FOUND` means nothing matched yet.
+   */
+  eraseCustomerAddressData(input: AddressErasureInput, entityId?: string): Promise<AddressErasureResult> {
+    return this.request('POST', '/tax/address-erasure', input, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
   /** GET /tax/calculate/{id}/import-settlement: a calculation's settlements and a per-currency summary. */
   getImportSettlements(calculationId: string, entityId?: string): Promise<ImportSettlementList> {
     return this.request('GET', `/tax/calculate/${encodeURIComponent(calculationId)}/import-settlement`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
@@ -425,14 +500,17 @@ export class ClearvoClient {
 
   // ── Entity Management ─────────────────────────────────────────────────────────
 
-  listEntities(): Promise<{ entities: Entity[] }> {
-    return this.request('GET', '/entities');
+  /** List entities. Pass `taxNumber` to find the entity already registered under a tax number (any spelling, min 4 characters; else 422 INVALID_TAX_NUMBER_FILTER). */
+  listEntities(params: ListEntitiesParams = {}): Promise<{ entities: Entity[] }> {
+    const q = params.taxNumber ? `?taxNumber=${encodeURIComponent(params.taxNumber)}` : '';
+    return this.request('GET', `/entities${q}`);
   }
 
   getEntity(entityId: string): Promise<Entity> {
     return this.request('GET', `/entities/${encodeURIComponent(entityId)}`);
   }
 
+  /** Create an entity. Throws a ClearvoError 409 with code `DUPLICATE_ENTITY` (body.entityId = the existing entity) when an open entity in the same organisation already has this country and tax number. */
   createEntity(input: CreateEntityInput): Promise<CreateEntityResponse> {
     return this.request('POST', '/entities', input);
   }
@@ -574,6 +652,14 @@ export class ClearvoClient {
   getRequirements(country: string, filter: { class?: 'format_authority' | 'legal_content' | 'presentation'; mandate?: string } = {}): Promise<CountryRequirements> {
     const query = new URLSearchParams({ country, ...(filter.class ? { class: filter.class } : {}), ...(filter.mandate ? { mandate: filter.mandate } : {}) });
     return this.request('GET', `/requirements?${query.toString()}`);
+  }
+
+  /**
+   * GET /coverage: the countries and mandates covered, each with a customer-facing status and the mandate go-live date where confirmed.
+   * Public (needs no API key). A 503 with code COVERAGE_UNAVAILABLE is temporary: retry.
+   */
+  listCountryCoverage(): Promise<CountryCoverageResponse> {
+    return this.request('GET', '/coverage');
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────
@@ -815,6 +901,18 @@ export class ClearvoClient {
    */
   cancelSiiReport(id: string, input: CancelReportInput, idempotencyKey: string): Promise<CancelReportResponse> {
     return this.request('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, input, { 'x-idempotency-key': idempotencyKey });
+  }
+
+  /**
+   * Retry a REJECTED or NEEDS_INFO outbound invoice using the tax number from the customer master record instead of the
+   * one that was sent. Only `customer.taxId` changes; the corrected copy goes through the normal send validation. Resolves
+   * with the NEW `invoiceId` and `previousInvoiceId` (HTTP 200, or 202 when still processing); with `dryRun: true` it
+   * resolves with the preview and sends nothing. Offered when `availableActions` on the invoice contains `use_master_data`.
+   * Throws a {@link ClearvoError}: 404 not found, 409 NOT_ELIGIBLE, 422 MASTER_CUSTOMER_NOT_FOUND / MASTER_TAX_ID_MISSING /
+   * MASTER_TAX_ID_UNCHANGED, or the send validation error for the corrected copy.
+   */
+  retryInvoiceWithMasterData(id: string, input: RetryWithMasterDataInput = {}, entityId?: string): Promise<RetryWithMasterDataResult | RetryWithMasterDataPreview> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, input, entityHeaders(entityId));
   }
 
   /**
@@ -1085,6 +1183,14 @@ export class ClearvoClient {
     return this.request('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
+  /** Creates the link a French customer opens to connect its company (a short secure sign-in, identity check and
+   *  approval). Forward `connectUrl` to the customer, then read `platformConnection.state` from getFrCredentials()
+   *  until it is `active`. The French tax number must already be registered (setFrCredentials). */
+  createFrPlatformConnectLink(input: CreateFrPlatformConnectLinkInput): Promise<FrPlatformConnectLinkResponse> {
+    const { entityId, ...body } = input;
+    return this.request('POST', '/fr/platform-connect-link', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
   // ── Italy profile field (Regime Fiscale) ─────────────────────────────────
   // No credential to store — Clearvo is the accredited SDI intermediary.
   // Sets/reads the entity's required Regime Fiscale profile field.
@@ -1100,7 +1206,10 @@ export class ClearvoClient {
 
   // ── Business (customer-lifecycle) status ─────────────────────────────────
   // Only valid for a received (inbound) invoice — records the calling
-  // entity's own decision (approve, dispute, mark paid, ...) on it.
+  // entity's own decision (approve, dispute, mark paid, ...) on it. One exception: for a French
+  // invoice issued through the connected e-invoicing platform, PAYMENT_RECEIVED can be recorded on the
+  // issued invoice once the customer has paid. A reference that matches more than one document is
+  // refused with 409 AMBIGUOUS_REFERENCE: pass the Clearvo id instead.
 
   updateBusinessStatus(input: UpdateBusinessStatusInput): Promise<UpdateBusinessStatusResponse> {
     const { id, entityId, ...body } = input;
@@ -1178,6 +1287,17 @@ export class ClearvoClient {
   /** Remove this key's own scope's suppression of a platform-default rule, if one exists — the default resumes firing for this scope. 404 if no active suppression exists. */
   unsuppressRule(ruleId: string, entityId?: string): Promise<UnsuppressRuleResponse> {
     return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/suppress`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn ON, for this key's own scope, a platform-default (is_system) rule that is off by default (opt-in): listRules({ includeDefaults: true }) shows `defaultEnabled: false`, `enabledForScope` and `canEnable`. The rule then applies at this scope and everywhere beneath it. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule, or one locked by the platform is refused 422 RULE_NOT_ENABLEABLE. */
+  enableRule(ruleId: string, params: EnableRuleParams = {}): Promise<EnableRuleResponse> {
+    const { entityId, ...body } = params;
+    return this.request('POST', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Turn OFF again an opt-in rule this key's own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope. */
+  disableRule(ruleId: string, entityId?: string): Promise<DisableRuleResponse> {
+    return this.request('DELETE', `/rules-engine/rules/${encodeURIComponent(ruleId)}/enable`, undefined, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   /** A rule's own rules_versions history, newest first. */

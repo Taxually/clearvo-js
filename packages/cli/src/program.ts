@@ -4,6 +4,18 @@ import { homedir } from 'os';
 import { join, basename } from 'path';
 import { Command } from 'commander';
 
+// Countries the received-invoice simulator covers. Repeated in the SDK and MCP server; `npm run test:simulation-countries` fails on drift.
+const SIMULATION_COUNTRY_CODES = [
+  'AE', 'AT', 'AU', 'BE', 'CH', 'DE', 'DK', 'EE', 'FI', 'FR', 'HR', 'IE',
+  'IS', 'JP', 'LT', 'LU', 'LV', 'NL', 'NO', 'NZ', 'SE', 'SG', 'SI', 'SK',
+];
+
+// Scenarios of the received-invoice simulator (ids only; the SDK and MCP server carry the descriptions). `npm run test:simulation-countries` fails on drift.
+const SIMULATION_SCENARIO_IDS = [
+  'standard', 'credit_note_for_existing', 'warnings_only', 'needs_review_format', 'needs_review_business_rules', 'duplicate',
+  'duplicate_exact', 'with_references', 'with_payment_terms', 'with_attachment', 'with_discounts', 'many_lines', 'unicode_text', 'foreign_supplier',
+];
+
 /** Commander collector for the repeatable --classification-code flag. */
 function collectClassificationCode(val: string, prev: string[]): string[] {
   return [...prev, val];
@@ -363,17 +375,36 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo retry-with-master-data <id> ───────────────────────────────────────
+  // Retries a REJECTED / NEEDS_INFO outbound invoice with the customer master record's tax
+  // number in place of the one that was sent. Only customer.taxId changes; the normal send
+  // validation still runs. Use --dry-run to see the change first.
+  program
+    .command('retry-with-master-data <id>')
+    .description("Retry a refused invoice using the customer master record's tax number (only customer.taxId changes)")
+    .option('--dry-run', 'Show the change that would be made without sending anything')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.dryRun) body.dryRun = true;
+      const result = await api('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo business-status <id> ─────────────────────────────────────────────
   // Records a customer-lifecycle ("business") status decision on a received
   // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or
   // mark paid. Only valid on an INBOUND invoice: the calling entity is the
   // customer recording its own decision. For an invoice you issued, the other
-  // side's response syncs automatically once they act on their own side.
+  // side's response syncs automatically once they act on their own side; the one
+  // exception is PAYMENT_RECEIVED on a French invoice issued through the connected
+  // e-invoicing platform.
   program
     .command('business-status <id>')
     .description('Record a customer-lifecycle status decision on a received (inbound) invoice — FR/DE or Brazil (Manifestação do Destinatário)')
     .requiredOption('--status <status>', 'FR/DE: IN_HAND | APPROVED | PARTIALLY_APPROVED | DISPUTED | SUSPENDED | REFUSED | COMPLETED | PAYMENT_SENT | PAYMENT_RECEIVED. Brazil: CIENCIA | CONFIRMACAO | OPERACAO_NAO_REALIZADA | DESCONHECIMENTO.')
-    .option('--reason <reason>', 'Short machine-usable reason code (FR/DE). Required when --status is DISPUTED, REFUSED, or SUSPENDED.')
+    .option('--reason <reason>', 'Short machine-usable reason code (FR/DE). Required when --status is DISPUTED, REFUSED, or SUSPENDED (and PARTIALLY_APPROVED on a French invoice received through the connected e-invoicing platform, where SUSPENDED takes JUSTIF_ABS | SIRET_ERR | COORD_BANC_ERR | CMD_ERR | REF_CT_ABSENT).')
     .option('--message <message>', 'Human-readable detail — optional alongside --reason for FR/DE, required (15-255 characters) for Brazil\'s OPERACAO_NAO_REALIZADA, and forbidden for DESCONHECIMENTO. Can be passed without --reason.')
     .option('--entity <entityId>', 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.')
     .option('--pretty', 'Pretty-print JSON output')
@@ -443,6 +474,74 @@ export function createProgram(): Command {
       if (opts.receivedAfter) qs.set('receivedAfter', opts.receivedAfter);
       const q = qs.toString();
       print(await api('GET', `/invoices${q ? `?${q}` : ''}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
+  // MCP twin: fix_invoice (POST /v1/invoices/{id}/fix).
+  invoices
+    .command('fix <id>')
+    .description('Put an invoice right by supplying values. A held invoice that is missing information takes exactly the missing fields listed in its "resolution" (it updates in place and is sent again); a rejected invoice is corrected where its source allows changes (a corrected invoice is created, linked to the original); a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be corrected or have values changed in Clearvo (fix them in the source system), but missing values can always be supplied. Issued e-invoices are never edited. <id> is the Clearvo id or the reference id')
+    .option('--field <path=value>', 'A dotted field path and its new value, e.g. customer.address.country=DE (repeatable; sent as text, so postal codes keep leading zeros; use --fields for numbers or booleans)', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--fields <json>', 'All fields as one JSON object, e.g. \'{"customer.address.country":"DE"}\'')
+    .option('--clear <path>', 'A dotted field path to delete from the corrected document (repeatable; a path cannot also be given with --field)', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--dry-run', 'Check only: show what the fix would do and change nothing')
+    .option('--confirmation-token <token>', 'Confirmation token from the check-first step')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { field?: string[]; clear?: string[]; fields?: string; dryRun?: boolean; confirmationToken?: string; entity?: string; pretty?: boolean }) => {
+      const fields: Record<string, unknown> = {};
+      if (opts.fields) {
+        try {
+          const parsed = JSON.parse(opts.fields);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+          Object.assign(fields, parsed);
+        } catch {
+          console.error('--fields must be a JSON object, e.g. \'{"customer.address.country":"DE"}\'.');
+          process.exit(1);
+        }
+      }
+      for (const pair of opts.field ?? []) {
+        const eq = pair.indexOf('=');
+        if (eq < 1) {
+          console.error(`--field "${pair}" must look like path=value, e.g. customer.address.country=DE.`);
+          process.exit(1);
+        }
+        fields[pair.slice(0, eq)] = pair.slice(eq + 1);
+      }
+      if (Object.keys(fields).length === 0 && !(opts.clear && opts.clear.length)) {
+        console.error('Supply at least one --field path=value (or --fields <json>), or --clear <path>.');
+        process.exit(1);
+      }
+      print(await api('POST', `/invoices/${encodeURIComponent(id)}/fix`, { fields, ...(opts.clear && opts.clear.length ? { clear: opts.clear } : {}), ...(opts.dryRun ? { dryRun: true } : {}), ...(opts.confirmationToken ? { confirmationToken: opts.confirmationToken } : {}) }, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
+  // MCP twin: list_invoice_attachments (GET /v1/invoices/{id}/attachments). The download has no MCP twin: it is binary.
+  invoices
+    .command('attachments <id>')
+    .description('List the supporting files of an invoice (sent with one you issued, or received on one): reference, fileName, mimeType, sizeBytes, sha256, downloadable and downloadUrl. They are never part of the e-invoice document. <id> is the Clearvo id or the reference id')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/invoices/${encodeURIComponent(id)}/attachments`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
+  invoices
+    .command('download-attachment <id> <index>')
+    .description('Download one stored supporting file of an invoice, byte for byte. <index> is the index from "invoices attachments". Writes to --out, or to the file name the server gives in the current directory')
+    .option('--out <path>', 'Where to write the file (default: the attachment\'s own file name in the current directory)')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .action(async (id: string, index: string, opts: { out?: string; entity?: string }) => {
+      if (!/^\d+$/.test(index)) {
+        console.error('<index> must be a non-negative integer (the index from "invoices attachments").');
+        process.exit(2);
+      }
+      const res = await apiFile(`/invoices/${encodeURIComponent(id)}/attachments/${index}`, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      const disposition = res.headers.get('content-disposition') ?? '';
+      const named = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)|filename\s*=\s*"?([^";]+)"?/.exec(disposition);
+      let serverName = '';
+      try { serverName = named ? decodeURIComponent((named[1] ?? named[2]).trim()) : ''; } catch { serverName = named ? (named[1] ?? named[2]).trim() : ''; }
+      const target = opts.out ?? (serverName ? basename(serverName) : `attachment-${index}`);
+      writeFileSync(target, Buffer.from(await res.arrayBuffer()));
+      console.log(`Saved ${target}`);
     });
 
   // ── clearvo calculate <file> ─────────────────────────────────────────────────
@@ -578,15 +677,26 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
   
+  // ── clearvo coverage ─────────────────────────────────────────────────────────
+  program
+    .command('coverage')
+    .description('List the countries and mandates covered, with status (live, beta, coming_soon, not_supported, no_mandate) and go-live date where confirmed')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { pretty?: boolean }) => {
+      const result = await api('GET', '/coverage');
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo entities ────────────────────────────────────────────────────────
   const entities = program.command('entities').description('Manage entities');
   
   entities
     .command('list')
     .description('List all entities under the account')
+    .option('--tax-number <taxNumber>', 'Only entities with this tax number (any spelling, at least 4 characters)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { pretty?: boolean }) => {
-      const result = await api('GET', '/entities');
+    .action(async (opts: { taxNumber?: string; pretty?: boolean }) => {
+      const result = await api('GET', `/entities${opts.taxNumber ? `?taxNumber=${encodeURIComponent(opts.taxNumber)}` : ''}`);
       print(result, !!opts.pretty);
     });
   
@@ -1022,7 +1132,7 @@ export function createProgram(): Command {
     .command('create')
     .description('Register a new webhook endpoint')
     .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
-    .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending', '*')
+    .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending,invoice.unroutable', '*')
     .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; statuses?: string; pretty?: boolean }) => {
@@ -1069,19 +1179,21 @@ export function createProgram(): Command {
   receive
     .command('simulate')
     .description('Sandbox only: create sample received invoices or credit notes from a fictional supplier (needs a csk_test_ key)')
-    .option('--country <code>', 'DE or FR: the tax registration the invoices are received under (default: the establishment country, else the single supported registration)')
+    .option('--country <code>', `One of ${SIMULATION_COUNTRY_CODES.join(', ')}: the tax registration the invoices are received under, a country the entity is established or VAT-registered in (default: the establishment country, else the single supported registration)`)
     .option('--type <type>', 'invoice (default) or credit_note')
+    .option('--scenario <id>', `The shape of the document, one of ${SIMULATION_SCENARIO_IDS.join(', ')} (default standard)`)
     .option('--count <n>', 'How many documents, 1-20 (default 1)')
     .option('--total <amount>', 'Gross total of each document (default 1200)')
-    .option('--currency <code>', 'Three-letter currency code (France: EUR only)')
+    .option('--currency <code>', 'Three-letter currency code (default: the country\'s own currency, e.g. EUR, DKK, SEK, NOK, CHF, AUD, JPY; France: EUR only)')
     .option('--issue-date <date>', 'YYYY-MM-DD (default today)')
     .option('--status <status>', 'Move each document to this lifecycle status after it arrives (e.g. APPROVED, DISPUTED, REFUSED)')
     .option('--entity <entityId>', 'Entity ID (required for account-scoped keys)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { country?: string; type?: string; count?: string; total?: string; currency?: string; issueDate?: string; status?: string; entity?: string; pretty?: boolean }) => {
+    .action(async (opts: { country?: string; type?: string; scenario?: string; count?: string; total?: string; currency?: string; issueDate?: string; status?: string; entity?: string; pretty?: boolean }) => {
       const body: Record<string, unknown> = {};
       if (opts.country) body.country = opts.country.toUpperCase();
       if (opts.type) body.type = opts.type;
+      if (opts.scenario) body.scenario = opts.scenario;
       if (opts.count) body.count = Number(opts.count);
       if (opts.total) body.totalAmount = Number(opts.total);
       if (opts.currency) body.currency = opts.currency.toUpperCase();
@@ -1332,6 +1444,24 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { entity?: string; pretty?: boolean }) => {
       const result = await api('GET', '/fr/credentials', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  // clearvo fr connect-link — POST /v1/fr/platform-connect-link. Prints the link a French customer opens to connect
+  // its company (short secure sign-in, identity check, approval); read the result with `fr credentials get`.
+  fr
+    .command('connect-link')
+    .description('Create the link a French customer opens to connect its company (forward the returned connectUrl)')
+    .requiredOption('--return-url <url>', 'https URL the customer is sent back to after connecting. Its origin must be on the allowlist.')
+    .option('--login-hint <email>', 'Email address to pre-fill on the sign-in page')
+    .option('--capability <capability>', 'What the customer needs: send, receive (receiving only) or both (default)')
+    .option('--entity <entityId>', 'Entity to connect. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { returnUrl: string; loginHint?: string; capability?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = { returnUrl: opts.returnUrl };
+      if (opts.loginHint) body.loginHint = opts.loginHint;
+      if (opts.capability) body.requestedCapability = opts.capability;
+      const result = await api('POST', '/fr/platform-connect-link', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 
@@ -1724,6 +1854,28 @@ export function createProgram(): Command {
     });
   
   calculations
+    .command('erase-address')
+    .description("Erase a customer's stored address lines and display name from committed calculations, on request. Name the calculation with --id or --reference (credit notes pointing at it are included). Amounts, tax, jurisdiction, region, postal code and country are never changed; repeating it changes nothing")
+    .option('--id <calculationId>', 'The calculation id (cl_calc_...). Use this or --reference')
+    .option('--reference <ref>', 'The order reference the calculation was committed under (merchantRef, or e.g. woo-order-123). Use this or --id')
+    .option('--level <street|full>', 'street (default): address lines and the display name. full: also the city')
+    .option('--entity <entityId>', 'Entity ID (x-entity-id), for account-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { id?: string; reference?: string; level?: string; entity?: string; pretty?: boolean }) => {
+      if ((opts.id === undefined) === (opts.reference === undefined)) {
+        console.error('Give exactly one of --id or --reference.');
+        process.exit(2);
+      }
+      if (opts.level !== undefined && opts.level !== 'street' && opts.level !== 'full') {
+        console.error('--level must be street or full.');
+        process.exit(2);
+      }
+      const body = { ...(opts.id !== undefined ? { calculationId: opts.id } : { reference: opts.reference }), ...(opts.level ? { level: opts.level } : {}) };
+      const result = await api('POST', '/tax/address-erasure', body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  calculations
     .command('requests')
     .description('List the calculation request ledger: every calculation request incl. commit=false quotes and rejections, with quote-to-final links')
     .option('--committed <bool>', 'true = committed only, false = quotes only')
@@ -1843,7 +1995,7 @@ export function createProgram(): Command {
     .option('--direction <direction>', 'purchase or sale — inclusive of direction-less rows, which apply to both')
     .option('--condition-property <property>', 'Only rules with a condition on this catalog property')
     .option('--condition-value <value>', 'Combined with --condition-property — narrows to a condition whose value equals this')
-    .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing)')
+    .option('--include-defaults', 'Also return this scope\'s Global platform-default rules as defaults[]/defaultsCount (e.g. to find one worth `rules suppress`-ing; an opt-in default shows defaultEnabled false and canEnable, see `rules enable`)')
     .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
     .option('--company-code <code>', 'Only rules scoped to this company code (case-insensitive)')
     .option('--pretty', 'Pretty-print JSON output')
@@ -2003,6 +2155,29 @@ export function createProgram(): Command {
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
       const result = await api('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('enable <id>')
+    .description('Turn ON, for this key\'s own scope, a platform-default rule that is off by default (opt-in). Find the id via `rules list --include-defaults` (defaultEnabled false, canEnable). Refused 422 RULE_NOT_ENABLEABLE for a rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule, or one locked by the platform')
+    .option('--reason <text>', 'Optional free-text note on why this scope turned it on (1-2000 chars)')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { reason?: string; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.reason) body.reason = opts.reason;
+      const result = await api('POST', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  rules
+    .command('disable <id>')
+    .description('Turn OFF again an opt-in platform-default rule that this key\'s own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope')
+    .option('--entity <entityId>', 'Required for account-scoped keys; omit for entity-scoped keys')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
       print(result, !!opts.pretty);
     });
 

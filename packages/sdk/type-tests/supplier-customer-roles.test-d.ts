@@ -78,17 +78,17 @@ const _customerWithTypeField: TaxCalculateRequest = {
 };
 void _customerWithTypeField;
 
-// `seller` remains accepted (deprecated alias for `supplier`, sale-only) —
-// no `@ts-expect-error` here, it must still compile.
-const _saleWithDeprecatedSeller: TaxCalculateRequest = {
+// `seller` is gone from the published request: it must not compile.
+const _saleWithRemovedSeller: TaxCalculateRequest = {
   currency: 'EUR',
+  // @ts-expect-error — `seller` was removed from the API; use `supplier`.
   seller: { address: { country: 'DE' } },
   customer: {
     billingAddress: { country: 'DE' },
   },
   lineItems: [{ id: '1', amount: 2500, productName: 'Widget' }],
 };
-void _saleWithDeprecatedSeller;
+void _saleWithRemovedSeller;
 
 // The response always carries both party blocks plus entityRole.
 declare const _resp: TaxCalculateResponse;

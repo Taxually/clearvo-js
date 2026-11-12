@@ -25,6 +25,15 @@ describe('ClearvoClient.simulateReceivedInvoices', () => {
     expect(init.headers['x-entity-id']).toBe('ent_1');
   });
 
+  it('posts the scenario', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const client = new ClearvoClient({ apiKey: 'csk_test_x', baseUrl: 'http://x/v1' });
+    await client.simulateReceivedInvoices({ scenario: 'credit_note_for_existing', type: 'credit_note' });
+    const [, init] = fetchMock.mock.calls[0] as [string, { body: string }];
+    expect(JSON.parse(init.body)).toEqual({ scenario: 'credit_note_for_existing', type: 'credit_note' });
+  });
+
   it('works with no input', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
     global.fetch = fetchMock as unknown as typeof fetch;

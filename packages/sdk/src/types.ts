@@ -22,6 +22,8 @@ export interface Entity {
   name: string;
   country: string;
   vatNumber: string | null;
+  /** The entity's tax number as stored, beside `vatNumber`; null when none is set. Match it with `listEntities({ taxNumber })`. */
+  taxNumber?: string | null;
   isDefault: boolean;
   createdAt: string;
   /** Mexico only. Defaults to 'sat_pull' for every entity — meaningless (but always present) for a non-MX entity. */
@@ -32,6 +34,22 @@ export interface Entity {
   entityFacts?: Record<string, string>;
   /** Germany only. This entity's default DE invoice format (level 3 of the format resolver), or null when unset (platform default ZUGFERD). */
   defaultDeInvoiceFormat?: DeInvoiceFormat | null;
+}
+
+/** Query for `listEntities`. */
+export interface ListEntitiesParams {
+  /** Only entities whose tax number matches this value. Any spelling (spaces, dashes and the country prefix are ignored), at least 4 characters; otherwise the API answers 422 `INVALID_TAX_NUMBER_FILTER`. */
+  taxNumber?: string;
+}
+
+/**
+ * The 409 body of `createEntity` when an open entity in the same organisation already has this country and tax number.
+ * Reach it on `ClearvoError.body` when `ClearvoError.code === 'DUPLICATE_ENTITY'`.
+ */
+export interface DuplicateEntityErrorBody extends ClearvoErrorBody {
+  error: 'DUPLICATE_ENTITY';
+  /** The id of the existing entity. */
+  entityId: string;
 }
 
 export interface CreateEntityInput {
@@ -146,13 +164,15 @@ export interface SendResult extends InvoiceStatusFields {
   statusClass?: StatusClass;
   /** What has to happen next, who does it and where. Null when nothing is outstanding. Act on it for a hold. */
   nextStep?: NextStep | null;
+  /**
+   * On a credit note held for or linked to its original invoice: that invoice's id. A credit note whose original is not yet submittable is stored
+   * and held (status WAITING_FOR_PLATFORM, reason HELD_AWAITING_ORIGINAL, errorCode CREDIT_NOTE_AWAITING_ORIGINAL) and sent
+   * automatically once the original is accepted, delivered or accumulated, or refused if the original ends rejected. Nothing to do on the credit note.
+   * Debit notes do not wait.
+   */
+  originalInvoiceId?: string;
   /** The stored document's id (also on error bodies of exits that store the document). Use it with getInvoiceStatus, GET /v1/invoices/{id} and as `correctsInvoiceId`. A replay of an in-flight document (status RECEIVED) returns the same `id`. */
   id?: string;
-  /**
-   * CLEARED, REJECTED, ACCUMULATED, NEEDS_INFO, NO_OBLIGATION, HELD or PROCESSING.
-   * @deprecated Redundant with `status`; removed in a later release.
-   */
-  outcome?: 'CLEARED' | 'REJECTED' | 'ACCUMULATED' | 'NEEDS_INFO' | 'NO_OBLIGATION' | 'HELD' | 'PROCESSING';
   /**
    * Machine-readable warnings. A `RECEIVED` result with a `PROCESSING_DELAYED` warning means a temporary problem interrupted
    * processing after the document was stored: do not resend, poll getInvoiceStatus or subscribe to `invoice.status_changed`; Clearvo
@@ -263,6 +283,8 @@ export interface RetryInvoiceRejectedResponse {
  */
 export type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
 import type { TaxTreatment } from './generated/openapi-tax-code-contract.js';
+import type { SimulationCountryCode } from './simulation-countries.js';
+import type { SimulationScenarioId } from './simulation-scenarios.js';
 
 /**
  * The invoice status model — same generated source as TaxTreatment above
@@ -516,6 +538,8 @@ export interface EsCountrySpecific {
  * auth/plan (401/403) and an edited resend (409) are real HTTP errors.
  */
 export interface SubmitInvoiceInput {
+  /** Supporting documents sent with the invoice (BG-24). Never embedded in the e-invoice; offered as downloads. Limits and refusals: see `CustomerAttachment`. */
+  attachments?: CustomerAttachment[];
   documentType?: 'invoice' | 'credit_note' | 'debit_note';
   invoiceNumber: string;
   /**
@@ -862,6 +886,8 @@ export interface InvoiceStatusResponse extends InvoiceStatusFields {
   /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   nextStep?: NextStep | null;
+  /** On a credit note held for or linked to its original invoice (reason HELD_AWAITING_ORIGINAL): the original's id. */
+  originalInvoiceId?: string;
   ksefNumber?: string;
   updatedAt: string;
 }
@@ -948,6 +974,70 @@ export interface ReceivedInvoiceFields {
   supersededBy?: { id: string; invoiceNumber?: string; status?: string; statusLabel?: string } | null;
 }
 
+/**
+ * A supporting file listed on an invoice (GET /v1/invoices/{id}/attachments). Attachments are never part of the e-invoice
+ * document: no XML or PDF embeds them. `downloadable` is true only when Clearvo stores the file; a link-only attachment
+ * carries its `externalUrl` instead. The bytes come from `downloadInvoiceAttachment(id, index)`.
+ */
+export interface InvoiceAttachment {
+  /** The attachment reference (BT-122). */
+  id: string | null;
+  /** Position in the list; pass it to `downloadInvoiceAttachment`. */
+  index: number;
+  fileName: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  sha256: string | null;
+  description: string | null;
+  externalUrl: string | null;
+  /** True when Clearvo stores the file and it can be downloaded. */
+  downloadable: boolean;
+  /** Relative URL `/v1/invoices/{id}/attachments/{index}`, or null for a link-only attachment. */
+  downloadUrl: string | null;
+  /** `sender` on an invoice you issued, `supplier` on one you received. */
+  origin: 'sender' | 'supplier';
+}
+
+/** GET /v1/invoices/{id}/attachments. `attachments` is empty when the invoice has none. */
+export interface ListInvoiceAttachmentsResponse {
+  ok: true;
+  invoiceId: string;
+  attachments: InvoiceAttachment[];
+}
+
+/** A downloaded invoice attachment, byte for byte. `fileName` comes from the Content-Disposition header, `mimeType` from Content-Type. */
+export interface DownloadedInvoiceAttachment {
+  data: Buffer;
+  fileName: string | null;
+  mimeType: string;
+}
+
+/**
+ * One supporting document (EN 16931 BG-24) in `SubmitInvoiceInput.attachments`. Send either the file (`contentBase64`
+ * with `fileName` and `mimeType`) or a link (`externalUrl`, http or https). The file is stored outside the invoice and is
+ * NEVER embedded in the e-invoice XML or PDF; it reaches the customer as a download on the hosted invoice page.
+ *
+ * Limits: file types pdf, csv, xlsx, xls, ods, xml, png, jpg (jpeg) and txt, with the extension and `mimeType` agreeing;
+ * at most 10 MB per file, 25 MB in total and 20 attachments per invoice. A breach is a 422 naming the attachment:
+ * `TOO_MANY_ATTACHMENTS`, `ATTACHMENT_INVALID`, `ATTACHMENT_METADATA_MISSING`, `ATTACHMENT_CONTENT_INVALID`,
+ * `ATTACHMENT_TYPE_NOT_ALLOWED`, `ATTACHMENT_TYPE_MISMATCH`, `ATTACHMENT_TOO_LARGE`, `ATTACHMENTS_TOTAL_TOO_LARGE`,
+ * `ATTACHMENT_URL_INVALID` or `ATTACHMENT_MALWARE_DETECTED`; nothing is stored then. A 503 `ATTACHMENT_STORAGE_UNAVAILABLE` is retryable.
+ */
+export interface CustomerAttachment {
+  /** Reference identifier (BT-122). */
+  reference: string;
+  /** Description of the document (BT-123). */
+  description?: string;
+  /** External URL (BT-124), http or https; a link-only attachment is not downloadable from Clearvo. */
+  externalUrl?: string;
+  /** Raw base64 file content (BT-125), no `data:` prefix. Needs `fileName` and `mimeType`. */
+  contentBase64?: string;
+  /** MIME type, e.g. application/pdf; must agree with the `fileName` extension. */
+  mimeType?: string;
+  /** File name with an accepted extension. */
+  fileName?: string;
+}
+
 /** Fields every `GET /v1/invoices` row and `GET /v1/invoices/{id}` carries that this SDK types; other fields stay untyped. */
 export interface InvoiceRecordTimestamps {
   /**
@@ -960,20 +1050,104 @@ export interface InvoiceRecordTimestamps {
   submittedAt: string | null;
   /** The instant the platform first ingested the document, stamped once and never changed (rule windows are judged against it). Null on a record stored before this field existed. */
   ingestedAt: string | null;
+  /** On `GET /v1/invoices/{id}` only: what can be done to put this invoice right. See {@link InvoiceResolution}. */
+  resolution?: InvoiceResolution;
+}
+
+/** One piece of information a held invoice still needs. Supply it with `fixInvoice` under `field`. */
+export interface InvoiceMissingField {
+  /** Dotted path to send in `fixInvoice`, for example `customer.address.country`. */
+  field: string;
+  /** A human-readable name to show next to an input. */
+  label: string;
+  /** The kind of input to show: for example text, country, date or number. */
+  inputType: string;
+  /** Whether Clearvo accepts a value for this field through `fixInvoice`. */
+  suppliable: boolean;
+}
+
+/**
+ * Returned as `resolution` on `GET /v1/invoices/{id}`: whether and how the invoice can be fixed through `fixInvoice`.
+ * A held invoice that is missing information is completed by supplying exactly `missingFields` (it updates in place and is sent again).
+ * A rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original).
+ * Invoices that arrived through the API or an ERP cannot be edited in Clearvo: fix them in the source system and it resubmits.
+ * Issued e-invoices are never edited; a submitted e-report is amended.
+ */
+export interface InvoiceResolution {
+  /** True when `fixInvoice` can act on this invoice now. */
+  fix: boolean;
+  /** True when the invoice is waiting for information that you can supply. */
+  canSupply: boolean;
+  missingFields: InvoiceMissingField[];
+  /** True when existing values (not only missing ones) can be changed. */
+  canChangeValues: boolean;
+  /** Where the invoice came from, for example the API, an ERP connection or the dashboard. */
+  source: string | null;
+  /** Why the invoice cannot be edited in Clearvo, in plain words, when `fix` is false because of its source. */
+  lockedReason: string | null;
+  /** What a fix does: updates the invoice in place, creates a corrected invoice, or amends the submitted report. */
+  fixMode: FixInvoiceMode | null;
+  /** The stored document the dotted paths in `fix` point into. Set when a fix creates a corrected invoice or amends a report; null otherwise. */
+  editableDocument?: Record<string, unknown> | null;
+  /** The fields that can be changed. Null means free-form: any path in `editableDocument` is accepted. */
+  editableFields?: string[] | null;
+  /** What can be done to the invoice now. */
+  availableActions?: Array<'retry' | 'fix' | 'issue_credit_note' | 'amend_report' | 'cancel_report'>;
+}
+
+export type FixInvoiceMode = 'updated_in_place' | 'new_invoice' | 'amended';
+
+export interface FixInvoiceInput {
+  /** Clearvo invoice id (or reference id). */
+  id: string;
+  /** Dotted field path to new value, for example `{ 'customer.address.country': 'DE' }`. Array indexes are accepted (`lines.0.quantity` or `lines[0].quantity`). For a held invoice supply exactly the `missingFields` listed in the invoice's `resolution`. */
+  fields: Record<string, unknown>;
+  /** Paths to delete from the corrected document, for example `['customer.address.line2']`. There is no null meaning: send a path here to clear it. A path cannot also be in `fields`. A locked source refuses clearing an existing value. Send `fields: {}` when only clearing. */
+  clear?: string[];
+  /** Check first: answers `FixInvoiceDryRunResponse` and changes nothing. */
+  dryRun?: boolean;
+  /** The confirmation token for the check-first step of the MCP tool (operation `invoice.fix`). */
+  confirmationToken?: string;
+  /** Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface FixInvoiceResponse {
+  ok: true;
+  mode: FixInvoiceMode;
+  /** The invoice that now carries the fix: the same id for `updated_in_place`, the new corrected invoice for `new_invoice`. */
+  invoiceId: string;
+  /** The original invoice, when `mode` is `new_invoice`. */
+  previousInvoiceId?: string;
+  status: string;
+  clearanceStatus: string;
+  changes: Array<{ field: string; mode: 'supply' | 'change' | 'clear'; newValue: unknown }>;
+  /** True when nothing is missing any more. */
+  completed: boolean;
+  /** What is still missing after this fix. */
+  missingFields: InvoiceMissingField[];
+}
+
+/** Answer to `fixInvoice` with `dryRun: true`. Nothing was changed. */
+export interface FixInvoiceDryRunResponse {
+  id: string;
+  wouldSubmit: { mode: FixInvoiceMode; changes: Array<{ field: string; mode: 'supply' | 'change' | 'clear'; newValue: unknown }> };
 }
 
 export interface SimulateReceivedInvoicesInput {
-  /** DE or FR: the registration the documents are received under (any country the entity is established or VAT-registered in; else 409 COUNTRY_NOT_REGISTERED). Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
-  country?: 'DE' | 'FR';
-  /** Default invoice. A credit note references an invoice from the same call. */
+  /** The registration the documents are received under: any country the entity is established or VAT-registered in that has sample documents (see `SIMULATION_COUNTRY_CODES`). Else 409 COUNTRY_NOT_REGISTERED, or 409 COUNTRY_NOT_ENABLED when the country has no sample documents. Defaults to the establishment country, else the single supported registration country (several candidates is 400 COUNTRY_REQUIRED). */
+  country?: SimulationCountryCode;
+  /** Default invoice (credit_note for the scenario credit_note_for_existing). */
   type?: 'invoice' | 'credit_note';
+  /** The shape of the document (see `SIMULATION_SCENARIOS`; default `standard`). 400 `SCENARIO_NOT_AVAILABLE` when the country's documents cannot carry it; 400 `INVALID_SCENARIO` for an unknown scenario or a combination it cannot take (`lines`/`totalAmount` with a scenario that builds its own lines, `businessStatus` with a scenario that stores the document for review). */
+  scenario?: SimulationScenarioId;
   /** 1 to 20 documents (default 1). Every call adds new documents. */
   count?: number;
   /** Optional override of the fictional supplier; the name always keeps a sample marker. */
   supplier?: { name?: string; taxNumber?: string; legalRegistrationNumber?: string };
   /** Gross total of each document (default 1200). Not allowed together with `lines`. */
   totalAmount?: number;
-  /** Three-letter code. Default EUR; France accepts EUR only. */
+  /** Three-letter code. Default the country's own currency (EUR, DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY or AED); France accepts EUR only. */
   currency?: string;
   /** Net unit prices at the standard rate. Not allowed together with `totalAmount`. */
   lines?: Array<{ description: string; quantity: number; unitPrice: number }>;
@@ -990,7 +1164,7 @@ export interface SimulateReceivedInvoicesResponse {
   sandbox: true;
   /** Received invoices in the same shape GET /v1/invoices returns (cast to ReceivedInvoiceFields for the inbound fields). */
   created: unknown[];
-  /** Ids of documents that were already present and so were not created again. */
+  /** Ids of documents that were already present and so were not created again (every duplicate scenario lists them). */
   duplicates: string[];
   webhooks: { event: string; subscribedEndpoints: number };
   notes: string[];
@@ -1043,9 +1217,29 @@ export interface TaxCalcPartyInput {
    * certificate, `customer.ref` has no effect on the calculation.
    */
   ref?: string;
-  billingAddress?: { country: string; region?: string; postalCode?: string };
+  billingAddress?: TaxCalcAddressInput;
   /** Meaningful only for `customer`; accepted but ignored on `supplier`. */
-  shippingAddress?: { country: string; region?: string; postalCode?: string };
+  shippingAddress?: TaxCalcAddressInput;
+}
+
+/**
+ * A party address on a calculation. Only `country` is required. For a US address the street (`line1`, `line2`) and `city` are sent to the
+ * address check for rooftop-precision rates (`postalCode` alone gives ZIP-level rates); anywhere else they never affect tax. The request is
+ * kept as sent. Names, emails and phone numbers are not accepted.
+ */
+export interface TaxCalcAddressInput {
+  /** Street address, max 200 characters. */
+  line1?: string;
+  /** Second address line, max 200 characters. */
+  line2?: string;
+  /** City, max 100 characters. */
+  city?: string;
+  /** State or region code. Required for a US address, for example "TX". */
+  region?: string;
+  /** Postal or ZIP code, max 20 characters. Detects special VAT territories; a full ZIP code gives the most precise US rate. */
+  postalCode?: string;
+  /** ISO 3166-1 alpha-2. */
+  country: string;
 }
 
 /**
@@ -1062,17 +1256,14 @@ export interface TaxCalcPartyInput {
  *   and it must be one of the entity's registered tax IDs (any country),
  *   rejecting a mismatch with 422
  *   `SUPPLIER_TAX_ID_MISMATCH` (the registered value is never silently
- *   substituted). `seller` is accepted as a deprecated alias for
- *   `supplier` on a sale only.
+ *   substituted).
  * - `'purchase'` — an incoming, input-tax transaction: party roles
  *   invert. The entity is the `customer` (buyer) and the counterparty is
  *   the `supplier` (vendor), which is REQUIRED (422 `SUPPLIER_REQUIRED`
  *   if omitted). `customer` is now OPTIONAL and entity-side — omit it and
  *   Clearvo auto-fills it from your entity's own master data; supply it
  *   and it is validated the same way, rejecting a mismatch with 422
- *   `CUSTOMER_TAX_ID_MISMATCH`. `seller` has no meaning on a purchase and
- *   is rejected outright with 422 `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE`
- *   — use `supplier`, which already means the vendor.
+ *   `CUSTOMER_TAX_ID_MISMATCH`.
  *
  * The response's top-level `entityRole` (`'supplier'` for a sale,
  * `'customer'` for a purchase) tells you which response party block is
@@ -1112,18 +1303,6 @@ export interface TaxCalculateRequest {
    * or `ap_not_enabled` (switch it on).
    */
   transactionDirection?: 'sale' | 'purchase';
-  /**
-   * @deprecated Use `supplier` instead. Deprecated alias for `supplier`
-   * on a `transactionDirection: 'sale'` calculation only — normalised to
-   * `supplier` before validation runs. Rejected with 422
-   * `SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE` when sent alongside
-   * `transactionDirection: 'purchase'` (there is no sensible mapping —
-   * use `supplier` there, which already means the vendor).
-   */
-  seller?: {
-    address: { country: string };
-    taxId?: string;
-  };
   /**
    * The supplier party. Required when `transactionDirection` is
    * `'purchase'` — the actual vendor on the purchase invoice (422
@@ -1324,8 +1503,52 @@ export interface TaxCalculateRequest {
      * intendedUse, accountAssignment, commodityCode, commodityCodeScheme, ...) is a
      * 400 `BUILT_IN_PROPERTY_AS_CUSTOM`: send it as the regular line field instead.
      */
+    /** Optional SKU or product code (max 40 characters). When given, the classification is cached per account so the product is not re-classified every time. */
+    productCode?: string;
+    /** Optional short description of the item, max 500 characters. Used to classify the product when no `productCode` or `taxCategory` matches. */
+    productDescription?: string;
+    /** Optional EN16931 tax code for this line, max 100 characters. An escape hatch; usually leave it to the engine. */
+    taxCode?: string;
+    /** Line discount in the transaction currency. It reduces the taxable base: `amount` minus `discount` is what tax is charged on. */
+    discount?: number;
+    /** Discount amount for audit and display only. Never used in the tax arithmetic; use `discount` for a discount that reduces the taxable base. */
+    discountAmount?: number;
+    /** Purchase only: the tax amount the vendor actually invoiced on this line, in the transaction currency. Clearvo verifies it against its own figure. */
+    statedTaxAmount?: number;
+    /** Purchase only: overrides this line's input-tax recoverable percentage (0-100). */
+    recoverablePercentOverride?: number;
+    /** Diagonal screen size in inches of a TV, monitor, laptop, tablet or portable DVD player. Read only by the California Covered Electronic Device recycling fee; never affects tax. */
+    screenSizeInches?: number;
     customProperties?: Record<string, string | number | boolean>;
   }>;
+  /** The date the tax rate is selected for (YYYY-MM-DD or an ISO 8601 timestamp). Defaults to today. This decides the rate; `transactionDate` decides the return period. */
+  date?: string;
+  /** The calendar date (YYYY-MM-DD, as written) the sale is attributed to for tax return periods. Defaults: a sale uses `orderDate`, else the date of `date`, else today (UTC); a credit note uses its own, else today. Does not change the rate. Echoed on the response. */
+  transactionDate?: string;
+  /** The date the order was placed (YYYY-MM-DD). The default `transactionDate` for a sale. Echoed on the response. */
+  orderDate?: string;
+  /** The date the goods shipped (YYYY-MM-DD). Recorded for return-period attribution. Echoed on the response. */
+  shippedAt?: string;
+  /** The date the order was fulfilled or delivered (YYYY-MM-DD). Recorded for return-period attribution. Echoed on the response. */
+  fulfilledAt?: string;
+  /** A currency the tax amounts are also reported in, when different from `currency` (max 20 characters). */
+  taxReportingCurrency?: string;
+  /** Your own reference for the end customer or order, max 100 characters. Stored with the calculation and echoed on the response. */
+  merchantRef?: string;
+  /** Informational only: how the customer paid. Never changes tax. */
+  paymentMethod?: 'card' | 'bank_transfer' | 'digital_wallet' | 'cash' | 'other';
+  /** An order-level discount (code, promotion, bundle, loyalty) not tied to one line, in the transaction currency. Allocated across lines in proportion to each line's taxable base. */
+  orderDiscount?: number;
+  /** True when a marketplace facilitated the whole order. Where a US state's marketplace-facilitator law applies, the facilitator and not the seller collects the tax. */
+  isMarketplaceFacilitatedSale?: boolean;
+  /** `'invoice'` (default) or `'credit_note'`. A credit note names its original with exactly one of `relatedCalculationId` or `externalOriginalReference`. */
+  transactionType?: 'invoice' | 'credit_note';
+  /** Credit note only: the `calculationId` of the original invoice Clearvo calculated for this entity (max 50 characters). The credit note takes the original's treatment, rate and jurisdiction per line with the same `id`. Use this or `externalOriginalReference`, never both. */
+  relatedCalculationId?: string;
+  /** Credit note only: your own reference for an original invoice Clearvo has no record of (max 200 characters). `date` is then required. Use this or `relatedCalculationId`, never both. */
+  externalOriginalReference?: string;
+  /** How the consignment travels. Duties only: selects the low-value regime (Canada: courier versus post thresholds). */
+  shippingMode?: 'post' | 'courier';
   vatValidation?: 'full' | 'format' | 'none';
   vatUnverifiableFallback?: 'conservative' | 'permissive';
   /**
@@ -1719,6 +1942,24 @@ export interface TaxNumberValidateResponse {
   name?: string;
   address?: string;
   status: 'VALID' | 'INVALID' | 'UNVERIFIED';
+}
+
+/** One country and mandate on the public coverage list (GET /v1/coverage). */
+export interface CountryCoverageEntry {
+  /** ISO 3166-1 alpha-2 country code. */
+  country: string;
+  name: string;
+  /** The mandate or reporting regime this row describes. */
+  mandate: string;
+  status: 'live' | 'beta' | 'coming_soon' | 'not_supported' | 'no_mandate';
+  /** Mandate go-live date (YYYY-MM-DD) where confirmed, otherwise null. */
+  goLiveDate: string | null;
+}
+
+/** GET /v1/coverage response. Public: needs no API key. A country that is not listed has no confirmed status yet. */
+export interface CountryCoverageResponse {
+  ok: true;
+  data: { countries: CountryCoverageEntry[] };
 }
 
 export interface CountryRequirements {
@@ -2740,6 +2981,43 @@ export type CancelReportResponse =
   | { ok: true; id: string; operation: 'BAJA'; communicationId: string; state: string; idempotentReplay?: boolean }
   | { ok: true; id: string; cancelled: true; cancelledAt: string };
 
+/** The invoice actions listed in `availableActions` on GET /v1/invoices/{id}. `use_master_data` is present when a customer record holds a different tax number than the one sent. */
+export type InvoiceAvailableAction = 'use_master_data' | (string & {});
+
+export interface RetryWithMasterDataInput {
+  /** Check the retry without sending anything: answers with the one field change that would be made. */
+  dryRun?: boolean;
+  /** Hosted MCP only: the token a dry run returned. Not needed on the public API. */
+  confirmationToken?: string;
+}
+
+/** The one field changed by a master-data retry: always `customer.taxId`. */
+export interface MasterDataRetryChange {
+  field: 'customer.taxId';
+  before: string | null;
+  after: string;
+}
+
+/** POST /v1/invoices/{id}/retry-with-master-data's 200 (completed) or 202 (re-sent, still processing). */
+export interface RetryWithMasterDataResult {
+  ok: true;
+  /** The NEW invoice. */
+  invoiceId: string;
+  /** The refused invoice that was retried. */
+  previousInvoiceId: string;
+  status: string;
+  clearanceStatus: string;
+  changes: MasterDataRetryChange[];
+  completed: boolean;
+}
+
+/** The 200 answer to a dryRun: nothing was sent. */
+export interface RetryWithMasterDataPreview {
+  ok: true;
+  wouldSubmit: { operation: 'use_master_data'; invoiceId: string };
+  changes: MasterDataRetryChange[];
+}
+
 export interface SiiAuthorityView {
   ranAt: string;
   /** The sandbox tier this run executed under — mock/prewww1/prod. */
@@ -3125,7 +3403,7 @@ export interface ListMandateTransactionsParams {
 }
 
 export type MandateTransactionTerminalArtifact =
-  | { type: 'einvoice'; einvoicingRecordId: string; status: InvoiceStatus; stage: InvoiceStage | null; reason: InvoiceReason; statusLabel: string; /** @deprecated Stored reason code; use `reason`. */ clearanceStatus?: string; /** @deprecated Use `statusLabel`. */ clearanceStatusLabel?: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
+  | { type: 'einvoice'; einvoicingRecordId: string; status: InvoiceStatus; stage: InvoiceStage | null; reason: InvoiceReason; statusLabel: string; terminal: boolean; referenceId: string | null; ksefNumber: string | null; clearedAt: string | null; rejectedAt: string | null }
   | { type: 'period'; periodId: string; periodKey: string; periodStatus: string; closedAt: string | null; submittedAt: string | null; filedAt: string | null }
   | { type: 'recorded_only' }
   | null;
@@ -3474,6 +3752,50 @@ export interface SetFrCredentialsInput {
   entityId?: string;
 }
 
+/** Where an entity's connection to our French e-invoicing partner stands. `pending_verification`: the customer has
+ *  connected but the identity or company check is not finished. `needs_reconnect`: the authorisation lapsed or was
+ *  withdrawn; create a new link. `failed`: the check was refused or the wrong company was connected (see `reason`). */
+export type FrPlatformConnectState = 'not_connected' | 'pending_verification' | 'active' | 'needs_reconnect' | 'failed';
+
+/** What a connect link asks the customer to enable. `receive` is for a customer that only receives invoices. */
+export type FrPlatformCapability = 'send' | 'receive' | 'both';
+export type FrPlatformReceiving = 'not_applicable' | 'unknown' | 'active' | 'pending' | 'not_active';
+
+/** Mirrors components.schemas.FrPlatformConnection in clearvo-marketing's public/openapi.json. */
+export interface FrPlatformConnection {
+  state: FrPlatformConnectState;
+  /** The company check. Null before the customer has connected. */
+  companyVerification?: 'verified' | 'needs_review' | 'failed' | null;
+  /** The identity check of the person who connected. Null before the customer has connected. */
+  identityVerification?: 'verified' | 'needs_review' | 'failed' | 'not_verified' | null;
+  /** What the link asked for; records the request, not proof the customer accepted receiving. */
+  requestedCapability?: FrPlatformCapability | null;
+  /** Whether the connected company can receive supplier invoices: `not_applicable` (requested for sending only),
+   *  `unknown` (not checked yet), `active`, `pending` (registration in progress) or `not_active` (suppliers cannot
+   *  reach the company). The customer manages the registration on the partner's page; Clearvo only reports it. */
+  receiving?: FrPlatformReceiving;
+  /** Present only when it helps: `not_configured`, `company_verification_failed`, `company_mismatch`
+   *  (a different company was connected; nothing was stored) or `company_unreadable` (checked again automatically). */
+  reason?: 'not_configured' | 'company_verification_failed' | 'company_mismatch' | 'company_unreadable';
+}
+
+export interface CreateFrPlatformConnectLinkInput {
+  /** https URL the customer is sent back to after connecting. Its origin must be on the allowlist. */
+  returnUrl: string;
+  /** Optional email address to pre-fill on the sign-in page, typically the customer's legal representative. */
+  loginHint?: string;
+  /** What the customer needs. Default `both`; use `receive` for a receiving-only customer. */
+  requestedCapability?: FrPlatformCapability;
+  /** Entity to connect. Required for account-scoped keys; omit for entity-scoped keys. */
+  entityId?: string;
+}
+
+export interface FrPlatformConnectLinkResponse {
+  ok: boolean;
+  /** Forward this to the customer. Single use and short-lived. */
+  connectUrl: string;
+}
+
 export interface FrCredentialsResponse {
   ok: boolean;
   entityId: string;
@@ -3483,7 +3805,8 @@ export interface FrCredentialsResponse {
   sandbox: boolean;
   /** null only on a GET for an entity with no French registration yet. */
   taxNumber: string | null;
-  /** Read-through of the stored fr_siret extra field, if one was set via the general registrations API. */
+  /** The entity's own 14-digit SIRET when one is stored; null otherwise. Never a 9-digit SIREN (see `siren`).
+   *  Optional: nothing requires it. */
   siret?: string | null;
   /** Present only when a POST changed an already-stored tax number — the value it replaced. */
   previousTaxNumber?: string;
@@ -3507,6 +3830,9 @@ export interface FrCredentialsResponse {
   nextSteps: FrNextStep[];
   /** One plain-language sentence summarising both capabilities. */
   message: string;
+  /** The customer's connection to our French e-invoicing partner; read it until `state` is `active`
+   *  (see createFrPlatformConnectLink). Null when it cannot be read right now; retry. */
+  platformConnection?: FrPlatformConnection | null;
   /** When this entity's French tax registration was first created. */
   createdAt: string | null;
   /** When this entity's French tax registration was last written — this POST, if it changed
@@ -3586,7 +3912,12 @@ export interface UpdateBusinessStatusInput {
   status: BusinessStatus;
   /** Required when status is DISPUTED, REFUSED, or SUSPENDED (FR/DE — reason required), or
    *  OPERACAO_NAO_REALIZADA (Brazil — message required, 15–255 characters; reason accepted but never
-   *  required). Forbidden for Brazil's DESCONHECIMENTO. Also accepted as a bare string (treated as message). */
+   *  required). Forbidden for Brazil's DESCONHECIMENTO. Also accepted as a bare string (treated as message).
+   *  For a French invoice received through the connected e-invoicing platform a reason is also required to
+   *  partially approve, and SUSPENDED takes one of five reason codes: JUSTIF_ABS (a supporting document is
+   *  missing), SIRET_ERR (the company registration number is wrong), COORD_BANC_ERR (the bank details are
+   *  wrong), CMD_ERR (the purchase order reference is wrong) or REF_CT_ABSENT (the contract reference is
+   *  missing); any other value is refused with a message listing them. */
   rejectionDetail?: { reason?: string; message?: string } | string;
   /** Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys. */
   entityId?: string;
@@ -3714,7 +4045,7 @@ export interface ListRulesParams {
   conditionProperty?: string;
   /** Combined with conditionProperty — narrows to a condition whose value equals this. */
   conditionValue?: string;
-  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). */
+  /** Also return this scope's Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppressRule()-ing). A default that is off by default (opt-in) also carries `defaultEnabled: false`, `enabledForScope`, `enabledByAncestor` and `canEnable`; turn it on with enableRule(). */
   includeDefaults?: boolean;
   /** Only rules scoped to this company code (case-insensitive). */
   companyCode?: string;
@@ -3748,6 +4079,14 @@ export interface DefaultRuleItem {
   suppressed: boolean;
   /** True when `suppressed` is true but NOT via the caller's own exact scope — a wider scope (this entity's organisation, or its tenant) suppressed it instead. The caller cannot toggle this off directly (canSuppress is also false whenever this is true); they'd need to act from that wider scope. */
   suppressedByAncestor: boolean;
+  /** Only present for a rule that is off by default (opt-in): false. A rule that is on by default omits the four opt-in fields. */
+  defaultEnabled?: boolean;
+  /** Opt-in rules only: on for the caller's scope, through its own enable or a wider scope's. */
+  enabledForScope?: boolean;
+  /** Opt-in rules only: true when `enabledForScope` is true through a wider scope (organisation or tenant) rather than the caller's own. Turn it off from that scope. */
+  enabledByAncestor?: boolean;
+  /** Opt-in rules only: true when the caller's own scope may turn the rule on with enableRule(). */
+  canEnable?: boolean;
   cannotDisableReason: string | null;
   /** Rule-list-item-shaped fields so a default row can render exactly like any other rule row. A validation_rules row has no rules-engine status/enabled/conditions concept at all — it's a standing legal-mandate check, always ACTIVE/enabled, never scoped by transactionDirection, so those three are fixed rather than derived. */
   status: RuleStatus;
@@ -3827,6 +4166,22 @@ export interface SuppressRuleResponse {
 export interface UnsuppressRuleResponse {
   ok: true;
   suppressed: false;
+}
+
+export interface EnableRuleParams {
+  /** Optional free-text note on why this scope turned the rule on (1-2000 chars if present). */
+  reason?: string;
+  entityId?: string;
+}
+
+export interface EnableRuleResponse {
+  ok: true;
+  enabled: true;
+}
+
+export interface DisableRuleResponse {
+  ok: true;
+  enabled: false;
 }
 
 export interface RuleVersionSnapshot {
@@ -4409,8 +4764,6 @@ export interface SendRejectionBody {
   status?: 'REJECTED' | 'WAITING_FOR_YOU';
   reason?: 'REJECTED' | 'NEEDS_INFO' | 'UNROUTABLE';
   stage?: null;
-  /** @deprecated Redundant with `status`; removed in a later release. */
-  outcome?: 'REJECTED' | 'NEEDS_INFO';
   /** @deprecated Use `status`. */
   statusClass?: StatusClass;
   nextStep?: NextStep | null;
@@ -4544,6 +4897,7 @@ export type WebhookEventName =
   | 'invoice.duplicate'
   | 'invoice.undelivered'
   | 'invoice.pending'
+  | 'invoice.unroutable'
   | 'ap.decision'
   | '*'
   | (string & {});
@@ -5011,6 +5365,41 @@ export interface DutiesEstimateResult {
   product: DutiesEstimateProduct;
   /** In request order. */
   destinations: DutiesEstimateDestination[];
+}
+
+/**
+ * Body of `eraseCustomerAddressData()`: name the calculation by `calculationId` or by the order `reference` it was committed under,
+ * exactly one of the two.
+ */
+export interface AddressErasureInput {
+  /** The calculation id (cl_calc_ prefix). */
+  calculationId?: string;
+  /** The order reference: the merchantRef, or the idempotency key such as `woo-order-123` or `shopify-<shop>-<id>`. Credit notes pointing at it are included. */
+  reference?: string;
+  /** `street` (default) removes the address lines and the customer display name; `full` also removes the city. */
+  level?: 'street' | 'full';
+}
+
+/** Result of `eraseCustomerAddressData()`. Amounts, tax, jurisdiction, region, postal code and country are never changed. */
+export interface AddressErasureResult {
+  ok: true;
+  level: 'street' | 'full';
+  /** Sale calculations matched: the order plus any credit notes pointing at it. */
+  matched: number;
+  /** Matched calculations that held address data and were erased. */
+  redacted: number;
+  /** Matched calculations that held none (already erased, or never carried it). */
+  alreadyClean: number;
+  /** Matched purchases, which are not touched. */
+  skippedPurchases: number;
+  /** Calculation lines whose stored address-check snapshot was erased. */
+  lineItemsRedacted: number;
+  /** Shared address-lookup cache rows removed for the erased addresses. */
+  cacheEntriesRemoved: number;
+  /** The calculations that were changed. */
+  calculationIds: string[];
+  /** More than 500 calculations matched; the first 500 were erased. */
+  truncated: boolean;
 }
 
 /** Body of `recordImportSettlement()`: what customs or the carrier actually charged after clearance. */

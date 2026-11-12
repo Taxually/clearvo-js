@@ -8,6 +8,31 @@ import {
 import { createHash } from 'crypto';
 import { getToolAnnotations } from './tool-annotations.js';
 
+// Countries the received-invoice simulator covers. Repeated in the SDK and CLI; `npm run test:simulation-countries` fails on drift.
+const SIMULATION_COUNTRY_CODES = [
+  'AE', 'AT', 'AU', 'BE', 'CH', 'DE', 'DK', 'EE', 'FI', 'FR', 'HR', 'IE',
+  'IS', 'JP', 'LT', 'LU', 'LV', 'NL', 'NO', 'NZ', 'SE', 'SG', 'SI', 'SK',
+];
+
+// Scenarios of the received-invoice simulator. Repeated in the SDK (ids and descriptions) and CLI (ids); `npm run test:simulation-countries` fails on drift.
+const SIMULATION_SCENARIOS = [
+  { id: 'standard', description: 'A clean invoice or credit note with one line, accepted without warnings or review. The default.' },
+  { id: 'credit_note_for_existing', description: 'A credit note that refers to a real invoice you already simulated (its number and date appear in relatedDocuments). When there is no uncredited simulated invoice for the country, one is created first.' },
+  { id: 'warnings_only', description: 'A valid document that the checks flag with warnings: it is stored and announced as received, with flags on the invoice.' },
+  { id: 'needs_review_format', description: 'A file that does not follow the e-invoice format. It is stored for review (RECEIVED_NEEDS_REVIEW, validationOutcome FORMAT_ERROR) and invoice.received still fires.' },
+  { id: 'needs_review_business_rules', description: 'A well-formed file whose totals break a mandatory invoice rule. It is stored for review (RECEIVED_NEEDS_REVIEW, validationOutcome BUSINESS_RULE_ERROR) with the failed checks on the invoice.' },
+  { id: 'duplicate', description: 'Each invoice is created, then sent again by the same supplier with the same number and date but a changed file. The second copy creates nothing new and fires invoice.duplicate.' },
+  { id: 'duplicate_exact', description: 'Each invoice is created, then sent again byte for byte. The second copy is recognised and ignored: nothing new is created and no event fires, as for a real redelivery.' },
+  { id: 'with_references', description: 'The document carries a purchase order reference and a buyer reference.' },
+  { id: 'with_payment_terms', description: 'The document states payment terms in words, and its issue date is 60 days back so the due date has already passed (unless you set issueDate).' },
+  { id: 'with_attachment', description: 'The document embeds a small supporting file (a CSV), listed under attachments on the invoice.' },
+  { id: 'with_discounts', description: 'Three lines, each with a fixed discount, so the line totals differ from quantity times price.' },
+  { id: 'many_lines', description: '25 lines, to exercise paging and large payloads.' },
+  { id: 'unicode_text', description: 'Long line descriptions in accented Latin, Greek, Cyrillic, Japanese and Arabic text.' },
+  { id: 'foreign_supplier', description: 'The supplier is established in a different country from your registration (its address, tax number and currency come from that country), while you stay the customer.' },
+] as const;
+const SIMULATION_SCENARIO_LISTING = SIMULATION_SCENARIOS.map((s) => `${s.id}: ${s.description}`).join(' ');
+
 // White-label tenants get their own branded env var names instead of CLEARVO_*.
 // CLEARVO_API_KEY always wins if set; otherwise the first matching tenant alias is used.
 // The public API itself is not white-labeled yet — there is no separate api.taxually.com
@@ -263,71 +288,65 @@ const CLASSIFICATION_CODES_SCHEMA = {
 
 // calculate_tax's input schema, hoisted so quote_duties (POST /v1/duties/quote, the same body minus commit,
 // transactionDirection and documentStage) is derived from it and can never drift from it.
+// The street, second line and city of a party address. Same bounds as AddressInputSchema (lib/tax-calc/request-schema.ts).
+// For a US address the street and city go to the address check for rooftop-precision rates (without a street the rate is
+// ZIP-level); anywhere else they never affect tax. The request is kept as sent. Names, emails and phone numbers are not accepted.
+const ADDRESS_LINE_PROPERTIES = {
+  line1: { type: 'string', description: 'Street address, max 200 characters. Lets a US address be matched to street level for the most precise local rate; never affects tax outside the US.' },
+  line2: { type: 'string', description: 'Second address line, max 200 characters.' },
+  city: { type: 'string', description: 'City, max 100 characters. With a street, used for the US address match.' },
+} as const;
+
 const CALCULATE_TAX_INPUT_SCHEMA = {
   type: 'object' as const,
   properties: {
     currency: { type: 'string', description: 'ISO 4217 currency code' },
-    commit: { type: 'boolean', description: 'Default: true. When true (or omitted), records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false explicitly for an ephemeral preview/quote that should not be recorded or billed.' },
-    companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown; a code not valid on the transaction\'s own invoice/tax-point date (outside its validFrom/validTo window) fails with 422 company_code_not_valid_on_date (an entity default outside its window is not applied: source "none" plus a warning); a plan without company codes fails with 403 company_codes_not_included. The resolved code and its source (request, entity_default, none) are echoed on the result, and company-code-scoped rules fire only for it. List codes with list_company_codes.' },
+    commit: { type: 'boolean', description: 'Default: true — records in the audit trail, updates compliance thresholds, and makes the transaction visible in the dashboard. Set to false for an ephemeral preview/quote that is not stored.' },
+    transactionDate: { type: 'string', description: 'Optional YYYY-MM-DD calendar date the sale is attributed to for tax return periods, as written (never shifted by time zone). Defaults: a sale uses orderDate, else the calendar date of date, else today (UTC); a credit note uses its own transactionDate, else today (UTC), never the original invoice\'s date. Does not change which rate applies (date does). Echoed on the response when supplied.' },
+    orderDate: { type: 'string', description: 'Optional YYYY-MM-DD date the order was placed. Used as the default transactionDate for a sale. Echoed on the response when supplied.' },
+    shippedAt: { type: 'string', description: 'Optional YYYY-MM-DD date the goods shipped. Recorded for return-period attribution; echoed on the response when supplied.' },
+    fulfilledAt: { type: 'string', description: 'Optional YYYY-MM-DD date the order was fulfilled or delivered. Recorded for return-period attribution; echoed on the response when supplied.' },
+    orderDiscount: { type: 'number', description: 'Order-level discount (a code, automatic promotion, bundle, or loyalty credit) not tied to a single line, in the transaction currency. Allocated across lines proportionally to each line\'s post-line-discount base and reduces the taxable base on top of any per-line discount. Non-negative; the per-line alternative is the line\'s own discount field.' },
+    date: { type: 'string', description: 'Optional date the tax rate is selected for (YYYY-MM-DD or an ISO 8601 timestamp). Defaults to today. This decides the rate; transactionDate decides which return period the sale belongs to. An invalid date is a 422 invalid_date.' },
+    taxReportingCurrency: { type: 'string', description: 'Optional currency the tax amounts are also reported in, when different from currency (max 20 characters).' },
+    idempotencyKey: { type: 'string', description: 'Optional key that makes a repeated commit return the first result instead of recording the transaction twice. Reusing it with a different body is an error.' },
+    merchantRef: { type: 'string', description: 'Optional reference of your own for the end customer or order, max 100 characters. Stored with the calculation for grouping and filing, and echoed on the response.' },
+    paymentMethod: { type: 'string', enum: ['card', 'bank_transfer', 'digital_wallet', 'cash', 'other'], description: 'Optional, informational only: how the customer paid. Never changes tax.' },
+    transactionType: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Default "invoice". A "credit_note" reverses an earlier sale: name the original with exactly one of relatedCalculationId or externalOriginalReference.' },
+    relatedCalculationId: { type: 'string', description: 'Credit note only: the calculationId of the original invoice Clearvo calculated for this entity (max 50 characters). The credit note takes the original\'s treatment, rate and jurisdiction per line with the same id. Use this or externalOriginalReference, never both.' },
+    externalOriginalReference: { type: 'string', description: 'Credit note only: your own reference for an original invoice Clearvo has no record of, max 200 characters. date is then required (the original\'s date), because there is nothing to reconstruct its rate from. Use this or relatedCalculationId, never both.' },
+    vatValidation: { type: 'string', enum: ['full', 'format', 'none'], description: 'How the customer VAT ID is validated: "full" (default) a live VIES check with a short timeout, "format" a format check only, "none" trusts the number entirely.' },
+    vatUnverifiableFallback: { type: 'string', enum: ['conservative', 'permissive'], description: 'What to do when a VAT ID cannot be verified (authority down, timeout). "conservative" (default) treats the customer as a consumer; "permissive" trusts the number.' },
+    evidence: {
+      type: 'object',
+      description: 'Optional location evidence for a consumer sale when the addresses are missing or disagree. Only used to resolve where the sale is taxed.',
+      properties: {
+        ipAddress: { type: 'string', description: 'IP address of the customer at the time of the order.' },
+        binCountry: { type: 'string', description: 'Two-letter country of the card issuer (from the card BIN).' },
+      },
+    },
+    isMarketplaceFacilitatedSale: {
+      type: 'boolean',
+      description: 'Set true when a marketplace (TikTok Shop, Amazon, ...) facilitated this whole order. US destinations only: where the state\'s marketplace-facilitator law makes the facilitator, not the seller, collect and remit, the seller collects no tax on that line (tax 0, taxCode O) and the line\'s marketplaceFacilitator object says why (reasonCode MARKETPLACE_FACILITATOR_COLLECTS), with marketplaceFacilitatorTax as a memo of the tax the facilitator collects (never in totalTax). Where the law does not relieve the seller (not yet effective, excluded category, local tax, no confirmed rule) the seller collects as usual and marketplaceFacilitator.reasonCode names the reason; a missing or unconfirmed state rule also sets degraded. A non-US destination returns 422 marketplace_facilitator_unsupported_jurisdiction. A customer exemption already applying to a line takes precedence. Omit for a direct sale. Not the same as the account setting isMarketplaceFacilitator (you ARE a marketplace). On a credit note that omits it, the original calculation\'s value is inherited.',
+    },
     transactionDirection: {
       type: 'string',
       enum: ['sale', 'purchase'],
-      description: '"sale" (default) — an outgoing transaction: the entity is the supplier, customer (the counterparty) is required. "purchase" — an incoming transaction: the entity is the customer, supplier (the counterparty, the vendor) is required. See this tool\'s own description for the full rule, including the 422 error codes for each direction. "purchase" is the Purchases (AP) sub-solution: Enterprise plan only, and the business must have Purchases (AP) switched on under Settings > Solutions; otherwise HTTP 403 code ap_not_included (plan; upgradeUrl returned) or ap_not_enabled (switch it on; hint returned).',
+      description: 'Default "sale": this entity is the supplier (output tax) and customer is the required counterparty. "purchase": this entity is the customer (input tax) and supplier — the vendor — is the required counterparty. The entity-side party may be omitted; it is filled from entity master data. "purchase" is the Purchases (AP) sub-solution: Enterprise plan only, and Purchases (AP) must be switched on for the business. Otherwise the call fails with HTTP 403 code ap_not_included (plan) or ap_not_enabled (switch).',
     },
-    seller: {
-      type: 'object',
-      deprecated: true,
-      description: 'Deprecated alias for `supplier`, accepted on a transactionDirection: "sale" calculation only (normalised to supplier before validation runs). Use `supplier` directly instead. Rejected with 422 SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE when sent alongside transactionDirection: "purchase".',
-      properties: {
-        address: { type: 'object', properties: { country: { type: 'string', description: 'ISO 3166-1 alpha-2' } }, required: ['country'] },
-        taxId: { type: 'string', description: 'Seller VAT number' },
-      },
-      required: ['address'],
+    documentStage: {
+      type: 'string',
+      enum: ['purchase_order', 'invoice'],
+      description: 'Default "invoice". "purchase_order" commits an ordinary tax calculation stamped as a PO — excluded from every obligation/aggregate reader (Compliance Radar, dashboard totals, Explore) and given its own idempotency-key namespace, so you may reuse the same idempotencyKey once here and again when calculating the matching invoice. Purchase-side only — set "purchase_order" without also setting transactionDirection to "purchase" and the call is rejected with 422 DOCUMENT_STAGE_REQUIRES_PURCHASE. Enterprise only (the Purchases (AP) sub-solution): 403 ap_not_included or ap_not_enabled otherwise.',
     },
-    supplier: {
-      type: 'object',
-      description: 'The supplier party. Required when transactionDirection is "purchase" — the actual vendor on the purchase invoice (422 SUPPLIER_REQUIRED if missing); only taxId and billingAddress.country are meaningful there. Optional when transactionDirection is "sale" or omitted — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 SUPPLIER_TAX_ID_MISMATCH on a mismatch). `ref` on a purchase resolves saved supplier master data (see list_suppliers/create_supplier), filling in name/taxId/address — unlike customer.ref on a sale, which does not resolve customer master data (see customer.ref\'s own description).',
-      properties: {
-        name: { type: 'string', description: 'Free-text display name. Accepted but unused for supplier resolution.' },
-        taxId: { type: 'string', description: 'Supplier VAT or tax ID — used to determine cross-border reverse-charge/import treatment on a purchase, or validated against the entity\'s own registration when supplier is the entity side on a sale.' },
-        ref: { type: 'string', description: 'Your own reference for this supplier (e.g. ERP vendor id). On a purchase, resolves saved supplier master data — see list_suppliers/create_supplier — filling in any of name/taxId/address you omit here. Ignored when supplier is the entity side (a sale).' },
-        billingAddress: {
-          type: 'object',
-          description: 'The supplier\'s own country/address — the real dispatch/origin signal for cross-border purchase treatment.',
-          properties: {
-            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
-            region: { type: 'string', description: 'State/province code, when relevant.' },
-            postalCode: { type: 'string' },
-          },
-          required: ['country'],
-        },
-      },
-    },
-    customer: {
-      type: 'object',
-      description: 'The customer party. Required when transactionDirection is "sale" or omitted — the counterparty on a sale (422 CUSTOMER_REQUIRED if missing). Optional when transactionDirection is "purchase" — there it is the entity side, auto-enriched from your entity\'s own master data when omitted, validated against it if supplied (422 CUSTOMER_TAX_ID_MISMATCH on a mismatch).',
-      properties: {
-        b2bOverride: { type: 'boolean', description: 'Set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the buyer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied.' },
-        taxId: { type: 'string', description: 'Customer VAT number — triggers B2B reverse charge or zero-rating for cross-border sales' },
-        ref: { type: 'string', description: 'Your own reference for this customer (e.g. CRM/ERP id). Unlike supplier.ref on a purchase, this does NOT resolve saved customer master data (name/taxId/address are not filled in). Its only effect: when the transaction\'s jurisdiction is the US and this entity uses Exemption Certificate Management (ECM), Clearvo looks up an active exemption certificate on file for this ref and auto-applies it. No effect outside the US or with no matching certificate.' },
-        billingAddress: {
-          type: 'object',
-          properties: {
-            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
-            region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX"). Optional but recommended for Canada.' },
-            postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
-          },
-          required: ['country'],
-        },
-      },
-    },
+    companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code fails with 422 company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with 422 company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. The resolved code and its source (request, entity_default) are echoed on the result, and company-code-scoped rules fire only for it. List codes with list_company_codes.' },
     customProperties: {
       type: 'object',
-      description: 'Header-level open, customer-defined fact bag. For data that is NOT part of our schema: every key must already be defined via the rules-engine property-definition API (create_rule_property_definition) — an undefined key returns a 400 UNKNOWN_CUSTOM_PROPERTY naming the key and a fixUrl to define it, and a key that names a built-in field (e.g. glAccount, costCenter, intendedUse, accountAssignment, commodityCode) returns a 400 BUILT_IN_PROPERTY_AS_CUSTOM. Values are string/number/boolean.',
+      description: 'Header-level open, customer-defined fact bag. For data that is NOT part of our schema: every key must already be defined via the rules-engine property-definition API — an undefined key returns a 400 UNKNOWN_CUSTOM_PROPERTY naming the key and a fixUrl to define it, and a key that names a built-in field (e.g. glAccount, costCenter, intendedUse, accountAssignment, commodityCode) returns a 400 BUILT_IN_PROPERTY_AS_CUSTOM. Values are string/number/boolean.',
     },
     shipFrom: {
       type: 'object',
-      description: 'Where the goods are dispatched from. With duties on, a dispatch place in a different customs territory from the destination makes the consignment a customs crossing; a line-level shipFrom overrides it for that line (a second warehouse is a second consignment). customsStatus "bonded" marks stock held under customs control, so leaving it is a crossing even within one territory.',
+      description: 'Where the goods are dispatched from. With duties on, a dispatch place in a different customs territory from the destination makes the consignment a customs crossing; a line-level shipFrom overrides it for that line (a second warehouse is a second consignment). customsStatus "bonded" marks stock held under customs control, so leaving it is a crossing even within one territory. On a sale that omits shipFrom, dispatch is assumed to be your entity\'s own country; the response echoes the dispatch country actually used as shipFromCountry with shipFromSource ("request" or "businessProfile"). For an EU consumer goods sale to another EU country it also decides whether VAT is charged at your home-country rate (shipping from the country your business is based in, while your recorded EU consumer sales stay under the EU distance-sales limit) or where the goods arrive; each goods line reports the outcome as placeOfSupplyBasis.',
       properties: {
         line1: { type: 'string' }, line2: { type: 'string' }, city: { type: 'string' },
         region: { type: 'string', description: 'State/region code, e.g. "TX"' },
@@ -348,6 +367,8 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       },
       required: ['country'],
     },
+    incoterms: { type: 'string', enum: ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'], description: 'Incoterms 2020 rule. Does not gate IOSS eligibility. On a B2C cross-border goods sale with no value-threshold scheme, DDP (seller imports) leaves tax unchanged and any other rule (buyer imports) makes the line out of scope (taxCode O, tax 0). With duties on it also decides who is responsible for the import charges: DDP is the seller, any other rule the buyer.' },
+    importerOfRecord: { type: 'string', enum: ['SELLER', 'BUYER'], description: 'Explicit importer of record on a customs-crossing shipment; wins over incoterms. With duties on it decides who bears the import charges and whether they can be collected at checkout.' },
     insurance: {
       type: 'object',
       description: 'Consignment insurance, a customs-value component where the destination values goods CIF. Duties only; ignored otherwise.',
@@ -357,6 +378,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       },
       required: ['amount'],
     },
+    shippingMode: { type: 'string', enum: ['post', 'courier'], description: 'How the consignment travels. Duties only: selects the low-value regime (Canada: courier vs post thresholds). Omitted means unknown: the stricter outcome is assumed and the quote flagged (estimateReasons shipping_mode_assumed).' },
     duties: {
       type: 'object',
       description: 'Estimated import duty, import VAT/GST and customs fees for a cross-border consignment. Never included in totalTax/totalAmountWithTax; see summary.importChargesAtCheckout for the one amount a checkout may add, and summary.totalAmountDue (present only alongside it) for the amount to charge. A duty failure never sets degraded: read the response duties.status (quoted, not_applicable, degraded, disabled). include overrides the account/entity dutiesEnabled setting either way; a deposit can only be collected when include is true.',
@@ -368,8 +390,81 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
       },
       required: ['include'],
     },
-    incoterms: { type: 'string', enum: ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'], description: 'Incoterms 2020 rule. Does not gate IOSS eligibility. On a B2C cross-border goods sale with no value-threshold scheme, DDP (seller imports) leaves tax unchanged and any other rule (buyer imports) makes the line out of scope (taxCode O, tax 0). With duties on it also decides who is responsible for the import charges: DDP is the seller, any other rule the buyer.' },
-    importerOfRecord: { type: 'string', enum: ['SELLER', 'BUYER'], description: 'Explicit importer of record on a customs-crossing shipment; wins over incoterms. With duties on it decides who bears the import charges and whether they can be collected at checkout.' },
+    // `supplier` and `customer` carry the SAME property set — field-for-
+    // field PartyInputSchema (lib/tax-calc/request-schema.ts) minus its
+    // legacy `address` alias: name, taxId, type, b2bOverride, ref,
+    // exemptionRef, billingAddress, shippingAddress. Only the
+    // descriptions differ (which fields are read depends on the party's
+    // ROLE, not its slot).
+    // tests/unit/mcp-tools-parity.test.ts pins the two sets to be identical.
+    supplier: {
+      type: 'object',
+      description: 'The supplier party. On a sale this is the entity itself — omit it (auto-filled from master data), or supply it with one of the entity\'s own registered tax IDs (a mismatch is a 422 SUPPLIER_TAX_ID_MISMATCH). On a purchase this is the vendor and is required: its taxId and billingAddress.country drive the calculation — or pass `ref` (a supplierRef from create_supplier/list_suppliers) and the vendor\'s missing taxId/billingAddress are filled from the supplier master (explicit fields win; an unknown ref is a 422 SUPPLIER_REF_NOT_FOUND).',
+      properties: {
+        name: { type: 'string', description: 'Display name — informational only, never drives a decision.' },
+        taxId: { type: 'string', description: 'Supplier VAT/GST registration number. On a sale it must be one of the entity\'s own registered tax IDs (any country); on a purchase it is the vendor\'s number and drives B2B/reverse-charge resolution.' },
+        type: { type: 'string', description: 'Deprecated loose hint (e.g. "business"/"consumer") consumed by the seeded GENERAL_CUSTOMER_TYPE_NORMALIZE rule to canonicalise into B2B/B2C/B2G — prefer b2bOverride, which is exact and does not depend on that rule being active.' },
+        b2bOverride: { type: 'boolean', description: 'Counterparty only (a purchase\'s vendor): set true to force B2B treatment regardless of tax-number validation outcome. Ignored on a sale, where the supplier is the entity itself.' },
+        ref: { type: 'string', description: 'Purchase only: your supplierRef for this vendor in the supplier master (see create_supplier). Missing taxId/billingAddress fill from that record; fields you pass explicitly win; an unknown ref fails with 422 SUPPLIER_REF_NOT_FOUND. Ignored on a sale.' },
+        exemptionRef: { type: 'string', description: 'Not read for the supplier party (ECM exemption certificates apply to a sale\'s customer only). Accepted for shape parity with customer; ignored.' },
+        billingAddress: {
+          type: 'object',
+          description: 'Registered billing / invoice address. On a sale, the entity\'s registered establishment address (auto-filled when omitted).',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code.' },
+            postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
+          },
+          required: ['country'],
+        },
+        shippingAddress: {
+          type: 'object',
+          description: 'Counterparty only (a purchase\'s vendor): physical dispatch address. Ignored on a sale.',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code.' },
+            postalCode: { type: 'string', description: 'Postal code.' },
+          },
+          required: ['country'],
+        },
+      },
+    },
+    customer: {
+      type: 'object',
+      description: 'The customer party. On a sale (the default) this is the counterparty and is REQUIRED. On a purchase this is the entity itself — omit it (auto-filled from master data), or supply it with one of the entity\'s own registered tax IDs (a mismatch is a 422 CUSTOMER_TAX_ID_MISMATCH); the vendor\'s tax ID never belongs here.',
+      properties: {
+        name: { type: 'string', description: 'Display name — informational only, never drives a decision.' },
+        taxId: { type: 'string', description: 'Customer VAT/GST number. On a sale it triggers B2B reverse charge or zero-rating for cross-border sales; on a purchase it must be one of the entity\'s own registered tax IDs (any country).' },
+        type: { type: 'string', description: 'Deprecated loose hint (e.g. "business"/"consumer") consumed by the seeded GENERAL_CUSTOMER_TYPE_NORMALIZE rule to canonicalise into B2B/B2C/B2G — prefer b2bOverride, which is exact and does not depend on that rule being active.' },
+        b2bOverride: { type: 'boolean', description: 'Counterparty only (a sale\'s customer): set true to force B2B treatment regardless of VAT number validation outcome. Use when you know the customer is a business but do not have their VAT ID at checkout time. Omit for the normal flow — B2B is inferred automatically when a valid taxId is supplied. Ignored on a purchase, where the customer is the entity itself.' },
+        ref: { type: 'string', description: 'Your customer reference (e.g. CRM ID, account number). On a SALE it is only used to auto-apply a stored ECM exemption certificate for this customer to eligible US lines (it does NOT fill customer master data). Ignored on a purchase.' },
+        exemptionRef: { type: 'string', description: 'Sale customer only: the certificateRef of an exemption certificate stored in Clearvo ECM (POST /v1/tax/exemptions). When it matches an active certificate the exemption is applied to eligible lines. Ignored on a purchase.' },
+        billingAddress: {
+          type: 'object',
+          description: 'Registered billing / invoice address. On a sale, used for B2B and as the fallback for B2C; on a purchase, the entity\'s registered establishment address (auto-filled when omitted).',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX"). Optional but recommended for Canada.' },
+            postalCode: { type: 'string', description: 'Used to detect special VAT territories (Canary Islands, Åland, Madeira, etc.)' },
+          },
+          required: ['country'],
+        },
+        shippingAddress: {
+          type: 'object',
+          description: 'Counterparty only (a sale\'s customer): physical delivery address. Takes precedence over billingAddress for physical goods. Ignored on a purchase.',
+          properties: {
+            ...ADDRESS_LINE_PROPERTIES,
+            country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+            region: { type: 'string', description: 'State/province code — REQUIRED for US (e.g. "CA", "NY", "TX").' },
+            postalCode: { type: 'string', description: 'Postal code — drives US rooftop/ZIP-level sourcing when supplied.' },
+          },
+          required: ['country'],
+        },
+      },
+    },
     lineItems: {
       type: 'array',
       items: {
@@ -380,18 +475,35 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
           unitPrice: { type: 'number', description: 'Per-unit price in the transaction currency. Alternative to amount: the line total is computed as unitPrice × quantity (rounded once), so you do not pre-multiply and absorb per-unit rounding. Requires quantity. Supply either amount, or unitPrice with quantity — not both.' },
           quantity: { type: 'number', description: 'Number of units. Required when unitPrice is supplied (the two define the line total); informational when amount is supplied directly.' },
           productName: { type: 'string', description: 'Product or service name — used for AI tax category classification if taxCategory not provided' },
+          productDescription: { type: 'string', description: 'Optional short description of the item, max 500 characters. Used to classify the product when no productCode or taxCategory matches. HTML entities are decoded.' },
+          taxCode: { type: 'string', description: 'Optional EN16931 tax code for this line, max 100 characters. An escape hatch; usually leave it to the engine.' },
+          amountIncludesTax: { type: 'boolean', description: 'true when amount or unitPrice already includes tax; false when it is before tax. Honoured in every jurisdiction, including the US. Omit to use the product or account default.' },
+          discount: { type: 'number', description: 'Line discount in the transaction currency. It reduces the taxable base: amount minus discount is what tax is charged on.' },
+          discountAmount: { type: 'number', description: 'Discount amount for audit and display only. Never used in the tax arithmetic; use discount for a discount that reduces the taxable base.' },
+          taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'ZERO', 'EXEMPT'], description: 'Optional explicit rate band for this line, replacing the default consumer rate step. B2B, reverse-charge and exemption decisions still run first and are not affected.' },
           productCode: { type: 'string', description: 'Optional SKU or product code. When provided, the classification result is cached per account so the same product is not re-classified on every transaction.' },
           taxCategory: { type: 'string', description: 'Optional explicit category slug (e.g. saas_business, digital_general, physical_goods_general, professional_services). Skips AI classification.' },
           classificationCodes: CLASSIFICATION_CODES_SCHEMA,
-          taxTreatmentOverride: { type: 'string', enum: ['STANDARD', 'MIDDLE', 'REDUCED', 'SUPER_REDUCED', 'SPECIAL', 'EXEMPT', 'ZERO'], description: 'Caller-forced rate band for this line (Standard, Middle, Reduced, Super reduced, Special, Exempt or Zero, as named in the central rates database) — names a band only, never a raw rate; the actual percentage is still resolved for the line\'s jurisdiction. Highest-precedence input to rate-band resolution, checked before commodityCode. Does not affect classification, place-of-supply, or B2B/reverse-charge/exemption logic — those still run first and are unaffected.' },
-          commodityCode: { type: 'string', description: 'Optional tariff/customs code for this line (HS, CN, or UK Trade Tariff; for rate-band lookup, matching is jurisdiction-scoped by the line\'s own resolved country; with duties on, this is the code the duty is priced at, see commodityCodeScheme). Looked up hierarchy-aware against Clearvo\'s tariff-rate data (own digit precision, then progressively shorter prefixes). Consulted only when taxTreatmentOverride is absent; a total miss re-enters the ordinary taxCategory/classification cascade unchanged.' },
-          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block).' },
+          commodityCode: { type: 'string', description: 'Optional tariff/HS classification code for this line (e.g. "6104199010"). Non-digit characters are stripped and the code is truncated to a fixed digit length before matching, so a dotted format like "6104.19.90" is accepted. Two uses: (1) classifies the line to a product category (longest-prefix map) whose rates set the tax rate; the code itself carries no rate, an explicit taxCategory wins, and an unmapped code returns a commodity_code_unmapped warning; (2) on an IOSS-treated calculation, drives the response\'s customsDuty object — lines sharing the same normalised classification count as one duty item. Omit for a line where neither use applies; a missing/malformed code on an otherwise-qualifying IOSS line still counts (see calculate_tax\'s own description), it never fails the call.' },
+          commodityCodeScheme: { type: 'string', enum: ['HS6', 'CN8', 'TARIC10', 'UK10', 'HTS10'], description: 'Scheme of this line\'s commodityCode, read only when duties are on. A national code is exact only in its own territory (HTS10 for the US, UK10 for the UK, CN8/TARIC10 for the EU); anywhere else its first six digits are used. Omitted: inferred from the digit count and the destination (schemeInferred is then true on the duty block). Not the AP fact customProperties.commodityCodeScheme.' },
           countryOfOrigin: { type: 'string', description: 'Two-letter country the goods were made in, read only when duties are on. Never inferred from shipFrom. Falls back to the product catalogue, then defaultCountryOfOrigin.' },
-          glAccount: { type: 'string', description: 'Purchase side: the general-ledger account this line is booked to (max 50 characters). Rules can read and write it as the property "glAccount" (e.g. map a GL account to a tax category). Echoed post-rule on the response line. Not accepted inside customProperties.' },
-          costCenter: { type: 'string', description: 'Purchase side: the cost centre this line is booked to (max 50 characters). Rules can read and write it as "costCenter". Echoed post-rule. Not accepted inside customProperties.' },
-          intendedUse: { type: 'string', description: 'Purchase side: what the buyer intends to use the goods/services for, free text (max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate to the line. Rules can read and write it as "intendedUse". Echoed post-rule. Not accepted inside customProperties.' },
-          accountAssignment: { type: 'string', description: 'Purchase side: how the line is assigned in your books — "stock", "expense", "asset" or "project". A raw ERP code (SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string) is also accepted and mapped onto those four by the account_assignment_map dataset; a code with no mapping is dropped with a warning. The response always echoes one of the four. "stock" means a resale line for buyer-held certificate matching. Rules can read and write it as "accountAssignment". Not accepted inside customProperties.' },
-          customProperties: { type: 'object', description: 'Per-line open, customer-defined fact bag for data that is NOT part of our schema — same validation contract as the header-level field of the same name. Response echoes the post-rule (effective) value.' },
+          weight: {
+            type: 'object',
+            description: 'Weight of ONE unit, for specific (per-kg) duty rates; the line weight is value x quantity.',
+            properties: { value: { type: 'number' }, unit: { type: 'string', enum: ['kg', 'g', 'lb', 'oz'] } },
+            required: ['value', 'unit'],
+          },
+          shippingCarrier: { type: 'string', enum: ['common', 'seller_vehicle'], description: "Shipping/handling lines, US only: who delivers the goods, 'common' (an independent carrier) or 'seller_vehicle' (your own vehicles). Some states treat delivery differently. Omit it and the default rule (template default_shipping_carrier) fills it if you have one, else the cautious taxable assumption applies. The shipping rules always decide." },
+          chargeAvoidable: { type: 'boolean', description: "Shipping/handling lines, US only: whether the customer could have avoided this charge (for example by choosing pickup). Omit it and the default rule (template default_shipping_charge_avoidable) fills it if you have one, else it is treated as not avoidable." },
+          actualCostOfShipment: { type: 'boolean', description: "Shipping/handling lines, US only: whether this charge is exactly the carrier's actual cost rather than a flat fee or marked up. Omit it and the default rule (template default_shipping_actual_cost) fills it if you have one, else it is treated as not the actual cost." },
+          screenSizeInches: { type: 'number', description: 'Diagonal screen size in inches of a TV, monitor, laptop, tablet or portable DVD player. Read only by the California Covered Electronic Device recycling fee, which is tiered by size (over 4 and under 15 inches, 15 to under 35, 35 and over); never affects tax. Omit and the lowest tier is applied and the fee line carries appliedDefault true with a defaultReason.' },
+          exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
+          exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
+          statedTaxAmount: {
+            type: 'number',
+            description:
+              'Purchase only (transactionDirection "purchase"): the tax amount the VENDOR actually invoiced/charged on this line, in the transaction currency. When supplied, Clearvo verifies it against its own independently-computed legally-due amount and returns lines[].taxVerification — {statedTaxAmount, calculatedTaxAmount, delta, verdict, recoverableBase, outcome, reasonCode, legalDelta, appliedDelta, zeroLiabilityBasis, nonDeductibleStatedTax}. outcome is the AP decision layer\'s tolerance/trusted-supplier/PO-disposition-aware verdict (ACCEPTED_AS_CHARGED / OVERCHARGED / UNDERCHARGED / HELD — see get_tax_settings\'s apTolerance/apPoDisposition, set via update_tax_settings), distinct from the plain rounding-tolerance verdict field. A reverse-charge/PVA/exempt/zero-rated line the vendor nonetheless charged tax on is always OVERCHARGED regardless of tolerance (zeroLiabilityBasis names which basis applied). For a reverse-charge/PVA line specifically, only the vendor-charged amount is non-deductible (echoed as nonDeductibleStatedTax) — your own self-assessed input VAT (recoverableBase/recoverability.recoverableAmount) is unaffected and does not depend on the vendor\'s invoice being correct. A zero-liability line the vendor CORRECTLY charged nothing on reads reasonCode NO_TAX_DUE_NONE_CHARGED (still ACCEPTED_AS_CHARGED — not a fifth outcome), taking priority over a trusted-supplier or within-tolerance reason since there is nothing to trust or tolerate on a line with no liability. Omit entirely to skip verification (no taxVerification on the response line).',
+          },
           supplyType: {
             type: 'string',
             enum: ['GOODS', 'SERVICES'],
@@ -410,17 +522,41 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
             },
             required: ['country'],
           },
-          weight: {
-            type: 'object',
-            description: 'Weight of ONE unit, for specific (per-kg) duty rates; the line weight is value x quantity.',
-            properties: { value: { type: 'number' }, unit: { type: 'string', enum: ['kg', 'g', 'lb', 'oz'] } },
-            required: ['value', 'unit'],
+          recoverablePercentOverride: {
+            type: 'number',
+            description:
+              'Purchase only: overrides this line\'s input-tax recoverable percentage (0-100) — how much of the tax is this entity\'s own to reclaim — in place of whatever the matched client tax code configures. Wins unconditionally over a matched code\'s own recoverabilityType/recoverablePercentage. Omit to use the matched code\'s configured recoverability, or 100% (fully recoverable) when nothing configures it.',
           },
-          exempt: { type: 'boolean', description: 'When true, the customer claims exemption for this line item with no certificate on file yet. If your entity uses Exemption Certificate Management (ECM) and customer.ref is also set, a PENDING_CERTIFICATE record is created for later review — see the response\'s pendingCertificates[].' },
-          shippingCarrier: { type: 'string', enum: ['common', 'seller_vehicle'], description: "Shipping/handling lines, US only: who delivers the goods, 'common' (an independent carrier) or 'seller_vehicle' (your own vehicles). Some states treat delivery differently. Omit it and the default rule (template default_shipping_carrier) fills it if you have one, else the cautious taxable assumption applies. The shipping rules always decide." },
-          chargeAvoidable: { type: 'boolean', description: "Shipping/handling lines, US only: whether the customer could have avoided this charge (for example by choosing pickup). Omit it and the default rule (template default_shipping_charge_avoidable) fills it if you have one, else it is treated as not avoidable." },
-          actualCostOfShipment: { type: 'boolean', description: "Shipping/handling lines, US only: whether this charge is exactly the carrier's actual cost rather than a flat fee or marked up. Omit it and the default rule (template default_shipping_actual_cost) fills it if you have one, else it is treated as not the actual cost." },
-          exemptionReason: { type: 'string', enum: ['RESALE', 'MANUFACTURING', 'AGRICULTURAL', 'ENERGY', 'EXEMPT_ORG', 'GOVERNMENT', 'DIRECT_PAY', 'BLANKET_OTHER'], description: 'Self-asserted reason for THIS line\'s exempt claim (e.g. captured at your own checkout) — only meaningful alongside exempt: true on this SAME line; supplying it without exempt: true on that line returns a 422. Different lines in one call may carry different reasons. Omit while exempt: true to default to BLANKET_OTHER. Echoed back on the response line item as its own exemptionReason field (never nested under exemption, which is reserved for a real certificate match).' },
+          glAccount: { type: 'string', description: 'Purchase side: the general-ledger account this line is booked to (max 50 characters). Rules can read and write it as the property "glAccount" (e.g. map a GL account to a tax category). Echoed post-rule on the response line. Not accepted inside customProperties.' },
+          costCenter: { type: 'string', description: 'Purchase side: the cost centre this line is booked to (max 50 characters). Rules can read and write it as "costCenter". Echoed post-rule. Not accepted inside customProperties.' },
+          intendedUse: { type: 'string', description: 'Purchase side: what the buyer intends to use the goods/services for, free text (max 100 characters), e.g. "resale", "manufacturing", "raw material". Used to match a buyer-held exemption certificate to the line. Rules can read and write it as "intendedUse". Echoed post-rule. Not accepted inside customProperties.' },
+          accountAssignment: { type: 'string', description: 'Purchase side: how the line is assigned in your books — "stock", "expense", "asset" or "project". A raw ERP code (SAP KNTTP letter such as K/A/P/F/C/Q/E/N, or a Coupa account-type string) is also accepted and mapped onto those four by the account_assignment_map dataset; a code with no mapping is dropped with a warning. The response always echoes one of the four. "stock" means a resale line for buyer-held certificate matching. Rules can read and write it as "accountAssignment". Not accepted inside customProperties.' },
+          customProperties: {
+            type: 'object',
+            description: 'Per-line open, customer-defined fact bag for data that is NOT part of our schema — same validation contract as the header-level field of the same name. Response echoes the POST-rule (effective) value, including any fact carried through from a linked purchase order (see purchaseOrderId).',
+          },
+          purchaseOrderId: {
+            type: 'string',
+            description: 'Purchase only: this invoice line\'s carry-through reference back to a purchase order you previously committed with documentStage "purchase_order" (that calculation\'s own calculationId). Resolves the response line\'s poLink (NONE/NOT_FOUND/LINKED) and, when LINKED, makes the PO line\'s own facts available to this line\'s carry-through (e.g. inheriting intendedUse when this line does not already state it).',
+          },
+          purchaseOrderLineNumber: {
+            type: 'string',
+            description: 'Narrows purchaseOrderId above to one specific line on that PO (matched against that line\'s own id) — may be omitted when the PO has exactly one line.',
+          },
+          shipFrom: {
+            type: 'object',
+            description: 'Per-line fulfilment origin for a multi-warehouse order — overrides the transaction-level shipFrom for THIS line. Sets the dispatch country for this line in the EU consumer goods rule, and affects US origin-sourcing states (TX/CA/IL), where local tax sources to the seller\'s location. Supply only for a line shipping from a different location than the rest of the order.',
+            properties: {
+              line1: { type: 'string' },
+              line2: { type: 'string' },
+              city: { type: 'string' },
+              region: { type: 'string', description: 'State/region code, e.g. "TX"' },
+              postalCode: { type: 'string' },
+              country: { type: 'string', description: 'ISO 3166-1 alpha-2' },
+              customsStatus: { type: 'string', enum: ['free_circulation', 'bonded'], description: 'Duties only. Default free_circulation.' },
+            },
+            required: ['country'],
+          },
         },
         required: ['id', 'productName'],
       },
@@ -452,6 +588,7 @@ const TOOLS = [
       'When the document is waiting (WAITING_FOR_YOU or WAITING_FOR_PLATFORM), act on `nextStep` { actor, message, fixUrl? }: actor "merchant" means ask the user to do what the message says (fixUrl is where), actor "platform" or "system" means wait. ' +
       'Held documents are released automatically once the cause is fixed; poll_status (or an invoice.status_changed webhook) shows the move. ' +
       'A document for a country that is not enabled for your account yet (including live Portugal submissions) is stored 200 WAITING_FOR_PLATFORM (reason HELD_AWAITING_AUTHORIZATION): it is held and released automatically once the country is enabled for your account, so there is nothing to resend; a document dated before a mandate\'s support start is NOT_APPLICABLE (reason NOT_SUPPORTED, final, never submitted later). ' +
+      'A credit note whose original invoice is not yet submittable (NEEDS_INFO, UNROUTABLE, UNDELIVERED, PENDING, RECEIVED, held) is stored 200 WAITING_FOR_PLATFORM (reason HELD_AWAITING_ORIGINAL, errorCode CREDIT_NOTE_AWAITING_ORIGINAL) with `originalInvoiceId`: \"Held until invoice <number> is accepted. Nothing to do on this credit note: it is sent automatically once the original is fixed.\" It is sent once the original is accepted, delivered or accumulated and refused if the original ends rejected; fix the original, not the credit note. Debit notes do not wait. ' +
       'A response of status RECEIVED means stored and still being processed: keep its `id`, and call poll_status or get_invoice to follow it. ' +
       'RECEIVED with a PROCESSING_DELAYED warning means a temporary problem interrupted processing after the document was stored: do not resend, Clearvo re-runs it; follow it with poll_status. ' +
       'ACCUMULATED (France e-reporting, Spain SII batches) is a 200 too, not a 202. ' +
@@ -637,7 +774,7 @@ const TOOLS = [
               taxAmount: { type: 'number', description: 'Optional tax amount for this line. Computed as taxRate × line total when omitted. Replaces the retired vatAmount (stored REJECTED with UNKNOWN_FIELD_VAT_RENAMED).' },
               clientTaxCode: {
                 type: 'string',
-                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (clearanceStatus HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
+                description: 'RECOMMENDED. Your own ERP tax code (e.g. a SAP two-digit code), mapped in advance via create_client_tax_code — see also list_tax_codes. Mutually exclusive with taxTreatment. An unrecognised code for this entity does not reject the invoice — it is held (reason HELD_UNMAPPED_TAX_CODE) with a machine-readable reason instead.',
               },
               taxTreatment: {
                 type: 'string',
@@ -893,6 +1030,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'retry_invoice_with_master_data',
+    description:
+      'Retry a REJECTED or NEEDS_INFO invoice using the tax number from the customer master record instead of the one that was sent. ' +
+      'Data sent through the API is otherwise kept; this is the explicit choice to use the master record\'s value. Only the customer tax number changes: ' +
+      'a corrected copy is sent through the normal send path (the usual tax-number checks still run on the master value), the result carries the NEW invoiceId and previousInvoiceId, ' +
+      'and the change is audited. Read get_invoice first: availableActions contains "use_master_data" only when a customer record matches (customerRef, else exact name) ' +
+      'with a tax number different from the sent one. Refusals: 409 NOT_ELIGIBLE, 422 MASTER_CUSTOMER_NOT_FOUND, 422 MASTER_TAX_ID_MISSING, ' +
+      '422 MASTER_TAX_ID_UNCHANGED (update the customer record first). Never blind-retry a refusal. ' +
+      'Check first: call it with dryRun true, show the user what would change, and only after they explicitly say yes call again without dryRun.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID — from submit_invoice, list_invoices or get_invoice.' },
+        dryRun: { type: 'boolean', description: 'Check this request without sending anything: answers with the one field change (customer.taxId, before and after) that would be made.' },
+        confirmationToken: { type: 'string', description: 'Hosted MCP only: the confirmationToken returned by the dryRun of this exact request. Not needed here.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'get_sii_reconciliation',
     description:
       'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
@@ -918,7 +1076,7 @@ const TOOLS = [
       'Poll until `terminal` is true, spacing calls by `nextPollAfter`. Returns `status` (RECEIVED, PENDING, WAITING_FOR_YOU, WAITING_FOR_PLATFORM, ACCUMULATED, COMPLETED, REJECTED, CANCELLED, SKIPPED, NOT_APPLICABLE), `stage`, `reason`, `issues[]` and `customerResponse`. `status` says who the document is waiting for: ' +
       'RECEIVED (stored, still processing), PENDING (stage queued: not sent yet; awaiting_authority: sent, wait for the answer), ACCUMULATED (in a periodic report, not yet filed): wait, do nothing; ' +
       'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED, HELD_UNMAPPED_TAX_CODE, OBLIGATION_DISABLED, UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
-      'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
+      'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_AWAITING_ORIGINAL (a credit note waiting for its original invoice; `originalInvoiceId` names it), HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
       'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_DISCARDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
       '`customerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
       'A waiting document is not a dead end: for NEEDS_INFO, SETUP_NEEDED and HELD_UNMAPPED_TAX_CODE fix the gap (configure the code, add the setup) and the document continues, ' +
@@ -962,8 +1120,7 @@ const TOOLS = [
       'SUPPLIER_TAX_ID_MISMATCH on a mismatch). On a purchase, party roles invert: the entity is the customer and ' +
       'the counterparty (the vendor) goes in supplier, which is REQUIRED (422 SUPPLIER_REQUIRED if omitted) — ' +
       'customer is now optional and entity-side, validated the same way (422 CUSTOMER_TAX_ID_MISMATCH on a ' +
-      'mismatch). seller is a deprecated alias for supplier, accepted on a sale only — rejected with 422 ' +
-      'SELLER_ALIAS_NOT_ALLOWED_FOR_PURCHASE on a purchase. The response always carries both a supplier block and ' +
+      'mismatch). The response always carries both a supplier block and ' +
       'a customer block, plus top-level entityRole ("supplier" for a sale, "customer" for a purchase) telling you ' +
       'which block is your own entity. ' +
       'US consumer\'s use tax (purchase only): a purchase delivered to a US state enabled for use tax (shipTo / lineItems[].shipTo; otherwise your own address) returns lineItems[].useTax: useLocation (state, county, city, postalCode, precision, basis LINE_SHIP_TO / HEADER_SHIP_TO / ENTITY_ADDRESS), taxDueAtUseLocation, taxChargedByVendor (your statedTaxAmount), taxExpectedFromVendor, taxExpectedFromVendorRate, creditAllowed (vendor tax credited up to the use tax), vendorClaim ({ amount, basis OVERCHARGE_VS_EXPECTED | TAX_NOT_DUE } to claim back from the supplier, or null), selfAssessedTaxAmount (what you accrue), toleranceWaived, a per-authority breakdown (taxDue, creditApplied, selfAssessed), assumptions, vendorChargeStory and reviewRequired. The line taxAmount is the use tax due; the response header carries selfAssessedTaxAmount and selfAssessedKind USE_TAX. A vendor that charged 0 is always self-assessed in full (a purchase invoice with no statedTaxAmount is treated as charged 0; a purchase order is not); a charge matching no known rate is assumed to be a local tax for the delivery state and compared with taxExpectedFromVendor (an excess is OVERCHARGED with a vendorClaim and flagged for review), and a charge at another state\'s rate is credited only when the delivery state\'s rule allows it, otherwise it is claimed from the supplier (TAX_NOT_DUE); taxVerification.overchargeVsExpected is the charge above the expected tax; the trusted supplier flag does not apply to use tax; use tax is never recoverable; taxVerification.outcome UNDERCHARGED with reasonCode USE_TAX_SELF_ASSESSED / USE_TAX_SHORTFALL_SELF_ASSESSED means you accrue the tax, not that the supplier erred. A state with no local use tax on general purchases is calculated at the state level only.',
@@ -1102,10 +1259,13 @@ const TOOLS = [
       'List the business entities registered under this Clearvo account. ' +
       'Each entity is a legal company registered for tax compliance (one VAT registration, one country of establishment). ' +
       'Returns entity IDs, names, countries of establishment, and VAT numbers. ' +
-      'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices.',
+      'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices. ' +
+      'Pass taxNumber to find the entity already registered under a tax number (any spelling, with or without the country prefix).',
     inputSchema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        taxNumber: { type: 'string', description: 'Only return entities whose tax number matches this value (at least 4 characters). Spaces, dashes and the country prefix are ignored.' },
+      },
     },
   },
   {
@@ -1115,7 +1275,8 @@ const TOOLS = [
       'Use this when onboarding a new legal entity, subsidiary, or client company. ' +
       'Requires an account-scoped API key (csk_live_acct_... or csk_test_acct_...). ' +
       'The returned apiKey is shown ONLY ONCE — save it immediately to a secure location. ' +
-      'After creation, use the entity\'s apiKey for all invoice and tax calculation operations for that entity.',
+      'After creation, use the entity\'s apiKey for all invoice and tax calculation operations for that entity. ' +
+      'Returns 409 DUPLICATE_ENTITY (with the existing entityId) when an open entity in the same organisation already has this country and tax number.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1327,6 +1488,28 @@ const TOOLS = [
     },
   },
   {
+    name: 'create_fr_platform_connect_link',
+    description:
+      'Create the consent link a French client opens to connect its company to the French e-invoicing platform. The client signs in ' +
+      'there once, completes the identity and legal-representative check (this cannot be done through the API and is a legal ' +
+      'obligation), and is sent back to returnUrl with a status query parameter (ok or error) and, where useful, a reason; status=ok ' +
+      'with reason=pending_verification means the check is not finished yet. Forward the returned connectUrl to the client. The entity\'s ' +
+      'French VAT number must already be registered (set_fr_credentials): the company number is derived from it and pre-filled, never asked ' +
+      'for. Use requestedCapability receive for a client that only receives invoices, send for issuing only, both (default) when the client ' +
+      'should be able to do either. Read the result with get_fr_credentials: platformConnection.state is not_connected | ' +
+      'pending_verification | active | needs_reconnect | failed, and platformConnection.requestedCapability echoes the choice. returnUrl must be an https URL on the allowlisted origins.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        returnUrl: { type: 'string', description: 'https URL the client is sent back to after connecting. Its origin must be on the allowlist.' },
+        requestedCapability: { type: 'string', enum: ['send', 'receive', 'both'], description: 'What the client needs: send, receive (receiving-only) or both. Default both.' },
+        loginHint: { type: 'string', description: 'Optional email address to pre-fill on the sign-in page.' },
+        entityId: { type: 'string', description: 'Entity to connect. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['returnUrl'],
+    },
+  },
+  {
     name: 'poll_fr_inbound',
     description:
       'Manually trigger a France inbound poll for this entity: resolve status on your own pending outbound ' +
@@ -1341,15 +1524,56 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_invoice_attachments',
+    description:
+      'List the supporting files sent with an invoice you issued (attachments[] on submit_invoice) or received: reference, fileName, description, mimeType, sizeBytes, sha256, externalUrl, ' +
+      'downloadable (true when Clearvo stores the file) and downloadUrl (GET /v1/invoices/{id}/attachments/{index} with the same credentials; the file downloads as an attachment of its own MIME type). ' +
+      'Attachments are never part of the e-invoice document (no XML or PDF embeds them): they reach the customer as downloads on the hosted invoice page. ' +
+      'Allowed when sending: pdf, csv, xlsx, xls, ods, xml, png, jpg, txt (extension and mimeType must agree), up to 10 MB per file, 25 MB in total, 20 per invoice. ' +
+      'A send is refused with 422 ATTACHMENT_TYPE_NOT_ALLOWED, ATTACHMENT_TYPE_MISMATCH, ATTACHMENT_TOO_LARGE, ATTACHMENTS_TOTAL_TOO_LARGE, TOO_MANY_ATTACHMENTS or ATTACHMENT_MALWARE_DETECTED, naming the attachment reference; nothing is stored then.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'Clearvo invoice ID or reference ID, as returned by submit_invoice or list_invoices.' } },
+    },
+  },
+  {
+    name: 'fix_invoice',
+    description:
+      'Put an invoice right by supplying values as dotted field paths, for example {"customer.address.country": "DE"}. Call get_invoice first and read its `resolution` block: ' +
+      '`resolution.missingFields` lists exactly what a held invoice still needs (supply those fields and it updates in place and is sent again); ' +
+      'a rejected invoice can be corrected where its source allows changes (a corrected invoice is created, linked to the original, and previousInvoiceId names the original); ' +
+      'a submitted e-report is amended. Invoices that arrived through the API or an ERP cannot be corrected or have values changed in Clearvo (409 SOURCE_LOCKED, errors[]): fix them in the source system and it resubmits; missing values can always be supplied, and amending a reported ES SII registration is allowed from every source. ' +
+      'Issued e-invoices are never edited (409 NOT_FIXABLE). 404 when there is no such invoice; 422 INVALID_FIELDS with errors[] ({field, code INVALID_PATH, INVALID_VALUE, NOT_SUPPLIABLE or LOCKED_CHANNEL, message}); 503 FIX_UNAVAILABLE is retryable. Use dryRun to check first. ' +
+      'Returns (200, or 202 while still processing) mode (updated_in_place, new_invoice or amended), invoiceId, previousInvoiceId, status, clearanceStatus, changes (mode supply, change or clear), completed and missingFields.',
+    inputSchema: {
+      type: 'object' as const,
+      required: ['id', 'fields'],
+      properties: {
+        id: { type: 'string', description: 'Clearvo invoice ID or reference ID.' },
+        fields: { type: 'object', description: 'Dotted field path to new value, for example {"customer.address.country": "DE"}. Array indexes are accepted (lines.0.quantity or lines[0].quantity).', additionalProperties: true },
+        clear: { type: 'array', items: { type: 'string' }, description: 'Dotted paths to delete from the corrected document. There is no null meaning: clear a value by listing its path here. A path cannot also be in fields. A locked source refuses clearing an existing value.' },
+        dryRun: { type: 'boolean', description: 'Check only: answers { id, wouldSubmit: { mode, changes } } and changes nothing.' },
+        confirmationToken: { type: 'string', description: 'Confirmation token for the check-first step (operation invoice.fix).' },
+        entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'update_business_status',
     description:
       'Record a customer-lifecycle ("business") status decision on a received (inbound) invoice. The one shared ' +
       'tool every registered regime goes through — currently France, Germany, and Brazil (Manifestação do ' +
       'Destinatário). Only valid on an INBOUND invoice you received: the calling entity is the customer ' +
       'recording their own decision on it. For an invoice you issued, the other side\'s response syncs ' +
-      'automatically once they act on their own side — there is nothing to call here for that direction. ' +
+      'automatically once they act on their own side — there is nothing to call here for that direction (the one exception: ' +
+      'for a French invoice you issued through the connected e-invoicing platform you can record PAYMENT_RECEIVED once ' +
+      'your customer has paid). ' +
       'FR/DE: approve, partially approve, dispute, suspend, refuse, or mark paid — rejectionDetail.reason is ' +
-      'required when status is DISPUTED, REFUSED, or SUSPENDED. Brazil: acknowledge receipt (CIENCIA), confirm ' +
+      'required when status is DISPUTED, REFUSED, or SUSPENDED. For a French invoice received through the connected ' +
+      'platform the decision is sent to the supplier\'s platform before the status changes, a reason is also required to ' +
+      'partially approve, and SUSPENDED takes one of five reason codes (JUSTIF_ABS, SIRET_ERR, COORD_BANC_ERR, CMD_ERR, ' +
+      'REF_CT_ABSENT). Brazil: acknowledge receipt (CIENCIA), confirm ' +
       'the operation occurred (CONFIRMACAO), or reject it — either the operation didn\'t occur ' +
       '(OPERACAO_NAO_REALIZADA, rejectionDetail.message required, 15–255 characters) or you don\'t recognize the ' +
       'transaction (DESCONHECIMENTO, rejectionDetail forbidden). PRESUMIDA (Brazil\'s day-90 deemed-acceptance ' +
@@ -1358,8 +1582,10 @@ const TOOLS = [
       'it — check get_invoice\'s businessStatusActions first rather than guessing from this enum alone. Fails ' +
       '409 if the transition isn\'t valid from the invoice\'s current status (also Brazil-specific: no ' +
       'certificate on file, an expired certificate, homologação not yet complete, or SEFAZ itself rejected the ' +
-      'event), 422 (FR_PLATFORM_ACTIVATION_PENDING) if the France platform isn\'t active yet for this entity\'s ' +
-      'tax number, and 503 (Brazil only, RATE_LIMITED) if SEFAZ\'s own 20/hour rate limit was hit — none is ' +
+      'event; or AMBIGUOUS_REFERENCE when the reference you passed matches more than one document: pass the ' +
+      'Clearvo id instead), 422 (FR_PLATFORM_ACTIVATION_PENDING, FR_PLATFORM_NOT_CONNECTED or ' +
+      'FR_PLATFORM_RECONNECT_REQUIRED) if the France platform connection isn\'t usable for this entity, and 503 ' +
+      '(Brazil only, RATE_LIMITED) if SEFAZ\'s own 20/hour rate limit was hit — none is ' +
       'retryable by changing the request; the status was not changed either way.',
     inputSchema: {
       type: 'object' as const,
@@ -1610,6 +1836,15 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_country_coverage',
+    description:
+      'List the countries and e-invoicing or reporting mandates Taxually covers, with a customer-facing status ' +
+      '(live, beta, coming_soon, not_supported or no_mandate) and the mandate go-live date where it is confirmed. ' +
+      'Use this to answer "do you support e-invoicing in country X" before promising anything. Public, customer-safe ' +
+      'information only: a country that is not listed has no confirmed status yet.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
     name: 'get_requirements',
     description:
       'Get the e-invoicing and tax requirements for a specific country. ' +
@@ -1658,7 +1893,7 @@ const TOOLS = [
         },
         reason: {
           type: 'string',
-          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
+          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'HELD_UNMAPPED_TAX_CODE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'OBLIGATION_DISABLED', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
           description: 'Filter by the specific reason behind the status. The old stored names (EXCLUDED, DISCARDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are both accepted.',
         },
         businessStatus: {
@@ -1789,7 +2024,7 @@ const TOOLS = [
       'Register a new webhook endpoint to receive real-time invoice status events. ' +
       'The response includes a signing secret (shown once — store it securely) used to verify ' +
       'payload authenticity via HMAC-SHA256. ' +
-      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, ' +
+      'Supported events: invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.unroutable (a Peppol invoice with no reachable receiver: supply the electronicAddress and POST /v1/invoices/{id}/deliver), ' +
       'invoice.pending, product.classification_changed, ' +
       'invoice.status_changed (fires on EVERY status change of an e-invoice with id, from, to, status, stage, reasonCode, terminal, issues, customerResponse, reason {code, message, actor}, nextStep; the payload is lean, fetch the document with get_invoice. The `statuses` parameter chooses which new statuses are delivered, omit it for all. Prefer this for new integrations; the specific events above keep working, and subscribing to both gives two deliveries per change. `*` does NOT include it: list it by name in `events`), ' +
       'held_unmapped_decision (a mandate resolution found no matching rule — held for platform review, holdReason/actionOwner attribution attached), ' +
@@ -1812,7 +2047,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
+          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
         },
       },
       required: ['url'],
@@ -1841,7 +2076,7 @@ const TOOLS = [
       type: 'object' as const,
       properties: {
         webhookId: { type: 'string', description: 'The webhook ID to test (from list_webhooks or create_webhook)' },
-        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.business_status_changed or invoice.status_changed' },
+        event: { type: 'string', description: 'The event to simulate: invoice.received (default), invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, invoice.business_status_changed or invoice.status_changed' },
         to: { type: 'string', description: 'Only with event invoice.status_changed: the new status the sample reports, one of the ten statuses, e.g. WAITING_FOR_YOU, REJECTED, COMPLETED. Default: the invoice\'s own status, else COMPLETED. Any other event with `to` is a 400.' },
         invoiceId: { type: 'string', description: 'Optional: the ID of one of your invoices (from list_invoices) to build the test payload from' },
       },
@@ -1853,19 +2088,22 @@ const TOOLS = [
     description:
       'Sandbox only: create sample incoming (received) invoices or credit notes for this entity, to build and test an accounts-payable ' +
       'integration without waiting for a real supplier. Needs a sandbox API key; a live key returns 403 SANDBOX_ONLY. Each document is a ' +
-      'realistic e-invoice (Factur-X for France, ZUGFeRD for Germany) from a clearly fictional supplier, received through the same ' +
-      'pipeline as a real received document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
-      'intakeChannel SANDBOX_SIMULATION, and no email is sent. With no arguments it creates one invoice for the entity\'s own country. ' +
-      'The documents are received under one of the entity\'s tax registrations: country (DE or FR) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ' +
+      `realistic e-invoice in the country's own format (Factur-X for France, ZUGFeRD for Germany, Peppol BIS Billing 3.0 or PINT for the other countries: Australia, Austria, Belgium, Croatia, Denmark, Estonia, Finland, Iceland, Ireland, Japan, Latvia, Lithuania, Luxembourg, Netherlands, New Zealand, Norway, Singapore, Slovakia, Slovenia, Sweden, Switzerland, United Arab Emirates) from a clearly fictional supplier, received through the same ` +
+      'pipeline as receive_invoice_document: it is stored, archived and fires the invoice.received webhook, shows up in list_invoices with ' +
+      'intakeChannel SANDBOX_SIMULATION, and no email is sent. ' +
+      `The documents are received under one of the entity's tax registrations: country (${SIMULATION_COUNTRY_CODES.join(', ')}) may be any country the entity is established or VAT-registered in (409 COUNTRY_NOT_REGISTERED otherwise; 409 COUNTRY_NOT_ENABLED when it has no sample documents), and defaults to the establishment country, else the single supported registration (several candidates is 400 COUNTRY_REQUIRED). count creates 1-20 documents ` +
       '(each call adds new ones). businessStatus (e.g. APPROVED, DISPUTED, REFUSED) moves each document along its lifecycle after it arrives, ' +
-      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. French samples are EUR only. ' +
+      'firing the matching status webhooks; a status that cannot be reached is 400 INVALID_BUSINESS_STATUS. Documents are in the country\'s own currency; French samples are EUR only. ' +
+      'scenario picks the shape of the document (default standard): a scenario that cannot be built for the country is 400 SCENARIO_NOT_AVAILABLE, and one that builds its own lines cannot be combined with lines or totalAmount (400 INVALID_SCENARIO). ' +
+      `${SIMULATION_SCENARIO_LISTING} ` +
       'Returns the created invoices, any duplicates, how many of your webhook endpoints are subscribed to invoice.received, and notes.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        country: { type: 'string', enum: ['DE', 'FR'], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
+        country: { type: 'string', enum: [...SIMULATION_COUNTRY_CODES], description: 'Optional. The registration the documents are received under: any country the entity is established or VAT-registered in. Defaults to the establishment country, else the single supported registration country.' },
         type: { type: 'string', enum: ['invoice', 'credit_note'], description: 'Document type. Default invoice.' },
         count: { type: 'integer', minimum: 1, maximum: 20, description: 'How many documents to create (1-20). Default 1.' },
+        scenario: { type: 'string', enum: SIMULATION_SCENARIOS.map((s) => s.id), description: `Optional. The shape of the document. Default standard. ${SIMULATION_SCENARIO_LISTING}` },
         supplier: {
           type: 'object',
           description: 'Optional override of the fictional supplier. The name always keeps a sample marker.',
@@ -1876,7 +2114,7 @@ const TOOLS = [
           },
         },
         totalAmount: { type: 'number', description: 'Gross total of each document. Default 1200. Not allowed together with lines.' },
-        currency: { type: 'string', description: 'Three-letter currency code. Default EUR; France accepts EUR only.' },
+        currency: { type: 'string', description: 'Three-letter currency code. Default the country\'s own currency (EUR for euro countries; DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY or AED for the others); France accepts EUR only.' },
         lines: {
           type: 'array',
           description: 'Optional lines (description, quantity, unitPrice net); the tax rate is the standard rate. Not allowed together with totalAmount.',
@@ -3108,6 +3346,26 @@ const TOOLS = [
     },
   },
   {
+    name: 'erase_customer_address_data',
+    description:
+      'Erase a customer\'s stored address data from committed tax calculations, on request (for example a privacy erasure request). ' +
+      'Street lines are kept for as long as the calculation needs them and leave only through this tool. Name the calculation by ' +
+      'calculationId, or by the order reference it was committed under (merchantRef, or the idempotency key such as woo-order-123 or ' +
+      'shopify-<shop>-<id>); credit notes pointing at it are included. level "street" (default) removes the address lines and the ' +
+      'customer display name; "full" also removes the city. Amounts, tax, jurisdiction, period, region, postal code and country are ' +
+      'never changed, only sales are touched, and a repeat call changes nothing. Returns what was matched and erased. ' +
+      'Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        calculationId: { type: 'string', description: 'The calculation id (cl_calc_...). Send this or reference, not both.' },
+        reference: { type: 'string', description: 'The order reference the calculation was committed under. Send this or calculationId, not both.' },
+        level: { type: 'string', enum: ['street', 'full'], description: 'street (default): address lines and the display name. full: also the city.' },
+        entityId: { type: 'string', description: 'Entity the calculation belongs to. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'list_suppliers',
     description:
       'List an entity\'s supplier master data (name, tax ID, address) — mirrors list_customers for the other ' +
@@ -3498,7 +3756,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — header row plus up to 500 data rows. See the transaction_date/currency/country/net_amount/tax_amount required columns and the optional source_reference/tax_code columns documented for POST /v1/send/bulk. tax_code is the entity\'s own client tax code (mapped in advance via create_client_tax_code/list_client_tax_codes); a BLANK tax_code gets the platform default \'S\', which must itself be registered — otherwise every such row is held (clearanceStatus HELD_UNMAPPED_TAX_CODE, reason.codeSource \'default\', message naming the fix: register \'S\' or fill tax_code per row). A freshly onboarded entity with no codes registered yet should expect exactly this on its first upload.' },
+        csvContent: { type: 'string', description: 'The raw CSV text (not base64) — header row plus up to 500 data rows. See the transaction_date/currency/country/net_amount/tax_amount required columns and the optional source_reference/tax_code columns documented for POST /v1/send/bulk. tax_code is the entity\'s own client tax code (mapped in advance via create_client_tax_code/list_client_tax_codes); a BLANK tax_code gets the platform default \'S\', which must itself be registered — otherwise every such row is held (reason HELD_UNMAPPED_TAX_CODE, reason.codeSource \'default\', message naming the fix: register \'S\' or fill tax_code per row). A freshly onboarded entity with no codes registered yet should expect exactly this on its first upload.' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['csvContent'],
@@ -3795,7 +4053,7 @@ const TOOLS = [
         direction: { type: 'string', enum: ['purchase', 'sale'], description: 'Inclusive of direction-less rows — see description.' },
         conditionProperty: { type: 'string', description: 'Only rules with a condition on this catalog property.' },
         conditionValue: { type: 'string', description: 'Combined with conditionProperty — narrows to a condition whose value equals this.' },
-        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing).' },
+        includeDefaults: { type: 'boolean', description: 'Also return this scope\'s Global platform-default rules as `defaults[]`/`defaultsCount` (e.g. to find one worth suppress_rule-ing). A default that is off by default shows defaultEnabled false, enabledForScope and canEnable; turn it on with enable_rule.' },
         companyCode: { type: 'string', description: 'Only rules scoped to this company code (case-insensitive).' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
@@ -3923,6 +4181,28 @@ const TOOLS = [
     inputSchema: {
       type: 'object' as const,
       properties: { id: { type: 'string' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'enable_rule',
+    description: 'Turn ON, for this key\'s own scope, a platform-default rule that is off by default (list_rules with includeDefaults shows defaultEnabled false, enabledForScope and canEnable). Example: the warning shown when a customer\'s tax number is reported not valid by a tax authority register at send time. The rule applies at this scope and everywhere beneath it; it never blocks a send unless it is an error rule. A rule that is on by default, a LEGAL_MANDATE or PLATFORM_INVARIANT rule and a rule locked by the platform are refused (RULE_NOT_ENABLEABLE). Available on every plan. Audited.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'A rules-engine rule id (UUID) from list_rules with includeDefaults.' },
+        reason: { type: 'string', description: 'Optional free-text note on why this scope turned it on.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'disable_rule',
+    description: 'Turn OFF again an opt-in platform-default rule that this key\'s own scope enabled (removes the enable). 404 if this scope has not enabled it; a rule enabled by a wider scope is turned off from that scope.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { id: { type: 'string', description: 'A rules-engine rule id (UUID).' }, entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' } },
       required: ['id'],
     },
   },
@@ -4219,6 +4499,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/cancel-report`, body, { 'x-idempotency-key': key });
     }
 
+    case 'retry_invoice_with_master_data': {
+      const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'get_sii_reconciliation': {
       const { id } = args as { id: string };
       return callApi('GET', `/sii/reconciliation/${encodeURIComponent(id)}`);
@@ -4261,8 +4546,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/tax-numbers/validate', { countryCode: country, taxNumber, ...(registryType && { registryType }), ...(force && { force }) });
     }
 
-    case 'list_entities':
-      return callApi('GET', '/entities');
+    case 'list_entities': {
+      const taxNumber = (args as { taxNumber?: unknown }).taxNumber;
+      return callApi('GET', `/entities${typeof taxNumber === 'string' && taxNumber ? `?taxNumber=${encodeURIComponent(taxNumber)}` : ''}`);
+    }
 
     case 'create_entity':
       return callApi('POST', '/entities', args);
@@ -4312,9 +4599,19 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('GET', '/fr/credentials', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'create_fr_platform_connect_link': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/fr/platform-connect-link', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'poll_fr_inbound': {
       const { entityId } = args as { entityId?: string };
       return callApi('POST', '/fr/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'fix_invoice': {
+      const { id, entityId, ...body } = args as { id: string; entityId?: string; fields: Record<string, unknown>; clear?: string[]; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/fix`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'update_business_status': {
@@ -4408,6 +4705,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', `/tax/exemptions/${encodeURIComponent(certificateId)}/document`, formData, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'list_country_coverage':
+      return callApi('GET', '/coverage');
+
     case 'get_requirements': {
       const country = args.country as string;
       return callApi('GET', `/requirements?country=${encodeURIComponent(country)}${args.class ? `&class=${encodeURIComponent(String(args.class))}` : ''}${args.mandate ? `&mandate=${encodeURIComponent(String(args.mandate))}` : ''}`);
@@ -4431,6 +4731,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const id = args.id as string;
       return callApi('GET', `/invoices/${encodeURIComponent(id)}`);
     }
+
+    case 'list_invoice_attachments':
+      return callApi('GET', `/invoices/${encodeURIComponent(args.id as string)}/attachments`);
 
     case 'list_products': {
       const qs = new URLSearchParams();
@@ -4755,6 +5058,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('DELETE', `/customers/${encodeURIComponent(customerId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
+    case 'erase_customer_address_data': {
+      const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
+      return callApi('POST', '/tax/address-erasure', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
     case 'list_suppliers': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       const qs = new URLSearchParams();
@@ -4992,6 +5300,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'unsuppress_rule': {
       const { id, entityId } = args as { id: string; entityId?: string };
       return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/suppress`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'enable_rule': {
+      const { id, reason, entityId } = args as { id: string; reason?: string; entityId?: string };
+      return callApi('POST', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, { reason }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+    case 'disable_rule': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('DELETE', `/rules-engine/rules/${encodeURIComponent(id)}/enable`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
     case 'simulate_rule': {
       const { id, entityId, ...body } = args as Record<string, unknown> & { id?: string; entityId?: string };

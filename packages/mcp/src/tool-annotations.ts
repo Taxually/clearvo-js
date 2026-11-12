@@ -33,8 +33,8 @@ export interface McpToolAnnotations {
 const READ_ONLY = new Set<string>([
   'list_manual_adjustments', 'get_manual_adjustment_options', 'list_client_tax_codes',
   'get_client_tax_code_options', 'get_client_tax_code_exemption_reason_options', 'list_tax_codes', 'list_entities',
-  'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements',
-  'list_invoices', 'get_invoice', 'list_products', 'list_webhooks', 'list_registrations',
+  'get_it_profile', 'get_fr_credentials', 'get_br_credentials', 'get_mx_sync_status', 'get_br_sync_status', 'get_requirements', 'list_country_coverage',
+  'list_invoices', 'get_invoice', 'list_invoice_attachments', 'list_products', 'list_webhooks', 'list_registrations',
   'get_registration_field_definitions', 'get_entity_fact_definitions', 'list_tax_calculations', 'list_calculation_requests', 'get_query_fields',
   'get_setup_status', 'get_tax_settings', 'get_reporting_obligations', 'list_reporting_batches', 'list_customers', 'list_customer_reference_types', 'list_exemption_certificates',
   'list_suppliers', 'list_bank_accounts', 'list_company_codes', 'get_sii_reconciliation', 'get_inbound_batch',
@@ -51,13 +51,13 @@ const READ_ONLY = new Set<string>([
 ]);
 
 const DESTRUCTIVE = new Set<string>([
-  'delete_client_tax_code', 'remove_entity_logo', 'delete_webhook', 'delete_customer', 'delete_supplier',
-  'delete_bank_account', 'unsuppress_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
+  'delete_client_tax_code', 'remove_entity_logo', 'delete_webhook', 'delete_customer', 'delete_supplier', 'erase_customer_address_data',
+  'delete_bank_account', 'unsuppress_rule', 'disable_rule', 'delete_rules_engine_dataset_row', 'deregister_registration',
   'cancel_sii_report', 'amend_sii_report', 'reset_field_mappings', 'exclude_reporting_batch_item',
   'confirm_reporting_batch',
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
-  'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi',
-  'update_business_status', 'update_invoice_business_status',
+  'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi', 'retry_invoice_with_master_data',
+  'update_business_status', 'update_invoice_business_status', 'fix_invoice',
   // Removes one of the customer's own tests from new runs.
   'archive_test_case',
   // Grant access / open an outbound data channel.
@@ -74,11 +74,12 @@ const DESTRUCTIVE = new Set<string>([
 const NON_IDEMPOTENT = new Set<string>([
   'calculate_tax', 'propose_manual_adjustment', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
   'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
+  'create_fr_platform_connect_link',
   'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch',
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account', 'create_company_code',
   'receive_invoice_document', 'simulate_received_invoices', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
-  'move_rule', 'amend_sii_report',
+  'move_rule', 'amend_sii_report', 'retry_invoice_with_master_data',
   // Each call starts a new run / adds a new test.
   'start_test_run', 'create_test_case',
   // Each call appends a new request to the filing's timeline.
@@ -94,7 +95,9 @@ const OPEN_WORLD = new Set<string>([
   'upload_filing_data_file', 'replace_filing_data_file', 'delete_filing_data_file', 'process_filing_upload_month',
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
   'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
+  'create_fr_platform_connect_link',
   'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
+  'retry_invoice_with_master_data',
   // poll_status is a GET that live-polls KSeF/NAV and writes the result back: NOT read-only.
   'poll_status',
   // These verify the credential against the authority live before saving.

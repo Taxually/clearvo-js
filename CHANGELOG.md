@@ -4,6 +4,101 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-10-16 release: `@clearvo/sdk` 0.5.0, `@clearvo/mcp` 0.6.0, `@clearvo/cli` 0.5.0** (previous npm versions: 0.4.0, 0.5.0, 0.4.0). One combined minor release of every "Unreleased" block below (including live Filings pause and resume); all of their backend changes are deployed to production. Type-level change to read before upgrading: several `FilingDetail` and `FilingSummary` fields are now optional or nullable because a live return (id `ret_...`) does not carry them (see the first block). Runtime behaviour for stored returns is unchanged.
 
+**2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
+
+## Unreleased — `seller` removed from tax calculation requests (matches the published API)
+
+The deprecated `seller` alias of `supplier` is gone from the published `POST /v1/tax/calculate` request, so it is gone from the SDK `TaxCalculateRequest` type and the MCP `calculate_tax` input schema. Send `supplier` (on a sale it is optional and filled from your entity's master data).
+
+## Unreleased — opt-in platform rules: turn a default-off rule on (publish after the backend opt-in rules PR is live)
+
+A platform default rule can now be off by default. A business turns one on for its own scope (and everything beneath it) with `POST /v1/rules-engine/rules/{id}/enable` and off again with `DELETE` on the same path. The first one is `CUSTOMER_TAX_NUMBER_NOT_VALID_AT_AUTHORITY`: when it is on, a sent invoice whose customer tax number the tax authority reports as not valid gets a warning (the invoice is still sent; an authority that cannot be reached never warns). Rules can read the new read-only property `customerTaxNumberAuthorityStatus` (`valid`, `invalid`, `unconfirmed` or null) on invoices. The existing default-on format rule `INVALID_CUSTOMER_TAX_ID_GENERAL` can be switched off with suppress, as before.
+
+- SDK: `enableRule(id, { reason?, entityId? })` and `disableRule(id, entityId?)`; new types `EnableRuleParams`, `EnableRuleResponse`, `DisableRuleResponse`. `listRules({ includeDefaults: true })` default items gain optional `defaultEnabled`, `enabledForScope`, `enabledByAncestor` and `canEnable` (present for an opt-in rule). Enabling a rule that is on by default, a legal-mandate rule or a platform-locked rule is a 422 `RULE_NOT_ENABLEABLE`, thrown as a `ClearvoError`.
+- MCP: new tools `enable_rule` and `disable_rule` (same schema as the hosted connector); `list_rules` documents the new default fields.
+- CLI: `clearvo rules enable <id> [--reason <text>] [--entity <id>]` and `clearvo rules disable <id> [--entity <id>]`.
+
+## Unreleased — fix an invoice with one call (publish after the backend fix-invoice PR is live)
+
+`POST /v1/invoices/{id}/fix` with `{ "fields": { "<dotted path>": value } }` puts an invoice right. A held invoice that is missing information is completed by supplying exactly the fields listed in its `resolution.missingFields`: it updates in place and is sent again (`mode: "updated_in_place"`). A rejected invoice is corrected where its source allows changes: a corrected invoice is created, linked to the original (`mode: "new_invoice"`, `previousInvoiceId`). A submitted e-report is amended (`mode: "amended"`). Invoices that arrived through the API or an ERP cannot be edited in Clearvo (409 `SOURCE_LOCKED`): fix them in the source system and it resubmits. Issued e-invoices are never edited (409 `NOT_FIXABLE`). 422 `INVALID_FIELDS` lists `errors[]` (`INVALID_PATH`, `INVALID_VALUE`, `NOT_SUPPLIABLE`, `LOCKED_CHANNEL`); 503 `FIX_UNAVAILABLE` is retryable. `clear: [path, ...]` deletes a value from the corrected document (no null meaning; a path cannot also be in `fields`; a locked source refuses clearing an existing value; `changes[].mode` is then `clear`). `dryRun: true` checks first and changes nothing (`{ id, wouldSubmit }`); `confirmationToken` is the MCP check-first gate. API- and ERP-sourced invoices cannot be corrected or have values changed in Clearvo, but missing values can always be supplied and amending a reported ES SII registration is allowed from every source. `GET /v1/invoices/{id}` now carries a `resolution` block (`fix`, `canSupply`, `missingFields`, `canChangeValues`, `source`, `lockedReason`, `fixMode`, `editableDocument`, `editableFields`, `availableActions`).
+
+- SDK: `fixInvoice({ id, fields, clear?, dryRun?, confirmationToken?, entityId? })`; new types `FixInvoiceInput`, `FixInvoiceResponse`, `FixInvoiceMode`, `InvoiceResolution`, `InvoiceMissingField`; `InvoiceRecordTimestamps.resolution`.
+- MCP: new tool `fix_invoice` (same schema as the hosted connector).
+- CLI: new command `clearvo invoices fix <id> --field customer.address.country=DE [--field ...] [--clear <path> ...] [--dry-run] | --fields <json>`.
+
+## Unreleased — country coverage list (publish after backend PR 19145 is live)
+
+`GET /v1/coverage` is a public endpoint (no API key) that lists the countries and mandates covered, each with `country`, `name`, `mandate`, a customer-facing `status` (`live`, `beta`, `coming_soon`, `not_supported`, `no_mandate`) and `goLiveDate` (YYYY-MM-DD, or null when not confirmed). A country that is not listed has no confirmed status yet. A 503 with code `COVERAGE_UNAVAILABLE` is temporary and retryable.
+
+- SDK: `listCountryCoverage()`; new types `CountryCoverageEntry`, `CountryCoverageResponse`.
+- MCP: new read-only tool `list_country_coverage` (no input; same as the hosted connector).
+- CLI: `clearvo coverage [--pretty]`.
+
+## Unreleased — invoice attachments: list and download (publish after the backend invoice-attachments PR is live)
+
+Supporting files sent with an invoice (`attachments[]` on `POST /v1/send`) are stored outside the invoice and never embedded in the e-invoice XML or PDF; they reach the customer as downloads on the hosted invoice page. `GET /v1/invoices/{id}/attachments` lists them (reference, fileName, mimeType, sizeBytes, sha256, description, externalUrl, `downloadable`, `downloadUrl`, `origin`) and `GET /v1/invoices/{id}/attachments/{index}` returns a stored file byte for byte. Limits when sending: pdf, csv, xlsx, xls, ods, xml, png, jpg and txt (extension and `mimeType` must agree), 10 MB per file, 25 MB in total, 20 per invoice; a breach is a 422 naming the attachment.
+
+- SDK: `listInvoiceAttachments(id)` and `downloadInvoiceAttachment(id, index)` (returns `{ data: Buffer, fileName, mimeType }`; a backend error such as `ATTACHMENT_NOT_FOUND` or `AMBIGUOUS_REFERENCE` is thrown as a `ClearvoError`). New types `InvoiceAttachment`, `ListInvoiceAttachmentsResponse`, `DownloadedInvoiceAttachment`, `CustomerAttachment` (limits and 422 codes in its doc comment); `SubmitInvoiceInput.attachments`.
+- MCP: new read-only tool `list_invoice_attachments` (same schema as the hosted connector). There is no download tool: the file is binary.
+- CLI: `clearvo invoices attachments <id>` and `clearvo invoices download-attachment <id> <index> [--out <path>]`.
+
+## Unreleased — erase a customer's address data on request (publish after backend PR 18786 is live)
+
+`POST /v1/tax/address-erasure` removes the address lines and the customer display name (at `level: "full"` also the city) that a customer's committed calculations kept, on request. Name the calculation by `calculationId` or by the order `reference` (the merchantRef, or an idempotency key such as `woo-order-123`); credit notes pointing at it are included. Amounts, tax, jurisdiction, region, postal code and country are never changed, and repeating the call changes nothing. Street lines are otherwise kept for as long as the calculation needs them.
+
+- SDK: `eraseCustomerAddressData({ calculationId | reference, level? }, entityId?)`; new types `AddressErasureInput`, `AddressErasureResult`.
+- MCP: new tool `erase_customer_address_data`.
+- CLI: new command `clearvo calculations erase-address --id <calculationId> | --reference <ref> [--level street|full]`.
+
+## Unreleased — calculate requests carry every field the API accepts (publish after backend PR 18785 is live; rides the SDK 0.6.0, MCP 0.7.0, CLI 0.6.0 minor)
+
+The `calculate_tax` MCP tool and the SDK's `TaxCalculateRequest` described only part of `POST /v1/tax/calculate`: party addresses stopped at country, region and postal code, and a number of request fields could not be sent from a typed client or an AI agent.
+
+- SDK: new `TaxCalcAddressInput` (street `line1`, `line2`, `city`, `region`, `postalCode`, `country`) for `supplier` and `customer` billing and shipping addresses. `TaxCalculateRequest` gains `date`, `transactionDate`, `orderDate`, `shippedAt`, `fulfilledAt`, `taxReportingCurrency`, `merchantRef`, `paymentMethod`, `orderDiscount`, `isMarketplaceFacilitatedSale`, `transactionType`, `relatedCalculationId`, `externalOriginalReference` and `shippingMode`; each line gains `productCode`, `productDescription`, `taxCode`, `discount`, `discountAmount`, `statedTaxAmount`, `recoverablePercentOverride` and `screenSizeInches`. All optional, nothing removed.
+- MCP: the stdio server's `calculate_tax` and `quote_duties` input schema is now the same as the hosted connector's, so every field above, the customer shipping address, the document stage, per-line ship-from and the rest are visible to an agent. A street and city give a US address street-level rates; names, emails and phone numbers are not accepted by the API and are not added.
+- CLI: `clearvo calculate <file>` sends the file as the request body, so it accepts the new fields without a change.
+- Two new CI checks (`npm run test:calculate-sdk-parity`, `npm run test:calculate-parity --workspace packages/mcp`) fail when the SDK type or the MCP tool lacks a field of the published request in `openapi.json`, declares one it does not have, or keeps a stale deliberate omission. The omissions are the removed `clientTaxCode` and `stripeTaxCode` fields (the `seller` alias is gone from the API and from the SDK).
+
+## Unreleased — French receiving and buyer actions (publish after backend PR 18784 is live)
+
+`platformConnection` on `GET/POST /v1/fr/credentials` now also carries `receiving` (`not_applicable`, `unknown`, `active`, `pending`, `not_active`): whether the connected company can receive supplier invoices. `PATCH /v1/invoices/{id}/business-status` sends a decision on a French invoice received through the connection to the supplier's platform before the status changes (a reason is required to partially approve; suspending takes one of five reason codes), accepts `PAYMENT_RECEIVED` on a French invoice you issued through the connection, and answers `422` (`FR_PLATFORM_ACTIVATION_PENDING`, `FR_PLATFORM_NOT_CONNECTED`, `FR_PLATFORM_RECONNECT_REQUIRED`) when the connection is not usable. A reference that matches more than one document answers `409 AMBIGUOUS_REFERENCE` on `GET /v1/invoices/{id}` and on business-status: use the Clearvo id.
+
+- SDK: new type `FrPlatformReceiving`; `FrPlatformConnection.receiving`; `UpdateBusinessStatusInput.rejectionDetail` documents the French rules.
+- MCP: the `update_business_status` description covers the same.
+- CLI: `clearvo business-status` help text covers the same.
+
+## Unreleased — connect a French customer's company (publish after backend PR 18781 is live)
+
+`POST /v1/fr/platform-connect-link` returns the link a French customer opens to connect its company (a short secure sign-in, an identity check and an approval), so a partner without a dashboard can enable French e-invoicing for a customer. `GET/POST /v1/fr/credentials` now also carry `platformConnection` (`state`: `not_connected`, `pending_verification`, `active`, `needs_reconnect`, `failed`) and `siret` reports only a 14-digit SIRET.
+
+- SDK: `createFrPlatformConnectLink({ returnUrl, loginHint?, requestedCapability?, entityId? })`; new types `FrPlatformConnection`, `FrPlatformConnectState`, `FrPlatformCapability`, `CreateFrPlatformConnectLinkInput`, `FrPlatformConnectLinkResponse`; `FrCredentialsResponse.platformConnection`.
+- MCP: new tool `create_fr_platform_connect_link`.
+- CLI: `clearvo fr connect-link --return-url <url> [--login-hint <email>] [--capability send|receive|both] [--entity <id>]`.
+
+## Unreleased — received-invoice simulator covers 24 countries (publish after backend PR 18366 is live; SDK 0.6.0, MCP 0.7.0, CLI 0.6.0)
+
+`POST /v1/receive/simulate` (sandbox keys only) now creates sample received invoices for 24 countries instead of Germany and France only: AE, AT, AU, BE, CH, DE, DK, EE, FI, FR, HR, IE, IS, JP, LT, LU, LV, NL, NO, NZ, SE, SG, SI, SK. Each document is a realistic e-invoice in the country's own format (Factur-X for France, ZUGFeRD for Germany, Peppol BIS Billing 3.0 or PINT for the others) and the default currency is the country's own (EUR for euro countries; DKK, SEK, NOK, CHF, ISK, AUD, NZD, SGD, JPY, AED for the others; France accepts EUR only). `country` stays optional: it is the registration the documents are received under (a country the entity is established or VAT-registered in that has sample documents); 409 `COUNTRY_NOT_REGISTERED`, 409 `COUNTRY_NOT_ENABLED` or 400 `COUNTRY_REQUIRED` otherwise.
+
+- SDK: `SimulateReceivedInvoicesInput.country` is now `SimulationCountryCode` (the 24 codes); new exports `SIMULATION_COUNTRY_CODES` and `SimulationCountryCode`. Code that passed `'DE' | 'FR'` keeps compiling.
+- MCP: `simulate_received_invoices` country enum and description list all 24 countries, the formats, the country's own default currency and the new 409 errors.
+- CLI: `clearvo receive simulate --country` accepts any of the 24 codes; `--currency` help describes the per-country default.
+- A new check (`npm run test:simulation-countries`, run in CI) fails when the country list in the SDK, MCP server and CLI differs from the 24 above.
+
+Scenarios (same release): `POST /v1/receive/simulate` takes `scenario`, the shape of the document, so you can test your integration against more than the plain invoice. `standard` (default), `credit_note_for_existing` (refers to a real invoice you already simulated, or one created first), `warnings_only`, `needs_review_format` and `needs_review_business_rules` (stored for review, `invoice.received` still fires), `duplicate` (re-sent with a changed file, fires `invoice.duplicate`) and `duplicate_exact` (identical re-send, ignored), `with_references`, `with_payment_terms`, `with_attachment`, `with_discounts`, `many_lines`, `unicode_text` and `foreign_supplier`. A scenario a country's documents cannot carry is 400 `SCENARIO_NOT_AVAILABLE`; one that builds its own lines cannot be combined with `lines` or `totalAmount` (400 `INVALID_SCENARIO`).
+
+- SDK: `SimulateReceivedInvoicesInput.scenario` (`SimulationScenarioId`); new exports `SIMULATION_SCENARIOS` (id and description of each) and `SIMULATION_SCENARIO_IDS`.
+- MCP: `simulate_received_invoices` takes `scenario` and its description lists every scenario.
+- CLI: `clearvo receive simulate --scenario <id>`.
+- The same CI check now also fails when the scenario lists in the SDK, MCP server and CLI differ, or differ from the scenario enum in the published OpenAPI document.
+
+## Unreleased — find and de-duplicate entities by tax number (backend change deploys with the next release)
+
+`GET /v1/entities` takes an optional `taxNumber` filter (any spelling, at least 4 characters, otherwise 422 `INVALID_TAX_NUMBER_FILTER`) and every entity now also carries `taxNumber` beside `vatNumber`. `POST /v1/entities` answers 409 `DUPLICATE_ENTITY` with the existing `entityId` when an open entity in the same organisation already has the same country and tax number.
+
+- SDK: `listEntities({ taxNumber })` (new `ListEntitiesParams`), `Entity.taxNumber`, and `DuplicateEntityErrorBody` for the 409 (`ClearvoError.code === 'DUPLICATE_ENTITY'`, `body.entityId`).
+- CLI: `clearvo entities list --tax-number <taxNumber>`.
+- MCP: `list_entities` gains the optional `taxNumber` input; `create_entity` describes the 409.
+
 ## Unreleased — invoice status model consolidation (backend change deploys with the next release; breaking for readers of `clearanceStatus`)
 
 Every invoice now has one of ten `status` values plus `stage`, `reason`, `issues[]` and `customerResponse` (Taxually-Einvoicing `docs/features/status-model/mapping.md`). The old 24-value clearance status becomes the public `reason`; nothing stored changes. The backend keeps a deprecated `clearanceStatus` alias for one release; these packages no longer expose or read it.
@@ -12,6 +107,12 @@ Every invoice now has one of ten `status` values plus `stage`, `reason`, `issues
 - MCP: `submit_invoice`, `poll_status`, `get_invoice`, `list_invoices`, webhook and test tool descriptions use the new model; `list_invoices` gains the `reason` and `businessStatus` filters and a `status` enum of the ten statuses; `isError` on `submit_invoice` follows the new rule.
 - CLI: `clearvo send` exits 1 for `REJECTED` or `WAITING_FOR_YOU` (`NEEDS_INFO`, `UNROUTABLE`); new `clearvo invoices list` with `--status`, `--reason` and `--customer-response`.
 - `scripts/generate-from-openapi.mjs` now reads `InvoiceStatus`, `InvoiceStage` and `InvoiceReason` from the public OpenAPI file; regenerate once the marketing repo publishes them.
+
+## Unreleased — credit notes wait for their original invoice (backend change deploys with the next release; backend PR 18648)
+
+- A credit note whose stored original is not yet submittable (reasons NEEDS_INFO, UNROUTABLE, UNDELIVERED, PENDING, RECEIVED, HELD_UNMAPPED_TAX_CODE, HELD_PLATFORM_FAULT, AWAITING_RELEASE) is stored and held: `status` WAITING_FOR_PLATFORM, `reason` `HELD_AWAITING_ORIGINAL`, errorCode `CREDIT_NOTE_AWAITING_ORIGINAL`. Message: "Held until invoice <number> is accepted. Nothing to do on this credit note: it is sent automatically once the original is fixed." It is sent once the original is accepted, delivered or accumulated, and refused if the original ends rejected. Debit notes do not wait.
+- The send answer and the invoice status response carry `originalInvoiceId` for a credit note held for or linked to its original.
+- SDK: `InvoiceReason` and `INVOICE_REASONS` gain `HELD_AWAITING_ORIGINAL` (generated from the OpenAPI document); `SendResult.originalInvoiceId` and `InvoiceStatusResponse.originalInvoiceId`. MCP: `submit_invoice` and `poll_status` descriptions list the new hold under WAITING_FOR_PLATFORM. CLI: no change.
 
 ## Unreleased — bank accounts have an explicit default (backend change deploys with the next release)
 
