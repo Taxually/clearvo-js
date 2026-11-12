@@ -294,13 +294,6 @@ export type { InvoiceStatus, InvoiceStage, InvoiceReason } from './generated/ope
 export { INVOICE_STATUSES, INVOICE_STAGES, INVOICE_REASONS } from './generated/openapi-tax-code-contract.js';
 import type { InvoiceStatus, InvoiceStage, InvoiceReason } from './generated/openapi-tax-code-contract.js';
 
-/**
- * Old reason names the API still accepts as filter input for one release; both mean SETUP_NEEDED (the cause is in errorCode:
- * TAX_CODE_UNMAPPED or OBLIGATION_DISABLED). Never returned. Use SETUP_NEEDED.
- * @deprecated
- */
-export type DeprecatedInvoiceReasonAlias = 'HELD_UNMAPPED_TAX_CODE' | 'OBLIGATION_DISABLED';
-
 /** A problem the authority or the platform reported on an invoice that was otherwise taken (for example Spain SII "accepted with errors"). */
 export interface Issue {
   severity: 'warning' | 'error';
@@ -906,8 +899,8 @@ export interface ListInvoicesParams {
   country?: string;
   /** One of the ten statuses ({@link InvoiceStatus}). */
   status?: InvoiceStatus;
-  /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. HELD_UNMAPPED_TAX_CODE and OBLIGATION_DISABLED are deprecated aliases of SETUP_NEEDED (accepted for one release, never returned). */
-  reason?: InvoiceReason | DeprecatedInvoiceReasonAlias;
+  /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. */
+  reason?: InvoiceReason;
   /** Filter on the buyer's decision: in_review, approved, partially_approved, disputed or refused. A regime's own native code (for example PAYMENT_SENT) is also accepted. */
   businessStatus?: CustomerResponseStatus | (string & {});
   /** ISO 8601 timestamp — only invoices whose Clearvo-side created_at is strictly after this. A monotonic ingestion cursor, distinct from issueDate; most relevant for Mexico CFDIs given SAT's own multi-day publishing lag. */
@@ -2369,7 +2362,7 @@ export interface Webhook {
   url: string;
   events: string[];
   /** Only for `invoice.status_changed`: the statuses delivered. Empty means every status change. */
-  statuses?: Array<InvoiceStatus | InvoiceReason | DeprecatedInvoiceReasonAlias>;
+  statuses?: Array<InvoiceStatus | InvoiceReason>;
   entityId: string | null;
   active: boolean;
   createdAt: string;
@@ -2383,7 +2376,7 @@ export interface CreateWebhookInput {
    */
   events?: WebhookEventName[] | string[];
   /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
-  statuses?: Array<InvoiceStatus | InvoiceReason | DeprecatedInvoiceReasonAlias>;
+  statuses?: Array<InvoiceStatus | InvoiceReason>;
 }
 
 export interface CreateWebhookResponse extends Webhook {
@@ -2400,7 +2393,7 @@ export interface TestWebhookInput {
   /** Event to simulate (default 'invoice.received'): invoice.received, .accepted, .rejected, .duplicate, .undelivered, .pending, .business_status_changed or .status_changed. */
   event?: string;
   /** Only with event `invoice.status_changed`: the new status the sample reports (default: the invoice's own status, else ACCEPTED). */
-  to?: InvoiceStatus | InvoiceReason | DeprecatedInvoiceReasonAlias;
+  to?: InvoiceStatus | InvoiceReason;
   /** Build the payload from one of your own invoices instead of sample values. */
   invoiceId?: string;
 }
