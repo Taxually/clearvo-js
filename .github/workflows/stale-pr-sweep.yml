@@ -1,0 +1,51 @@
+name: Daily sweep of dependent PRs
+
+# merge-dependents.sh runs once per backend release and gives up quietly. This sweep runs daily: for every open PR
+# with `Depends-on-backend: <ADO PR id>` it checks Azure DevOps, retries the merge when the backend PR is live,
+# and alerts Slack (once per state change, reminder after 7 days) when a PR cannot merge, names a wrong id, or is an
+# old draft nobody tracks. Needs the repository secret ADO_READ_PAT (Azure DevOps PAT, scopes Code: Read and
+# Build: Read); without it only the GitHub-only checks run. Manual run: Actions -> Run workflow (dry_run).
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only log what would happen (no merges, comments or Slack)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+  actions: write
+
+concurrency:
+  group: backend-release-merge
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sweep dependent PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ADO_READ_PAT: ${{ secrets.ADO_READ_PAT }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_AUTOFIX_WEBHOOK_URL }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          LABEL: SDK, MCP and CLI
+          DEPLOY_CHECK: none
+        run: python3 .github/scripts/sweep-stale-prs.py
+
+      # Merges made with GITHUB_TOKEN do not trigger the push-based publish workflow; it skips versions already on npm.
+      - name: Publish to npm
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish.yml --ref main
