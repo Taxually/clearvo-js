@@ -164,6 +164,30 @@ const TEST_DISCLAIMER =
 
 const MAX_EXEMPTION_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
+// Entity logos: same limits the public API enforces (2 MB; PNG, JPEG or WEBP between 32x32 and 2000x2000 px).
+// The magic-byte check here is a fast client-side failure; the API still checks the dimensions.
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+const LOGO_MAGIC_BYTES: Record<string, number[]> = {
+  'image/png': [0x89, 0x50, 0x4e, 0x47],
+  'image/jpeg': [0xff, 0xd8, 0xff],
+};
+function matchesLogoContentType(buffer: Buffer, contentType: string): boolean {
+  if (contentType === 'image/webp') {
+    return buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
+  }
+  const expected = LOGO_MAGIC_BYTES[contentType];
+  return !!expected && expected.every((b, i) => buffer[i] === b);
+}
+
+// The hosted MCP connector gates these tools behind a dryRun + confirmationToken step; here the
+// public API's own dryRun is passed straight through and the token is not needed.
+const CHECK_FIRST_STDIO_PROPERTIES = {
+  dryRun: { type: 'boolean', description: 'Check this request without changing anything: runs the same checks as the live call and answers with what would happen.' },
+  confirmationToken: { type: 'string', description: 'Hosted MCP only: the confirmationToken returned by the dryRun of this exact request. Not needed here.' },
+} as const;
+const CHECK_FIRST_STDIO_DESCRIPTION =
+  ' Check first: call it with dryRun true, show the user what would happen, and only after they explicitly say yes call again without dryRun.';
+
 // Bulk CSV ingestion — matches the hosted MCP connector's own client-side pre-check against
 // POST /v1/send/bulk's synchronous ceiling (Taxually-Einvoicing lib/mcp/tools.ts). The public API
 // used to split sync/async across two endpoints (/send/bulk vs /send/bulk-async); that split was
@@ -1045,6 +1069,413 @@ const TOOLS = [
         id: { type: 'string', description: 'The invoice ID — from submit_invoice, list_invoices or get_invoice.' },
         dryRun: { type: 'boolean', description: 'Check this request without sending anything: answers with the one field change (customer.taxId, before and after) that would be made.' },
         confirmationToken: { type: 'string', description: 'Hosted MCP only: the confirmationToken returned by the dryRun of this exact request. Not needed here.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'list_tax_categories',
+    description:
+      'List the product tax categories (slugs) a calculation accepts as taxCategory, grouped for browsing: slug, name, ' +
+      'group, groupLabel, placeOfSupplyRule, applicability, active, replacedBy. Use this before mapping a product list or ' +
+      'a commodity code scheme (UNSPSC, HS) to categories, so you pick from what exists rather than guess a slug. ' +
+      'Retired categories are hidden unless includeDeprecated is true (then active=false with replacedBy naming the successor). ' +
+      'Categories with supported=false are not calculated and cannot be mapped to.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        includeDeprecated: { type: 'boolean', description: 'Also return retired categories (active=false).' },
+      },
+    },
+  },
+  {
+    name: 'get_usage',
+    description:
+      'Read billable tax-calculation usage against the plan allowance for the current billing period: plan ' +
+      '(free, filings, starter, growth or enterprise; included is null where the plan has no allowance to meter), ' +
+      'billing status, period start/end, transactions used, transactions included, remaining, percentUsed, ' +
+      'overage (transactions beyond the allowance) and overageUsd (price per extra transaction). Only committed ' +
+      'live calculations count; previews (commit:false) and sandbox calls do not. Counts come from an hourly ' +
+      'ledger and can trail live traffic by up to an hour (see updatedAt). Calculations are never blocked at the ' +
+      'allowance. While inTrial is true nothing is charged. jurisdictions { active, countedTowardLimit, max }: ' +
+      'active is how many jurisdictions are charged now across the organisation, countedTowardLimit is how many have collections on ' +
+      '(a future start date included) against the self-serve limit, and max is that limit (null where the plan has no limit). ' +
+      'Turning collections on past the limit needs a conversation with sales.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'upload_entity_logo',
+    description:
+      'Upload (or replace) a business entity\'s own logo, rendered on the buyer-facing invoice-notification ' +
+      'email, the hosted invoice-view page, and the downloadable invoice PDF, in place of the platform\'s ' +
+      'own logo. Accepts PNG, JPEG, or WEBP, up to 2 MB, between 32x32 and 2000x2000 pixels. Stored in private storage and served back only ' +
+      'through the app-mediated logo URL returned by get_entity/list_entities — never a raw storage URL.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'The entity ID to set the logo for (from list_entities or create_entity) — always required, including for entity-scoped keys, since this uploads to that specific entity.' },
+        imageBase64: { type: 'string', description: 'Base64-encoded image file content — no surrounding data: URI prefix or whitespace.' },
+        contentType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp'], description: 'The image\'s actual MIME type — must match imageBase64\'s real file signature, or the upload is rejected.' },
+      },
+      required: ['entityId', 'imageBase64', 'contentType'],
+    },
+  },
+  {
+    name: 'remove_entity_logo',
+    description: 'Removes a business entity\'s uploaded logo. The buyer-facing invoice email, hosted invoice-view page, and downloadable PDF fall back to the platform\'s own logo afterwards.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'The entity ID to remove the logo from (from list_entities or create_entity).' },
+      },
+      required: ['entityId'],
+    },
+  },
+  {
+    name: 'poll_ro_inbound',
+    description:
+      'Manually trigger a Romania inbound poll for this entity: fetch the invoices ANAF e-Factura has delivered to ' +
+      'the entity\'s CUI (received "FACTURA PRIMITA" messages, last 60 days at most) and store each as a purchase ' +
+      'invoice in your inbox. Only ever needed if you don\'t want to wait for the automatic every-5-minute poll. ' +
+      'Requires the entity\'s ANAF access token and CUI to be saved already. Returns a per-run report: newInvoices, ' +
+      'messagesSeen, errors, rateLimited (ANAF quota reached; retried next run), tokenRejected (ANAF refused the ' +
+      'saved token: save a new one) and watermarkAdvanced (false means this run had an error and the same window is ' +
+      're-read next time). Uses the entity\'s sandbox or live ANAF token to match the API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'trigger_br_poll',
+    description:
+      'Manually trigger a Brazil poll cycle for this entity, outside the normal hourly schedule. ' +
+      'Rate-limited to once per 60 minutes per entity, and further gated on a shared rate budget for this ' +
+      'certificate\'s CNPJ root — a recent rate-limit response, or an automatic hold after repeated ones, returns ' +
+      'a 429 with a retry time. documentFamily picks which surface to poll: "nfe" (goods, Distribuição DFe/SEFAZ — ' +
+      'the default) or "nfse" (services, the national ADN) — each has its own cooldown and rate budget, so polling ' +
+      'one never counts against the other. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to poll. Required for account-scoped keys; omit for entity-scoped keys.' },
+        documentFamily: { type: 'string', enum: ['nfe', 'nfse'], description: 'Which surface to poll — "nfe" (goods, default) or "nfse" (services, the national ADN).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'update_invoice_business_status',
+    description:
+      'Record a customer-lifecycle ("business status") decision on an invoice you RECEIVED (inbound) from a ' +
+      'supplier. Same operation as update_business_status. Only valid for a received invoice; an invoice you issued has its business status synced ' +
+      'automatically once your customer acts on their own side, so this tool refuses it with a 400 (the one exception: ' +
+      'for a French invoice you issued through the connected e-invoicing platform you can record PAYMENT_RECEIVED once ' +
+      'your customer has paid). Only ' +
+      'countries with a registered business-status regime support this (today: FR, DE, BR) — every other ' +
+      'country refuses with a 400. Each regime has its own native status vocabulary and next-step rules — ' +
+      'call get_invoice first and use its businessStatusActions (the legal next steps from the invoice\'s ' +
+      'current status, with any required detail/message shape); an invalid transition is refused with a 409 ' +
+      'naming the valid next values. For a French invoice received over the network, a 422 ' +
+      '(FR_PLATFORM_ACTIVATION_PENDING) means the France platform isn\'t active yet for this entity (status ' +
+      'unchanged); an uploaded or simulated invoice\'s status is kept in your account only. rejectionDetail carries a status-specific detail/justification when ' +
+      'businessStatusActions says one is required — either { reason, message? } or a bare string. Returns the ' +
+      'new businessStatus plus customerResponse ({ status: in_review, approved, partially_approved, disputed or refused, ' +
+      'native, label, at }: a regime-neutral summary of it).' + CHECK_FIRST_STDIO_DESCRIPTION,
+    inputSchema: {
+      type: 'object' as const,
+      required: ['id', 'status'],
+      properties: {
+        ...CHECK_FIRST_STDIO_PROPERTIES,
+        id: { type: 'string', description: 'Clearvo invoice ID or authority reference ID' },
+        status: {
+          type: 'string',
+          enum: ['IN_HAND', 'APPROVED', 'PARTIALLY_APPROVED', 'DISPUTED', 'SUSPENDED', 'REFUSED', 'COMPLETED', 'PAYMENT_SENT', 'PAYMENT_RECEIVED', 'CIENCIA', 'CONFIRMACAO', 'OPERACAO_NAO_REALIZADA', 'DESCONHECIMENTO'],
+          description: 'The next business-lifecycle status, in the invoice\'s OWN regime vocabulary (get_invoice\'s businessStatusActions lists the values actually available for this invoice right now).',
+        },
+        rejectionDetail: {
+          description: 'A status-specific detail/justification, when get_invoice\'s businessStatusActions says one is required for this status. Either an object { reason, message? } or a bare string reason.',
+        },
+        entityId: { type: 'string', description: 'Entity that owns the invoice. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'update_test_case',
+    description:
+      'Change one of your own tests: send only the fields to change. Earlier runs keep what they ran. Standard tests cannot be changed (403 CASE_NOT_EDITABLE).' + TEST_DISCLAIMER,
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        caseId: { type: 'string', description: 'The test id (from list_test_cases)' },
+        title: { type: 'string', description: 'A short name for the test' },
+        steps: { type: 'array', items: { type: 'string' }, description: 'What to do, one step per item' },
+        expected: { type: 'string', description: 'What should happen when the steps are done' },
+        description: { type: 'string', description: 'Optional extra detail' },
+        check: { type: 'object', description: 'Optional check the platform runs: { kind, params } as listed by get_test_case_catalogue' },
+        appliesWhen: { type: 'object', description: 'Optional: { direction?: "any" | "sale" | "purchase", countries?: string[] }' },
+      },
+      required: ['caseId'],
+    },
+  },
+  {
+    name: 'update_rule_property_definition',
+    description: 'Edit a custom property definition\'s label, or deprecate/reactivate it. `propertyKey` and `dataType` are immutable once created and cannot be changed here. `deprecate: true` stops it being offered for NEW rule conditions/actions (list_rule_property_definitions excludes it by default) but never affects any EXISTING rule or calc request already referencing it — deprecation is purely a write-time/listing-time concept. `deprecate: false` reactivates it (clears the deprecation). Scoped to a definition you own.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string' },
+        label: { type: 'string' },
+        deprecate: { type: 'boolean', description: 'true deprecates, false reactivates. Omit to leave deprecation status unchanged.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'confirm_reporting_batch',
+    description:
+      'Confirm a reporting batch for submission (any batching regime) — works once the batch is already ' +
+      '\'closed\' or frozen \'ready_for_review\'; a still-\'open\' batch 409s BATCH_STILL_OPEN (see below). ' +
+      'Call list_reporting_batches with this id first ' +
+      'to read its current snapshotVersion, the optimistic-concurrency token this confirm is staked against: a ' +
+      'mismatch means the batch changed since you last looked (a new record joined, or another confirm/exclude ' +
+      'already acted on it) and returns 409 BATCH_STALE with the batch\'s real currentSnapshotVersion — re-fetch ' +
+      'and retry with that value rather than guessing. 409 ALREADY_SUBMITTED means a concurrent confirm, or the ' +
+      'automatic batch_auto sweep, already has this batch in flight. 409 BATCH_STILL_OPEN means the batch is ' +
+      'still accumulating — it can only be submitted once its own period has ended (there is no separate ' +
+      'fixed waiting window on top of that any more, it\'s available the moment the period closes); read the ' +
+      'batch at any time via GET, this only gates the write. A transaction landing after confirm on an ' +
+      'already-closed batch bumps its snapshotVersion, so a stale in-flight confirm attempt 409s BATCH_STALE ' +
+      'instead of silently omitting it. 409 TRANSMISSION_NOT_LIVE means the batch was confirmed but belongs to a mock-tier ' +
+      'mandate whose dispatch channel is not yet live outside sandbox — the batch stays confirmed and unlocked, ' +
+      'and is handed off automatically once that channel goes live; nothing to retry here either. Requires a ' +
+      'write-scoped API key — a read-only key gets 403.' + CHECK_FIRST_STDIO_DESCRIPTION,
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ...CHECK_FIRST_STDIO_PROPERTIES,
+        id: { type: 'string', description: 'The reporting batch ID (a UUID) — from list_reporting_batches.' },
+        snapshotVersion: { type: 'integer', description: 'The batch\'s current snapshotVersion — read it off list_reporting_batches (pass this id) immediately before confirming. Required: this is the optimistic-concurrency token the confirm is staked against.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'snapshotVersion'],
+    },
+  },
+  {
+    name: 'exclude_reporting_batch_item',
+    description:
+      'Exclude one item from a reporting batch before it is confirmed — Spain SII and France e-reporting. For SII the record is moved into ' +
+      'this entity\'s next open batch; for France e-reporting it is marked excluded from this batch (nothing to move into). A regime that ' +
+      'has neither path rejects a transactionId exclusion with 400 EXCLUDE_UNSUPPORTED_FOR_REGIME. Pass EXACTLY ONE of ' +
+      'transactionId (a records[].id from list_reporting_batches) or communicationId (a pending A1/Baja ledger communication id, from ' +
+      'amend_sii_report/cancel_sii_report — simply left out of this batch\'s envelope; it has no next batch to ' +
+      'rejoin). Giving neither returns 400 EXCLUDE_TARGET_REQUIRED; giving both returns 400 ' +
+      'EXCLUDE_TARGET_AMBIGUOUS. reason is always required and is written to the audit trail. 409 ' +
+      'EXCLUDE_WOULD_EMPTY_BATCH if this is the batch\'s last record — an empty batch can never be submitted; ' +
+      'leave the batch unconfirmed instead. 409 BATCH_OPEN (transactionId only) if the batch has not closed yet, ' +
+      'so there is no other batch to move the record into. 409 ALREADY_SUBMITTED / BATCH_LOCKED once the batch ' +
+      'has been confirmed or already submitted. Requires a write-scoped API key — a read-only key gets 403.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The reporting batch ID (a UUID) — from list_reporting_batches.' },
+        transactionId: { type: 'string', description: 'A records[].id from list_reporting_batches to exclude and move into this entity\'s next open batch. Exactly one of transactionId/communicationId is required.' },
+        communicationId: { type: 'string', description: 'A pending A1/Baja ledger communication id (from amend_sii_report/cancel_sii_report) to exclude from this batch\'s envelope. Exactly one of transactionId/communicationId is required.' },
+        reason: { type: 'string', description: 'Required — why this item is being excluded. Written to the audit trail.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id', 'reason'],
+    },
+  },
+  {
+    name: 'receive_invoice_document',
+    description:
+      'Submit a received (inbound) invoice document — a hybrid e-invoice PDF (such as ZUGFeRD or Factur-X) or bare CII/UBL XML — on this entity\'s ' +
+      'behalf, for a supplier document that arrived outside Clearvo (email, a portal download, ...). The document is ' +
+      'received under one of the entity\'s tax registrations (Germany and France today): country is optional and may be any country the ' +
+      'entity is established or VAT-registered in; a country it has no registration in returns 409 COUNTRY_NOT_REGISTERED, a country without ' +
+      'inbound receiving 409 COUNTRY_NOT_ENABLED, and several candidates with no country sent 400 COUNTRY_REQUIRED. Always returns 200 for a successfully ' +
+      'intaken document, conformant or not — check validationOutcome for the real result: E_INVOICE / ' +
+      'E_INVOICE_WITH_FLAGS is a legally-sufficient e-invoice; FORMAT_ERROR / PROFILE_NOT_SUFFICIENT / ' +
+      'NOT_AN_EINVOICE still land the document (reason RECEIVED_NEEDS_REVIEW) but flag it for ' +
+      'manual review — this is never a reason to retry. A repeat call with byte-identical content returns ' +
+      'the same id with duplicate:true rather than storing a second copy.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        documentBase64: { type: 'string', description: 'Base64-encoded PDF or XML bytes of the received document — no data: URI prefix.' },
+        fileName: { type: 'string', description: 'Optional original filename (helps transport-level type detection — e.g. "invoice.pdf").' },
+        contentType: { type: 'string', description: 'Optional declared MIME type, e.g. "application/pdf" or "application/xml".' },
+        country: { type: 'string', description: 'Optional ISO country code of the registration the document is received under (the entity must be established or VAT-registered there). Defaults to the establishment country, else the single supported registration country.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['documentBase64'],
+    },
+  },
+  {
+    name: 'get_inbound_batch',
+    description:
+      'Poll one async inbound bulk-receive batch (created via POST /v1/receive/bulk — a .zip archive or ' +
+      'several documents received from suppliers at once). Returns status (UPLOADED/VALIDATING/COMPLETED/' +
+      'FAILED/CANCELLED), total, outcomeCounts (ACCEPTED/NEEDS_REVIEW/DUPLICATE/ERRORED/' +
+      'COUNTRY_NOT_ENABLED/COUNTRY_REQUIRED counts), and a human-readable summary. 404 means no such batch, or it belongs to ' +
+      'a different entity than this key is scoped to.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by the bulk inbound-receive upload.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'get_inbound_email_address',
+    description:
+      'Get this entity\'s DE inbound forwarding email address — ask suppliers to send (or forward) their ' +
+      'invoices there and Clearvo ingests them automatically through the same pipeline as ' +
+      'receive_invoice_document. Read-only: address is null until one has been issued from the dashboard ' +
+      '(Country Setup → Germany) — this tool cannot issue or regenerate one.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'set_customer_invoice_format',
+    description:
+      'Set (or clear) a per-customer default DE invoice format override — ZUGFERD, XRECHNUNG or PEPPOL — applied ' +
+      'whenever a POST /v1/send to this customer omits its own countrySpecific.de.invoiceFormat. Most-' +
+      'specific-wins resolution order: the request\'s own override, then this per-customer default, then ' +
+      'the entity default, then the platform default (ZUGFERD). Pass null to clear the override and fall ' +
+      'through to the entity/platform default.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        customerId: { type: 'string', description: 'The customer id (from list_customers/create_customer).' },
+        invoiceFormat: { type: ['string', 'null'], enum: ['ZUGFERD', 'XRECHNUNG', 'PEPPOL', null], description: 'The new default (ZUGFERD, XRECHNUNG or PEPPOL), or null to clear the customer-level override.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['customerId', 'invoiceFormat'],
+    },
+  },
+  {
+    name: 'get_bulk_upload_columns',
+    description:
+      'The CSV columns accepted by submit_invoices_bulk (POST /v1/send/bulk): for each column its canonical header, aliases, type, allowed values, whether it is required, and where the value lands on the invoice; plus the required-one-of header groups, the default tax code, the accepted delimiters and the input fields that have no column. Read this before building a CSV.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'list_bulk_upload_rows',
+    description:
+      'Paginated per-invoice results of one bulk upload batch, in the same shape submit_invoices_bulk returns inline: rowNumber (the ' +
+      'invoice\'s first row in the file), outcome (ACCEPTED/ACCUMULATED/NEEDS_INFO/HELD/NO_OBLIGATION/SKIPPED_DUPLICATE/ERRORED, or ' +
+      'READY_TO_SEND/SKIPPED/VOIDED for a reviewed upload), invoiceNumber, recordId, mandate, status, reason, deadlineAt,' +
+      'errorCode/errorMessage and warnings. Filter by outcome to see only the rows that need attention. Rows appear as the batch is ' +
+      'processed; call get_bulk_upload_status first to see progress.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The batch id returned by submit_invoices_bulk or submit_invoices_bulk_async.' },
+        outcome: { type: 'string', enum: ['ACCEPTED', 'ACCUMULATED', 'NEEDS_INFO', 'HELD', 'NO_OBLIGATION', 'SKIPPED_DUPLICATE', 'ERRORED', 'READY_TO_SEND', 'SKIPPED', 'VOIDED'], description: 'Only rows with this outcome.' },
+        status: { type: 'string', description: 'Only rows whose record has this clearance status.' },
+        page: { type: 'number', description: 'Page number, 1-based (default 1)' },
+        limit: { type: 'number', description: 'Results per page (default 50, max 500)' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'confirm_bulk_upload',
+    description:
+      'Confirm a CSV upload that was held for review (reviewState "awaiting_review"): every invoice waiting to be sent is released ' +
+      '(sent to the authority or network, or handed to the buyer, as its country requires). Read get_bulk_upload_status first and pass its ' +
+      'snapshotVersion: a mismatch means the upload changed since (a row was left out, or another confirm already won) and returns 409 ' +
+      'BATCH_STALE with the current snapshotVersion; re-read and retry. 409 NOT_AWAITING_REVIEW means it was already confirmed or voided. ' +
+      'Sending runs in the background in document-date and file order: poll get_bulk_upload_status until reviewState is "released" (or subscribe ' +
+      'to the bulk_upload.released webhook). A document whose statutory window has passed, or a credit note whose original was not sent, is ' +
+      'not sent: it comes back NEEDS_INFO. Requires a write-scoped API key; a read-only key gets 403.' + CHECK_FIRST_STDIO_DESCRIPTION,
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ...CHECK_FIRST_STDIO_PROPERTIES,
+        batchId: { type: 'string', description: 'The upload (batch) id.' },
+        snapshotVersion: { type: 'integer', description: 'The upload\'s current snapshotVersion, from get_bulk_upload_status. Required.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId', 'snapshotVersion'],
+    },
+  },
+  {
+    name: 'discard_bulk_upload',
+    description:
+      'Void a CSV upload held for review that has not been confirmed: every waiting invoice becomes VOIDED (never sent, its invoice ' +
+      'number is free again) and the same file can be uploaded again as a new upload. 409 NOT_AWAITING_REVIEW if it was already confirmed or ' +
+      'voided. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The upload (batch) id.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'exclude_bulk_upload_row',
+    description:
+      'Leave one invoice out of a CSV upload held for review, before it is confirmed (all lines of that invoice; its record becomes VOIDED). ' +
+      'Returns the upload\'s new snapshotVersion to confirm with. 409 ROW_NOT_WAITING if the row is not waiting to be sent, 409 NOT_AWAITING_REVIEW ' +
+      'if the upload was already confirmed or voided. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        batchId: { type: 'string', description: 'The upload (batch) id.' },
+        rowNumber: { type: 'integer', description: 'The row number in the file (header excluded) of any line of the invoice to leave out.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId', 'rowNumber'],
+    },
+  },
+  {
+    name: 'retry_bulk_upload',
+    description:
+      'Retry a confirmed CSV upload whose release stopped on some invoices (outcome HELD with a RELEASE_* code, for example after the authority ' +
+      'refused an earlier invoice of the same sequence, or a send did not finish): they are put back in line and sent again. 409 NOTHING_TO_RETRY ' +
+      'when none were stopped, 409 NOT_RELEASED when the upload has not finished its release. Requires a write-scoped API key.' + CHECK_FIRST_STDIO_DESCRIPTION,
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ...CHECK_FIRST_STDIO_PROPERTIES,
+        batchId: { type: 'string', description: 'The upload (batch) id.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['batchId'],
+    },
+  },
+  {
+    name: 'revoke_invoice_hosted_page',
+    description:
+      'Revoke every hosted-page link of one invoice (the customer link in the email the customer received, any link shown in get_invoice hostedPage.url, and dashboard staff links). ' +
+      'The page then shows "this link has been revoked" with no way to request a new one, and hostedPage.url becomes null. ' +
+      'The invoice itself is untouched. To give the customer a fresh link afterwards, send the notification again from the dashboard or the API (POST /v1/invoices/{id}/resend-notification). ' +
+      'Revoking again is harmless (revoked: 0). 404 if unknown. Requires a write-scoped API key.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice id or referenceId (from list_invoices or get_invoice).' },
         entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
       },
       required: ['id'],
@@ -4502,6 +4933,139 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'retry_invoice_with_master_data': {
       const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_tax_categories': {
+      const { includeDeprecated } = args as { includeDeprecated?: boolean };
+      return callApi('GET', `/tax/categories${includeDeprecated ? '?include=deprecated' : ''}`);
+    }
+
+    case 'get_usage':
+      return callApi('GET', '/usage');
+
+    case 'upload_entity_logo': {
+      const { entityId, imageBase64, contentType } = args as { entityId: string; imageBase64: string; contentType: string };
+      const buffer = Buffer.from(imageBase64, 'base64');
+      if (buffer.length > MAX_LOGO_BYTES) {
+        throw new Error(`imageBase64 decodes to ${buffer.length} bytes, exceeding the ${MAX_LOGO_BYTES / (1024 * 1024)}MB limit for entity logos.`);
+      }
+      if (contentType !== 'image/png' && contentType !== 'image/jpeg' && contentType !== 'image/webp') {
+        throw new Error('contentType must be one of image/png, image/jpeg, image/webp.');
+      }
+      // Buffer.from(..., 'base64') is lenient: malformed input is silently skipped, which would otherwise
+      // upload a garbage file. Check the magic bytes so a bad payload fails here with a clear message.
+      if (!matchesLogoContentType(buffer, contentType)) {
+        throw new Error(`imageBase64 does not decode to a valid ${contentType} file (magic-byte check failed). Check the value is base64-encoded image file content with no surrounding data: URI prefix or whitespace.`);
+      }
+      const formData = new FormData();
+      formData.append('file', new Blob([buffer], { type: contentType }), `logo.${contentType.split('/')[1]}`);
+      return callApi('POST', `/entities/${encodeURIComponent(entityId)}/logo`, formData);
+    }
+
+    case 'remove_entity_logo': {
+      const { entityId } = args as { entityId: string };
+      return callApi('DELETE', `/entities/${encodeURIComponent(entityId)}/logo`);
+    }
+
+    case 'poll_ro_inbound': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('POST', '/ro/inbound/poll', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'trigger_br_poll': {
+      const { entityId, documentFamily } = args as { entityId?: string; documentFamily?: string };
+      const path = documentFamily === 'nfse' ? '/br/nfse/inbound/poll' : '/br/inbound/poll';
+      return callApi('POST', path, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_invoice_business_status': {
+      const { id, entityId, ...body } = args as { id: string; entityId?: string } & Record<string, unknown>;
+      return callApi('PATCH', `/invoices/${encodeURIComponent(id)}/business-status`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'update_test_case': {
+      const { caseId, ...body } = args as { caseId: string } & Record<string, unknown>;
+      return callApi('PATCH', `/test-cases/${encodeURIComponent(caseId)}`, body);
+    }
+
+    case 'update_rule_property_definition': {
+      const { id, entityId, ...body } = args as Record<string, unknown> & { id: string; entityId?: string };
+      return callApi('PATCH', `/rules-engine/properties/${encodeURIComponent(id)}`, body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'confirm_reporting_batch': {
+      const { id, snapshotVersion, entityId, dryRun, confirmationToken } = args as { id: string; snapshotVersion?: number; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/reporting-batches/${encodeURIComponent(id)}/confirm`, { snapshotVersion, ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'exclude_reporting_batch_item': {
+      const { id, transactionId, communicationId, reason, entityId } = args as {
+        id: string; transactionId?: string; communicationId?: string; reason?: string; entityId?: string;
+      };
+      return callApi('POST', `/reporting-batches/${encodeURIComponent(id)}/exclude`, { transactionId, communicationId, reason }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'receive_invoice_document': {
+      const { documentBase64, fileName, contentType, country, entityId } = args as {
+        documentBase64: string; fileName?: string; contentType?: string; country?: string; entityId?: string;
+      };
+      return callApi('POST', '/receive', { fileBase64: documentBase64, fileName, contentType, country }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_inbound_batch': {
+      const { batchId, entityId } = args as { batchId: string; entityId?: string };
+      return callApi('GET', `/receive/bulk/${encodeURIComponent(batchId)}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_inbound_email_address': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/de/inbound-address', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'set_customer_invoice_format': {
+      const { customerId, invoiceFormat, entityId } = args as { customerId: string; invoiceFormat: string | null; entityId?: string };
+      return callApi('PATCH', `/customers/${encodeURIComponent(customerId)}`, { countrySpecific: { de: { invoiceFormat } } }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_bulk_upload_columns': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/send/bulk/columns', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'list_bulk_upload_rows': {
+      const { batchId, outcome, status, page, limit, entityId } = args as { batchId: string; outcome?: string; status?: string; page?: number; limit?: number; entityId?: string };
+      const q = new URLSearchParams();
+      if (outcome) q.set('outcome', outcome);
+      if (status) q.set('status', status);
+      if (page != null) q.set('page', String(page));
+      if (limit != null) q.set('limit', String(limit));
+      const qs = q.toString();
+      return callApi('GET', `/send/bulk/${encodeURIComponent(batchId)}/rows${qs ? `?${qs}` : ''}`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'confirm_bulk_upload': {
+      const { batchId, snapshotVersion, entityId, dryRun, confirmationToken } = args as { batchId: string; snapshotVersion?: number; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/send/bulk/${encodeURIComponent(batchId)}/confirm`, { snapshotVersion, ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'discard_bulk_upload': {
+      const { batchId, entityId } = args as { batchId: string; entityId?: string };
+      return callApi('POST', `/send/bulk/${encodeURIComponent(batchId)}/discard`, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'exclude_bulk_upload_row': {
+      const { batchId, rowNumber, entityId } = args as { batchId: string; rowNumber: number; entityId?: string };
+      return callApi('POST', `/send/bulk/${encodeURIComponent(batchId)}/rows/${encodeURIComponent(String(rowNumber))}/exclude`, {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'retry_bulk_upload': {
+      const { batchId, entityId, dryRun, confirmationToken } = args as { batchId: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/send/bulk/${encodeURIComponent(batchId)}/retry`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'revoke_invoice_hosted_page': {
+      const { id, entityId } = args as { id: string; entityId?: string };
+      return callApi('DELETE', `/invoices/${encodeURIComponent(id)}/hosted-page`, undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'get_sii_reconciliation': {
