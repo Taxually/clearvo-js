@@ -214,8 +214,14 @@ import type {
   FilingUploadErrorReportResponse,
   FilingUploadTemplate,
   FilingUploadTemplateFormat,
+  ListDeprecationsResponse,
+  ListChangelogParams,
+  ListChangelogResponse,
+  ChangelogEntry,
 } from './types.js';
 import { ClearvoError, isRejected } from './types.js';
+import { DeprecationTracker, parseDeprecationHeaders } from './deprecation.js';
+import type { DeprecationInfo } from './deprecation.js';
 import type { ClearvoErrorBody } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.clearvo.io/v1';
@@ -247,12 +253,27 @@ export class ClearvoClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly throwOnRejected: boolean;
+  private readonly deprecationTracker: DeprecationTracker;
 
   constructor(options: ClearvoClientOptions) {
     if (!options.apiKey) throw new Error('apiKey is required');
     this.apiKey = options.apiKey;
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.throwOnRejected = options.throwOnRejected ?? true;
+    this.deprecationTracker = new DeprecationTracker(options.onDeprecation);
+  }
+
+  /**
+   * Every deprecated endpoint this client has called so far, parsed from the `Deprecation`, `Sunset` and `Link` response
+   * headers (empty when none). Each surface is also warned about once: see the `onDeprecation` option.
+   */
+  getDeprecations(): DeprecationInfo[] {
+    return this.deprecationTracker.all();
+  }
+
+  private noteDeprecation(response: Response, method: string, path: string): void {
+    if (!response.headers) return;
+    this.deprecationTracker.observe(parseDeprecationHeaders(response.headers, method, path, this.baseUrl));
   }
 
   private async request<T>(
@@ -276,6 +297,7 @@ export class ClearvoClient {
       body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
 
+    this.noteDeprecation(response, method, path);
     if (!response.ok) throw await this.errorFrom(response);
 
     if (response.status === 204) return undefined as T;
@@ -303,6 +325,7 @@ export class ClearvoClient {
   /** A GET that returns a file (CSV, XLSX, PDF/image), not JSON. */
   private async requestFile(path: string, extraHeaders?: Record<string, string>): Promise<Response> {
     const response = await fetch(`${this.baseUrl}${path}`, { method: 'GET', headers: { 'x-api-key': this.apiKey, ...extraHeaders } });
+    this.noteDeprecation(response, 'GET', path);
     if (!response.ok) throw await this.errorFrom(response);
     return response;
   }
@@ -660,6 +683,38 @@ export class ClearvoClient {
    */
   listCountryCoverage(): Promise<CountryCoverageResponse> {
     return this.request('GET', '/coverage');
+  }
+
+  // ── API change process ───────────────────────────────────────────────────────
+
+  /**
+   * GET /deprecations: the endpoints, fields and error codes that are deprecated, with replacement, sunset date and daysLeft.
+   * Public information, the same in sandbox and production.
+   */
+  listDeprecations(): Promise<ListDeprecationsResponse> {
+    return this.request('GET', '/deprecations');
+  }
+
+  /**
+   * GET /changelog: one page of the public API changelog, newest first. Pass the response's `nextCursor` as `cursor` for the
+   * next page (null when there is none). Use {@link iterateChangelog} to walk every page.
+   */
+  listChangelog(params: ListChangelogParams = {}): Promise<ListChangelogResponse> {
+    const qs = new URLSearchParams();
+    if (params.limit !== undefined) qs.set('limit', String(params.limit));
+    if (params.cursor) qs.set('cursor', params.cursor);
+    const q = qs.toString();
+    return this.request('GET', `/changelog${q ? `?${q}` : ''}`);
+  }
+
+  /** Walks the public changelog page by page by following `nextCursor`, yielding each entry newest first. `limit` is the page size (1 to 100). */
+  async *iterateChangelog(params: { limit?: number; cursor?: string } = {}): AsyncGenerator<ChangelogEntry, void, undefined> {
+    let cursor = params.cursor;
+    do {
+      const page = await this.listChangelog({ limit: params.limit, cursor });
+      for (const entry of page.data) yield entry;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
   }
 
   // ── Webhooks ──────────────────────────────────────────────────────────────────

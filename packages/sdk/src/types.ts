@@ -1,3 +1,5 @@
+import type { DeprecationInfo } from './deprecation.js';
+
 export interface ClearvoClientOptions {
   apiKey: string;
   baseUrl?: string;
@@ -9,6 +11,13 @@ export interface ClearvoClientOptions {
    * The default flips to false in the next major. 4xx and 5xx responses always throw.
    */
   throwOnRejected?: boolean;
+  /**
+   * What to do the first time a call hits a deprecated endpoint (the API answers it with `Deprecation` and `Sunset` headers).
+   * Omitted: a one-line `console.warn` naming the endpoint, its sunset date and the replacement, once per endpoint.
+   * A function: called once per endpoint instead of warning. `false`: silent. {@link ClearvoClient.getDeprecations} lists
+   * every deprecated endpoint seen either way.
+   */
+  onDeprecation?: ((info: DeprecationInfo) => void) | false;
 }
 
 /** Per-call options for `submitInvoice`. */
@@ -4899,6 +4908,7 @@ export type WebhookEventName =
   | 'invoice.pending'
   | 'invoice.unroutable'
   | 'ap.decision'
+  | 'deprecation.notice'
   | '*'
   | (string & {});
 
@@ -4952,6 +4962,41 @@ export interface StatusChangedWebhookPayload {
   organisationId?: string;
   /** True only for a test event (POST /v1/webhooks/test). */
   test?: true;
+}
+
+/** What a deprecation.notice webhook says about one deprecated surface. */
+export interface DeprecationNoticeDetail {
+  deprecationId: string;
+  kind: DeprecationKind;
+  surface: string;
+  replacement: string | null;
+  /** YYYY-MM-DD. */
+  deprecatedAt: string;
+  /** YYYY-MM-DD. */
+  sunsetAt: string;
+  sandboxFrom: string | null;
+  /** The notice stage: days before sunset (90, 30 or 7). */
+  stage: 90 | 30 | 7;
+  daysLeft: number;
+  notice: string;
+}
+
+/**
+ * Payload of the `deprecation.notice` webhook: fired at 90, 30 and 7 days before an API surface the organisation uses
+ * (or, for fields and error codes, any organisation with a live key) is removed. `submissionId` carries the deprecation id.
+ */
+export interface DeprecationNoticeWebhookPayload {
+  event: 'deprecation.notice';
+  submissionId: string;
+  country: null;
+  referenceId: null;
+  clearanceStatus: 'NOTICE';
+  terminal: true;
+  updatedAt: string;
+  entityId: string | null;
+  version: 1;
+  eventId: string;
+  deprecation: DeprecationNoticeDetail;
 }
 
 /** Payload of the `ap.decision` webhook. */
@@ -6105,4 +6150,59 @@ export interface TestCaseCatalogue {
   };
   limits: { titleMax: number; textMax: number; stepsMax: number; casesMax: number; casesUsed: number };
   disclaimer?: string;
+}
+
+
+// ── API change process (GET /v1/deprecations, GET /v1/changelog) ────────────────
+
+export type DeprecationKind = 'endpoint' | 'field' | 'error_code';
+
+/** One deprecated API surface. */
+export interface Deprecation {
+  id: string;
+  kind: DeprecationKind;
+  /** `METHOD /v1/path/{param}` for an endpoint; a plain string for a field or error code. */
+  surface: string;
+  replacement: string | null;
+  /** YYYY-MM-DD. */
+  deprecatedAt: string;
+  /** YYYY-MM-DD: the day the surface is removed. */
+  sunsetAt: string;
+  /** YYYY-MM-DD: when the change reaches the sandbox, at least 30 days before production. */
+  sandboxFrom: string | null;
+  notice: string;
+  emergency: boolean;
+  emergencyReason: string | null;
+  /** Days until sunset (0 or more). */
+  daysLeft: number;
+}
+
+export interface ListDeprecationsResponse {
+  ok: true;
+  data: Deprecation[];
+}
+
+export type ChangelogCategory = 'breaking-change' | 'new-feature' | 'improvement' | 'bug-fix';
+
+export interface ChangelogEntry {
+  id: string;
+  title: string;
+  summary: string;
+  category: ChangelogCategory;
+  /** ISO 8601. */
+  publishedAt: string;
+}
+
+export interface ListChangelogParams {
+  /** Entries per page, 1 to 100 (default 20). */
+  limit?: number;
+  /** The `nextCursor` of the previous page. */
+  cursor?: string;
+}
+
+export interface ListChangelogResponse {
+  ok: true;
+  data: ChangelogEntry[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  nextCursor: string | null;
 }

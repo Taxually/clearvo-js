@@ -1254,6 +1254,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_deprecations',
+    description:
+      'List the API endpoints, fields and error codes that are deprecated, with the replacement, the date each was deprecated, ' +
+      'the date it will be removed (sunsetAt), the sandbox date where the change reaches the sandbox first, and daysLeft. ' +
+      'Use this before building against an API surface to check it is not about to be removed. Public information, no inputs.',
+    inputSchema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'list_changelog',
+    description:
+      'List the public API changelog (customer-safe entries only), newest first, each with a title, summary and category ' +
+      '(breaking-change, new-feature, improvement or bug-fix). Pass the returned nextCursor as cursor to read the next page.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Entries per page (default 20).' },
+        cursor: { type: 'string', description: 'The nextCursor value from the previous page.' },
+      },
+    },
+  },
+  {
     name: 'list_entities',
     description:
       'List the business entities registered under this Clearvo account. ' +
@@ -2047,7 +2068,7 @@ const TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
+          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, deprecation.notice (an API endpoint, field or error code you use is deprecated: sent 90, 30 and 7 days before removal, payload deprecation{deprecationId, kind, surface, replacement, deprecatedAt, sunsetAt, sandboxFrom, stage, daysLeft, notice}), manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
         },
       },
       required: ['url'],
@@ -4546,6 +4567,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       return callApi('POST', '/tax-numbers/validate', { countryCode: country, taxNumber, ...(registryType && { registryType }), ...(force && { force }) });
     }
 
+    case 'list_deprecations':
+      return callApi('GET', '/deprecations');
+    case 'list_changelog': {
+      const { limit, cursor } = args as { limit?: unknown; cursor?: unknown };
+      const qs = new URLSearchParams();
+      if (typeof limit === 'number') qs.set('limit', String(limit));
+      if (typeof cursor === 'string' && cursor) qs.set('cursor', cursor);
+      return callApi('GET', `/changelog${qs.size ? `?${qs.toString()}` : ''}`);
+    }
     case 'list_entities': {
       const taxNumber = (args as { taxNumber?: unknown }).taxNumber;
       return callApi('GET', `/entities${typeof taxNumber === 'string' && taxNumber ? `?taxNumber=${encodeURIComponent(taxNumber)}` : ''}`);

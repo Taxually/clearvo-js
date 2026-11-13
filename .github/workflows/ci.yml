@@ -62,6 +62,9 @@ jobs:
       - name: Send contract check (MCP submit_invoice returns the 200 body)
         run: npm run test:send-contract --workspace packages/mcp
 
+      - name: API change tools (list_deprecations, list_changelog) match the hosted connector
+        run: npm run test:api-change-tools --workspace packages/mcp
+
       - name: MCP calculate_tax covers every field of the published calculate request
         env:
           CLEARVO_MARKETING_OPENAPI_PATH: ${{ github.workspace }}/clearvo-marketing/public/openapi.json

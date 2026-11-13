@@ -111,6 +111,15 @@ const result = await client.submitInvoice(invoice);
 if (isRejected(result)) console.log(result.errors, result.nextStep);
 ```
 
+### Deprecations and the changelog
+
+```ts
+const { data } = await client.listDeprecations();          // what is being removed, sunsetAt, replacement
+for await (const entry of client.iterateChangelog({ limit: 50 })) console.log(entry.title);
+```
+
+Calling a deprecated endpoint logs one warning per endpoint (endpoint, sunset date, replacement). Pass `onDeprecation: (info) => ...` to handle it yourself or `onDeprecation: false` to silence it; `client.getDeprecations()` lists every one seen.
+
 ## CLI
 
 ```bash

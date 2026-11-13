@@ -6,6 +6,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — API change process: deprecations, changelog and deprecation warnings (publish after backend PR 19320 is live)
+
+Deprecations and the public changelog are now readable from the SDK, CLI and MCP, and the SDK and CLI warn you when a call hits a deprecated endpoint.
+
+- SDK: `listDeprecations()` (GET /v1/deprecations), `listChangelog({ limit?, cursor? })` (GET /v1/changelog) and `iterateChangelog({ limit? })`, an async iterator that follows `nextCursor`. New types `Deprecation`, `DeprecationKind`, `ChangelogEntry`, `ChangelogCategory`, `ListDeprecationsResponse`, `ListChangelogParams`, `ListChangelogResponse`, and the `deprecation.notice` webhook event (`WebhookEventName`, payload `DeprecationNoticeWebhookPayload`).
+- SDK deprecation awareness: when a response carries `Deprecation` or `Sunset` headers the client logs one `console.warn` per endpoint naming the endpoint, its sunset date and the replacement. New client option `onDeprecation` (a function replaces the warning, `false` silences it) and `client.getDeprecations()` for the parsed info (`DeprecationInfo`).
+- CLI: `clearvo deprecations list` and `clearvo changelog list [--limit] [--cursor] [--all]` (both work without an API key); a deprecated endpoint prints one warning per endpoint to stderr (`CLEARVO_NO_DEPRECATION_WARNINGS=1` silences it). `clearvo webhooks create --events` lists `deprecation.notice`.
+- MCP: new read-only tools `list_deprecations` and `list_changelog` (same schema as the hosted connector); `create_webhook` documents `deprecation.notice`.
+
 ## Unreleased — `seller` removed from tax calculation requests (matches the published API)
 
 The deprecated `seller` alias of `supplier` is gone from the published `POST /v1/tax/calculate` request, so it is gone from the SDK `TaxCalculateRequest` type and the MCP `calculate_tax` input schema. Send `supplier` (on a sale it is optional and filled from your entity's master data).

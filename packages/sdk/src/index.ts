@@ -1,5 +1,7 @@
 export { ClearvoClient } from './client.js';
 export { ClearvoError, isRejected, INVOICE_STATUSES, INVOICE_STAGES, INVOICE_REASONS } from './types.js';
+export { parseDeprecationHeaders, formatDeprecationWarning } from './deprecation.js';
+export type { DeprecationInfo, OnDeprecation } from './deprecation.js';
 export { SIMULATION_COUNTRY_CODES } from './simulation-countries.js';
 export type { SimulationCountryCode } from './simulation-countries.js';
 export { SIMULATION_SCENARIOS, SIMULATION_SCENARIO_IDS } from './simulation-scenarios.js';
@@ -94,6 +96,15 @@ export type {
   ApDecisionWebhookPayload,
   StatusChangedWebhookPayload,
   WebhookEventName,
+  DeprecationNoticeWebhookPayload,
+  DeprecationNoticeDetail,
+  DeprecationKind,
+  Deprecation,
+  ListDeprecationsResponse,
+  ChangelogCategory,
+  ChangelogEntry,
+  ListChangelogParams,
+  ListChangelogResponse,
   StatusClass,
   NextStep,
   TaxCalcVendorChargeStory,
