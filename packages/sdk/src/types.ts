@@ -1944,7 +1944,7 @@ export interface TaxNumberValidateResponse {
   status: 'VALID' | 'INVALID' | 'UNVERIFIED';
   /** Present only when `companyName` was sent and the number's format is valid. A warning only: it never changes `valid`. */
   nameMatch?: NameMatch;
-  /** Authority detail. `extra` is keyed by source (for example `anaf`, `mfcr`, `aade`) and its shape varies by country, so it is left open. */
+  /** Authority detail. `extra` is keyed by source (for example `anaf`, `mfcr`, `fs` for Slovakia, `aade`) and its shape varies by country, so it is left open. Slovak register data (`extra.fs`) carries a required CC BY 4.0 `attribution` string to show wherever that data is displayed. */
   authority?: { checked?: boolean; valid?: boolean; name?: string; extra?: Record<string, unknown>; [key: string]: unknown };
   [key: string]: unknown;
 }
