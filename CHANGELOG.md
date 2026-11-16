@@ -6,6 +6,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — tax-number check history (publish after backend PR 19492 is live)
+
+`POST /v1/tax-numbers/check-history` answers "was this tax number valid on this date?" for up to 500 numbers: it returns the stored authority check that applies on `asOf` (default now) with the authority's consultation reference (the proof), and with `includeChecks` every stored check, oldest first. A check applies when it lies strictly less than `applicableWindowDays` (default 30) from `asOf`; the nearest wins, ties go to the later; `applicable` is null when none qualifies. Read-only: it never contacts the authority (use validate for a fresh check). Numbers whose latest check is older than 10 days are re-checked automatically.
+
+- SDK: `checkTaxNumberHistory({ items, asOf?, includeChecks? })`; new types `TaxNumberCheckHistoryItem`, `TaxNumberCheckHistoryParams`, `TaxNumberCheckHistoryResponse`, `TaxNumberCheckHistoryResult`, `TaxNumberStoredCheck`.
+- MCP: new tool `query_tax_number_check_history` (same schema as the hosted connector; read-only).
+- CLI: `clearvo tax-number-history <file> [--as-of <date>] [--include-checks]` (file is a JSON array of `{ taxNumber, countryCode?, registryType? }`).
+- Release prep: `@clearvo/sdk` 0.8.0, `@clearvo/mcp` 0.9.0, `@clearvo/cli` 0.8.0.
+
 ## Unreleased — `seller` removed from tax calculation requests (matches the published API)
 
 The deprecated `seller` alias of `supplier` is gone from the published `POST /v1/tax/calculate` request, so it is gone from the SDK `TaxCalculateRequest` type and the MCP `calculate_tax` input schema. Send `supplier` (on a sale it is optional and filled from your entity's master data).

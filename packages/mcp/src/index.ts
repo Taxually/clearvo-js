@@ -2263,6 +2263,36 @@ const TOOLS = [
     },
   },
   {
+    name: 'query_tax_number_check_history',
+    description:
+      'For up to 500 tax/VAT numbers, return the stored authority check that applies on a given date, with the authority consultation ' +
+      'reference (the proof). Use it to answer "was this number valid on this date?" for a filing period. Read-only: it reads past checks ' +
+      'and never contacts the authority (use validate_tax_number for a fresh check). A check applies when it lies strictly less than ' +
+      'applicableWindowDays (default 30) from asOf; the nearest one wins, ties to the later. applicable is null when none qualifies. ' +
+      'Numbers are re-checked automatically once their latest check is older than 10 days.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        items: {
+          type: 'array',
+          description: 'Up to 500 numbers',
+          items: {
+            type: 'object',
+            properties: {
+              taxNumber: { type: 'string', description: 'The tax/VAT number. Include the country prefix when countryCode is omitted.' },
+              countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code; derived from the number prefix when omitted' },
+              registryType: { type: 'string', description: 'Restrict to one registry type (e.g. "vat"); all types when omitted' },
+            },
+            required: ['taxNumber'],
+          },
+        },
+        asOf: { type: 'string', description: 'Date (YYYY-MM-DD) or ISO timestamp the answer is for; now when omitted' },
+        includeChecks: { type: 'boolean', description: 'Also return every stored check, oldest first (default false)' },
+      },
+      required: ['items'],
+    },
+  },
+  {
     name: 'list_registrations',
     description:
       'List the tax registrations and obligations for an entity: VAT registrations by country, ' +
@@ -4809,6 +4839,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'validate_tax_numbers_batch':
       return callApi('POST', '/tax-numbers/validate-batch', args);
+    case 'query_tax_number_check_history':
+      return callApi('POST', '/tax-numbers/check-history', args);
 
     case 'list_registrations': {
       const qs = new URLSearchParams();

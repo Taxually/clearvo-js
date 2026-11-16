@@ -1347,7 +1347,22 @@ export function createProgram(): Command {
       const result = await api('POST', '/tax-numbers/validate-batch', { items });
       print(result, !!opts.pretty);
     });
-  
+
+  // ── clearvo tax-number-history ───────────────────────────────────────────────
+  program
+    .command('tax-number-history <file>')
+    .description('Stored authority checks (with the consultation reference) that applied on a date, for up to 500 tax numbers from a JSON file (array of {taxNumber, countryCode?, registryType?})')
+    .option('--as-of <date>', 'Date (YYYY-MM-DD) or ISO timestamp the answer is for (default: now)')
+    .option('--include-checks', 'Also return every stored check, oldest first')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (file: string, opts: { asOf?: string; includeChecks?: boolean; pretty?: boolean }) => {
+      const items = JSON.parse(readFileSync(file, 'utf8')) as unknown[];
+      const body: Record<string, unknown> = { items };
+      if (opts.asOf) body.asOf = opts.asOf;
+      if (opts.includeChecks) body.includeChecks = true;
+      print(await api('POST', '/tax-numbers/check-history', body), !!opts.pretty);
+    });
+
   // ── clearvo registrations ───────────────────────────────────────────────────
   const registrations = program.command('registrations').description('Manage tax registrations');
   
