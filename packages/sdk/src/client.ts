@@ -34,6 +34,8 @@ import type {
   TaxNumberValidateResponse,
   TaxNumberBatchItem,
   TaxNumberBatchResult,
+  TaxNumberCheckHistoryParams,
+  TaxNumberCheckHistoryResponse,
   CountryRequirements,
   CountryCoverageResponse,
   Product,
@@ -744,6 +746,14 @@ export class ClearvoClient {
 
   validateTaxNumbersBatch(items: TaxNumberBatchItem[]): Promise<TaxNumberBatchResult> {
     return this.request('POST', '/tax-numbers/validate-batch', { items });
+  }
+
+  /**
+   * For up to 500 tax numbers, the stored authority check that applies on `asOf` (default now), with the authority's
+   * consultation reference (the proof). Read-only: it never contacts the authority; use validateTaxNumber for a fresh check.
+   */
+  checkTaxNumberHistory(params: TaxNumberCheckHistoryParams): Promise<TaxNumberCheckHistoryResponse> {
+    return this.request('POST', '/tax-numbers/check-history', params);
   }
 
   // ── Tax Registrations ──────────────────────────────────────────────────────────

@@ -2427,6 +2427,54 @@ export interface TaxNumberBatchResult {
   sandbox: boolean;
 }
 
+export interface TaxNumberCheckHistoryItem {
+  /** The tax/VAT number. Include the country prefix when `countryCode` is omitted. */
+  taxNumber: string;
+  /** ISO 3166-1 alpha-2 country code; derived from the number prefix when omitted. */
+  countryCode?: string;
+  /** Restrict to one registry type (e.g. "vat"); all types when omitted. */
+  registryType?: string;
+}
+
+export interface TaxNumberCheckHistoryParams {
+  /** 1 to 500 numbers. */
+  items: TaxNumberCheckHistoryItem[];
+  /** Date (YYYY-MM-DD, midnight UTC) or ISO timestamp the answer is for; now when omitted. */
+  asOf?: string;
+  /** Also return every stored check, oldest first (default false). */
+  includeChecks?: boolean;
+}
+
+export interface TaxNumberStoredCheck {
+  checkedAt: string;
+  valid: boolean;
+  /** The authority's consultation reference (the proof); null when the authority issued none. */
+  checkReference: string | null;
+  registryType: string;
+  source: string;
+}
+
+export interface TaxNumberCheckHistoryResult {
+  index: number;
+  countryCode: string;
+  /** The number as sent. */
+  taxNumber: string;
+  /** The stored check that applies on `asOf`; null when none lies within the window. */
+  applicable: (TaxNumberStoredCheck & { daysFromAsOf: number }) | null;
+  /** Every stored check, oldest first; only with `includeChecks`. */
+  checks?: TaxNumberStoredCheck[];
+  /** Per-item problem, e.g. "taxNumber is required" or "countryCode is required". */
+  error?: string;
+}
+
+export interface TaxNumberCheckHistoryResponse {
+  asOf: string;
+  /** A stored check applies when it lies strictly less than this many days from `asOf` (default 30). */
+  applicableWindowDays: number;
+  total: number;
+  results: TaxNumberCheckHistoryResult[];
+}
+
 export interface RegistrationSecondaryIdentifier {
   key: string;
   label: string;
