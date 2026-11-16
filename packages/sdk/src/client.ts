@@ -32,6 +32,7 @@ import type {
   ImportSettlementVariance,
   TaxCalculateResponse,
   TaxNumberValidateResponse,
+  ValidateTaxNumberOptions,
   TaxNumberBatchItem,
   TaxNumberBatchResult,
   CountryRequirements,
@@ -494,8 +495,8 @@ export class ClearvoClient {
 
   // ── Tax Number Validation ─────────────────────────────────────────────────────
 
-  validateTaxNumber(countryCode: string, taxNumber: string): Promise<TaxNumberValidateResponse> {
-    return this.request('POST', '/tax-numbers/validate', { countryCode, taxNumber });
+  validateTaxNumber(countryCode: string, taxNumber: string, options?: ValidateTaxNumberOptions): Promise<TaxNumberValidateResponse> {
+    return this.request('POST', '/tax-numbers/validate', { countryCode, taxNumber, ...(options?.companyName ? { companyName: options.companyName } : {}) });
   }
 
   // ── Entity Management ─────────────────────────────────────────────────────────

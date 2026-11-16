@@ -1240,6 +1240,8 @@ const TOOLS = [
       'Returns whether the number is valid and, when available, the registered business name and address. ' +
       'Supports EU VIES (all 27 EU member states), HMRC (UK), Brreg (Norway), ABN Lookup (Australia), ' +
       'and 100+ other countries. ' +
+      'Romania, Czechia, Slovakia and Hungary also return national VAT-payer register detail under authority.extra (anaf, mfcr, fs, nav); for Slovakia, valid means currently registered for VAT, cancellationGrounds and deregistered are warnings only, and extra.fs.attribution (CC BY 4.0) must be shown wherever Slovak register data is displayed. ' +
+      'For Hungary, VIES and NAV run together and the number is valid if either confirms; NAV needs the calling entity\'s own NAV technical user credentials (set with set_hu_credentials, production credentials for a live key, test credentials for a sandbox key), otherwise extra.nav is {status: "unavailable", error: "Hungarian NAV credentials not configured"} (never invalid). ' +
       'Use this before issuing B2B invoices to confirm the customer\'s tax registration status ' +
       'and determine whether reverse charge applies.',
     inputSchema: {
@@ -1249,6 +1251,7 @@ const TOOLS = [
         taxNumber: { type: 'string', description: 'The tax/VAT number to validate. Include the country prefix for EU numbers (e.g. "DE123456789", "FR12345678901").' },
         registryType: { type: 'string', enum: ['vat', 'national', 'auto'], description: 'Which registry to check. "vat" = VAT registry (EU VIES for EU countries, HMRC for GB, etc.). "national" = national business registry (CBE for BE, SIREN for FR, etc.). "auto" = let the system choose based on number format. Defaults to "vat". Use "national" for Belgian enterprise numbers not visible in VIES.' },
         force: { type: 'boolean', description: 'Bypass the 30-day result cache and perform a fresh authority check. Use when you need to confirm the current registration status, e.g. after a suspected deregistration.' },
+        companyName: { type: 'string', description: 'Optional. The company name you expect for this tax number. When the authority returns a registered name, the result carries nameMatch (exact, close or mismatch, with a score). It only verifies the supplied number; it never finds a number from a name and never changes anything.' },
       },
       required: ['country', 'taxNumber'],
     },
@@ -2254,6 +2257,7 @@ const TOOLS = [
             properties: {
               countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code (e.g. "DE", "GB")' },
               taxNumber: { type: 'string', description: 'The tax/VAT number to validate. Include country prefix for EU numbers.' },
+              companyName: { type: 'string', description: 'Optional expected company name; adds nameMatch to the result when the authority returns a registered name.' },
             },
             required: ['countryCode', 'taxNumber'],
           },
@@ -4542,8 +4546,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     }
 
     case 'validate_tax_number': {
-      const { country, taxNumber, registryType, force } = args as { country: string; taxNumber: string; registryType?: string; force?: boolean };
-      return callApi('POST', '/tax-numbers/validate', { countryCode: country, taxNumber, ...(registryType && { registryType }), ...(force && { force }) });
+      const { country, taxNumber, registryType, force, companyName } = args as { country: string; taxNumber: string; registryType?: string; force?: boolean; companyName?: string };
+      return callApi('POST', '/tax-numbers/validate', { countryCode: country, taxNumber, ...(registryType && { registryType }), ...(force && { force }), ...(companyName && { companyName }) });
     }
 
     case 'list_entities': {
