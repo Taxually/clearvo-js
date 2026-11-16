@@ -6,6 +6,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — company name check on tax number validation (publish after the backend tax-number authorities PR is live)
+
+Send an optional expected `companyName` with a tax number and the result says whether it matches the name the authority holds. It is a warning only: it never changes `valid`, is never cached, and never finds a number from a name. Also new on the backend: Romania (ANAF), Czechia (Ministry of Finance VAT-payer register) and Greece (AADE, when configured) detail under `authority.extra` (`anaf`, `mfcr`, `aade`), alongside VIES.
+
+- SDK (0.8.0): `validateTaxNumber(countryCode, taxNumber, { companyName? })`; `TaxNumberBatchItem.companyName`; new types `NameMatch` (`status` exact, close, mismatch, authority_name_unavailable; `score` 0 to 1 or null; `supplied`, `authority`) and `ValidateTaxNumberOptions`; `TaxNumberValidateResponse` and batch results gain `nameMatch` and `authority.extra` (left open: its shape varies by country). A bad `companyName` (not a string or over 300 characters) is a 400 `INVALID_COMPANY_NAME`.
+- MCP (0.9.0): `validate_tax_number` and `validate_tax_numbers_batch` accept `companyName`.
+- CLI (0.8.0): `clearvo validate-tin --company-name <name>`; `clearvo validate-tin-batch` reads JSON items with `companyName` or a `.csv` with `countryCode`, `taxNumber` and an optional `companyName` column.
+
 ## Unreleased — `seller` removed from tax calculation requests (matches the published API)
 
 The deprecated `seller` alias of `supplier` is gone from the published `POST /v1/tax/calculate` request, so it is gone from the SDK `TaxCalculateRequest` type and the MCP `calculate_tax` input schema. Send `supplier` (on a sale it is optional and filled from your entity's master data).

@@ -43,6 +43,43 @@ function parseClassificationCodes(values: string[]): Array<{ system: string; cod
   });
 }
 
+/** Parse a CSV of tax numbers: header names countryCode (or country), taxNumber (or tax_number), optional companyName (or company_name, company). */
+export function parseTaxNumberCsv(text: string): Array<{ countryCode: string; taxNumber: string; companyName?: string }> {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else cell += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); cell = '';
+      if (row.some(v => v.trim() !== '')) rows.push(row);
+      row = [];
+    } else cell += c;
+  }
+  row.push(cell);
+  if (row.some(v => v.trim() !== '')) rows.push(row);
+  if (rows.length === 0) return [];
+  const norm = (h: string) => h.trim().toLowerCase().replace(/[\s_-]/g, '');
+  const header = rows[0].map(norm);
+  const col = (...names: string[]) => header.findIndex(h => names.includes(h));
+  const ci = col('countrycode', 'country');
+  const ti = col('taxnumber', 'number');
+  const ni = col('companyname', 'company', 'name');
+  if (ci < 0 || ti < 0) throw new Error('CSV needs a country column (countryCode) and a tax number column (taxNumber); an optional companyName column is supported');
+  return rows.slice(1).map(r => {
+    const companyName = ni >= 0 ? (r[ni] ?? '').trim() : '';
+    return { countryCode: (r[ci] ?? '').trim(), taxNumber: (r[ti] ?? '').trim(), ...(companyName ? { companyName } : {}) };
+  });
+}
+
 export function createProgram(): Command {
   
   const CONFIG_PATH = join(homedir(), '.clearvo', 'config.json');
@@ -654,11 +691,13 @@ export function createProgram(): Command {
     .description('Validate a business tax number against the official authority')
     .requiredOption('--country <code>', 'ISO 3166-1 alpha-2 country code (e.g. DE, GB, AU)')
     .requiredOption('--number <taxNumber>', 'The tax/VAT number to validate')
+    .option('--company-name <name>', 'Expected company name: adds nameMatch to the result (a warning only; it never changes validity)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (opts: { country: string; number: string; pretty?: boolean }) => {
+    .action(async (opts: { country: string; number: string; companyName?: string; pretty?: boolean }) => {
       const result = await api('POST', '/tax-numbers/validate', {
         countryCode: opts.country,
         taxNumber: opts.number,
+        ...(opts.companyName ? { companyName: opts.companyName } : {}),
       });
       print(result, !!opts.pretty);
     });
@@ -1340,10 +1379,11 @@ export function createProgram(): Command {
   // ── clearvo validate-tin-batch ───────────────────────────────────────────────
   program
     .command('validate-tin-batch <file>')
-    .description('Validate up to 20 tax numbers from a JSON file (array of {countryCode, taxNumber})')
+    .description('Validate up to 20 tax numbers from a JSON file (array of {countryCode, taxNumber, companyName?}), or a CSV with a country, tax number and optional company name column')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (file: string, opts: { pretty?: boolean }) => {
-      const items = JSON.parse(readFileSync(file, 'utf8')) as unknown[];
+      const raw = readFileSync(file, 'utf8');
+      const items = file.toLowerCase().endsWith('.csv') ? parseTaxNumberCsv(raw) : (JSON.parse(raw) as unknown[]);
       const result = await api('POST', '/tax-numbers/validate-batch', { items });
       print(result, !!opts.pretty);
     });
