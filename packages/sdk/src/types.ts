@@ -1944,7 +1944,7 @@ export interface TaxNumberValidateResponse {
   status: 'VALID' | 'INVALID' | 'UNVERIFIED';
   /** Present only when `companyName` was sent and the number's format is valid. A warning only: it never changes `valid`. */
   nameMatch?: NameMatch;
-  /** Authority detail. `extra` is keyed by source (for example `anaf`, `mfcr`, `fs` for Slovakia, `aade`) and its shape varies by country, so it is left open. Slovak register data (`extra.fs`) carries a required CC BY 4.0 `attribution` string to show wherever that data is displayed. */
+  /** Authority detail. `extra` is keyed by source (for example `anaf`, `mfcr`, `fs` for Slovakia, `nav` for Hungary, `aade`) and its shape varies by country, so it is left open. Slovak register data (`extra.fs`) carries a required CC BY 4.0 `attribution` string to show wherever that data is displayed. Hungary (`extra.nav`): VIES and NAV Online Számla run together and the number is valid if either confirms. NAV needs the calling entity's own NAV technical user credentials (production for a live key, test for a sandbox key); without them `extra.nav` is `{ status: 'unavailable', error: 'Hungarian NAV credentials not configured' }` and is never treated as invalid. When queried it holds `valid`, `name`, `address`, `status`, `entityType`, `taxpayerShortName`, `incorporation`, `vatGroupMembership`, `taxNumberDetail` (`taxpayerId`, `vatCode`, `countyCode`) and `addresses` (`{ type, address }[]`); NAV's taxpayer name is `authority.name` and feeds `nameMatch`. */
   authority?: { checked?: boolean; valid?: boolean; name?: string; extra?: Record<string, unknown>; [key: string]: unknown };
   [key: string]: unknown;
 }

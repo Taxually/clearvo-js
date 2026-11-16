@@ -1240,7 +1240,8 @@ const TOOLS = [
       'Returns whether the number is valid and, when available, the registered business name and address. ' +
       'Supports EU VIES (all 27 EU member states), HMRC (UK), Brreg (Norway), ABN Lookup (Australia), ' +
       'and 100+ other countries. ' +
-      'Romania, Czechia and Slovakia also return national VAT-payer register detail under authority.extra (anaf, mfcr, fs); for Slovakia, valid means currently registered for VAT, cancellationGrounds and deregistered are warnings only, and extra.fs.attribution (CC BY 4.0) must be shown wherever Slovak register data is displayed. ' +
+      'Romania, Czechia, Slovakia and Hungary also return national VAT-payer register detail under authority.extra (anaf, mfcr, fs, nav); for Slovakia, valid means currently registered for VAT, cancellationGrounds and deregistered are warnings only, and extra.fs.attribution (CC BY 4.0) must be shown wherever Slovak register data is displayed. ' +
+      'For Hungary, VIES and NAV run together and the number is valid if either confirms; NAV needs the calling entity\'s own NAV technical user credentials (set with set_hu_credentials, production credentials for a live key, test credentials for a sandbox key), otherwise extra.nav is {status: "unavailable", error: "Hungarian NAV credentials not configured"} (never invalid). ' +
       'Use this before issuing B2B invoices to confirm the customer\'s tax registration status ' +
       'and determine whether reverse charge applies.',
     inputSchema: {
