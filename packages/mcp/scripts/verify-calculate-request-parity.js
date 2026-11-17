@@ -61,7 +61,8 @@ const apiPaths = propertyPaths(schemas.TaxCalculateRequest, '', new Set(), []);
 
 function check(label, paths, { omitted }) {
   const missing = [...apiPaths].filter((p) => !paths.has(p) && !(p in omitted)).sort();
-  const unknown = [...paths].filter((p) => !apiPaths.has(p) && !(p in UNDOCUMENTED_IN_TOOL)).sort();
+  // entityId is the business-profile selector every MCP tool takes, not a field of the request body.
+  const unknown = [...paths].filter((p) => !apiPaths.has(p) && p !== 'entityId' && !(p in UNDOCUMENTED_IN_TOOL)).sort();
   const stale = Object.keys(omitted).filter((p) => !apiPaths.has(p) || paths.has(p)).concat(Object.keys(UNDOCUMENTED_IN_TOOL).filter((p) => apiPaths.has(p) || !paths.has(p))).sort();
   if (missing.length) fail(`${label} lacks ${missing.length} field(s) the API accepts:\n  ${missing.join('\n  ')}`);
   if (unknown.length) fail(`${label} declares ${unknown.length} field(s) the published API does not have:\n  ${unknown.join('\n  ')}`);

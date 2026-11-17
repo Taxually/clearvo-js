@@ -42,7 +42,7 @@
     "entity_id": {
       "type": "string",
       "title": "Entity ID (optional)",
-      "description": "Only needed with an account-scoped API key operating across multiple entities. Leave blank for entity-scoped keys, or run list_entities to find it.",
+      "description": "Optional default business profile (entity). Leave blank for an entity-scoped key. With an organisation-scoped key, pass entityId on each tool call instead; it always overrides this default. Run list_entities to find the ID.",
       "sensitive": false,
       "required": false
     },
