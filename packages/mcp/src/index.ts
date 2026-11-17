@@ -1051,6 +1051,25 @@ const TOOLS = [
     },
   },
   {
+    name: 'rerun_invoice',
+    description:
+      'Re-run an invoice that was never sent to an authority or network (status NEEDS_INFO, held, or refused by our own checks before dispatch) in place, ' +
+      'through the normal send checks. Use it after adding a rule, tax code mapping or setting so the new configuration applies; the invoice id does not change. ' +
+      'Data sent through the API is not altered. Read get_invoice first: availableActions contains "rerun" only when this is possible. ' +
+      'Returns the new status and clearanceStatus (200 finished, 202 still processing). Refusal: 409 NOT_RERUNNABLE (already sent, or no stored document). ' +
+      'Never blind-retry a refusal. Check first: call it with dryRun true, show the user what would happen, and only after they explicitly say yes call again without dryRun.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        id: { type: 'string', description: 'The invoice ID — from submit_invoice, list_invoices or get_invoice.' },
+        dryRun: { type: 'boolean', description: 'Check this request without changing anything: answers with whether the invoice can be re-run.' },
+        confirmationToken: { type: 'string', description: 'Hosted MCP only: the confirmationToken returned by the dryRun of this exact request. Not needed here.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'get_sii_reconciliation',
     description:
       'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
@@ -4505,6 +4524,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'retry_invoice_with_master_data': {
       const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'rerun_invoice': {
+      const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', `/invoices/${encodeURIComponent(id)}/rerun`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'get_sii_reconciliation': {

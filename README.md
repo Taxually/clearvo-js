@@ -122,6 +122,7 @@ npm install -g @clearvo/cli
 clearvo entities list --pretty
 clearvo entities list --tax-number DE123456788 --pretty   # find the entity registered under a tax number
 clearvo requirements --country IT --pretty
+clearvo rerun <invoice-id> --dry-run   # re-check a not-yet-sent invoice against your current rules (drop --dry-run to do it)
 clearvo validate-tin --country DE --number DE123456789
 clearvo validate-tin --country RO --number RO123456 --company-name "Acme SRL"   # adds nameMatch (a warning only)
 clearvo validate-tin-batch numbers.csv   # columns: countryCode, taxNumber, optional companyName (or a JSON array)

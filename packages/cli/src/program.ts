@@ -429,6 +429,22 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo rerun <id> ───────────────────────────────────────────────────────
+  // Re-runs an invoice that was never sent to an authority or network (needs info, held, or refused
+  // before dispatch) in place, through the normal send checks. Use --dry-run to check first.
+  program
+    .command('rerun <id>')
+    .description('Re-run an invoice that has not been sent yet against your current rules and tax codes (same invoice id)')
+    .option('--dry-run', 'Check whether it can be re-run without changing anything')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const body: Record<string, unknown> = {};
+      if (opts.dryRun) body.dryRun = true;
+      const result = await api('POST', `/invoices/${encodeURIComponent(id)}/rerun`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo business-status <id> ─────────────────────────────────────────────
   // Records a customer-lifecycle ("business") status decision on a received
   // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or

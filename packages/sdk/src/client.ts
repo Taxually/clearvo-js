@@ -106,6 +106,9 @@ import type {
   RetryWithMasterDataInput,
   RetryWithMasterDataPreview,
   RetryWithMasterDataResult,
+  RerunInvoiceInput,
+  RerunInvoicePreview,
+  RerunInvoiceResult,
   GetSiiReconciliationSummaryResponse,
   GetSiiReconciliationResponse,
   QueryRequestParams,
@@ -914,6 +917,17 @@ export class ClearvoClient {
    */
   retryInvoiceWithMasterData(id: string, input: RetryWithMasterDataInput = {}, entityId?: string): Promise<RetryWithMasterDataResult | RetryWithMasterDataPreview> {
     return this.request('POST', `/invoices/${encodeURIComponent(id)}/retry-with-master-data`, input, entityHeaders(entityId));
+  }
+
+  /**
+   * Re-run an invoice that was never sent to an authority or network (needs info, held, or refused by our own checks
+   * before dispatch) in place, through the normal send checks, so a rule, tax code mapping or setting added since now
+   * applies. The invoice id does not change. Resolves with the new `status` (HTTP 200, or 202 when still processing); with
+   * `dryRun: true` it resolves with a preview and changes nothing. Offered when `availableActions` on the invoice contains
+   * `rerun`. Throws a {@link ClearvoError}: 404 not found, 409 NOT_RERUNNABLE (already sent, or no stored document).
+   */
+  rerunInvoice(id: string, input: RerunInvoiceInput = {}, entityId?: string): Promise<RerunInvoiceResult | RerunInvoicePreview> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/rerun`, input, entityHeaders(entityId));
   }
 
   /**
