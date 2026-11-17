@@ -3003,8 +3003,8 @@ export type CancelReportResponse =
   | { ok: true; id: string; operation: 'BAJA'; communicationId: string; state: string; idempotentReplay?: boolean }
   | { ok: true; id: string; cancelled: true; cancelledAt: string };
 
-/** The invoice actions listed in `availableActions` on GET /v1/invoices/{id}. `use_master_data` is present when a customer record holds a different tax number than the one sent. */
-export type InvoiceAvailableAction = 'use_master_data' | (string & {});
+/** The invoice actions listed in `availableActions` on GET /v1/invoices/{id}. `use_master_data` is present when a customer record holds a different tax number than the one sent; `rerun` when the invoice was never sent to an authority or network and can be re-checked against the current rules. */
+export type InvoiceAvailableAction = 'use_master_data' | 'rerun' | (string & {});
 
 export interface RetryWithMasterDataInput {
   /** Check the retry without sending anything: answers with the one field change that would be made. */
@@ -3038,6 +3038,30 @@ export interface RetryWithMasterDataPreview {
   ok: true;
   wouldSubmit: { operation: 'use_master_data'; invoiceId: string };
   changes: MasterDataRetryChange[];
+}
+
+export interface RerunInvoiceInput {
+  /** Check the re-run without changing anything. */
+  dryRun?: boolean;
+  /** Hosted MCP only: the token a dry run returned. Not needed on the public API. */
+  confirmationToken?: string;
+}
+
+/** POST /v1/invoices/{id}/rerun's 200 (finished) or 202 (accepted, still processing). The invoice id does not change. */
+export interface RerunInvoiceResult {
+  ok: true;
+  invoiceId: string;
+  status: string;
+  clearanceStatus: string;
+  previousClearanceStatus: string;
+  completed: boolean;
+}
+
+/** The 200 answer to a dryRun: nothing was changed. */
+export interface RerunInvoicePreview {
+  ok: true;
+  wouldSubmit: { operation: 'rerun'; invoiceId: string };
+  currentClearanceStatus: string;
 }
 
 export interface SiiAuthorityView {
