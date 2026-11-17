@@ -1942,6 +1942,26 @@ export interface TaxNumberValidateResponse {
   name?: string;
   address?: string;
   status: 'VALID' | 'INVALID' | 'UNVERIFIED';
+  /** Present only when `companyName` was sent and the number's format is valid. A warning only: it never changes `valid`. */
+  nameMatch?: NameMatch;
+  /** Authority detail. `extra` is keyed by source (for example `anaf`, `mfcr`, `fs` for Slovakia, `aade`) and its shape varies by country, so it is left open. Slovak register data (`extra.fs`) carries a required CC BY 4.0 `attribution` string to show wherever that data is displayed. */
+  authority?: { checked?: boolean; valid?: boolean; name?: string; extra?: Record<string, unknown>; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+/** How a supplied company name compares with the name the tax authority holds for the tax number. */
+export interface NameMatch {
+  /** `close` means a score of 0.85 or more. `not_provided` is part of the type but is never returned (the field is absent instead). */
+  status: 'exact' | 'close' | 'mismatch' | 'authority_name_unavailable' | 'not_provided';
+  /** 0 to 1 (3 decimals), or null when the authority returned no name. */
+  score: number | null;
+  supplied?: string;
+  authority?: string;
+}
+
+export interface ValidateTaxNumberOptions {
+  /** Optional expected company name (trimmed, max 300 characters; blank is ignored). Adds `nameMatch` to the result. It only verifies the number; it never finds a number from a name. */
+  companyName?: string;
 }
 
 /** One country and mandate on the public coverage list (GET /v1/coverage). */
@@ -2416,10 +2436,12 @@ export interface TestWebhookResponse {
 export interface TaxNumberBatchItem {
   countryCode: string;
   taxNumber: string;
+  /** Optional expected company name; adds `nameMatch` to that item's result. Max 300 characters. */
+  companyName?: string;
 }
 
 export interface TaxNumberBatchResult {
-  results: Array<{ index: number; countryCode: string; taxNumber: string; format: { valid: boolean; error?: string }; authority: { checked: boolean; valid?: boolean; name?: string }; error?: string }>;
+  results: Array<{ index: number; countryCode: string; taxNumber: string; format: { valid: boolean; error?: string }; authority: { checked: boolean; valid?: boolean; name?: string; extra?: Record<string, unknown> }; nameMatch?: NameMatch; error?: string }>;
   total: number;
   valid: number;
   invalid: number;
