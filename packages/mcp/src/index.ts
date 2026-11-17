@@ -1070,6 +1070,39 @@ const TOOLS = [
     },
   },
   {
+    name: 'rerun_invoices',
+    description:
+      'Re-run many invoices that were never sent to an authority or network (needs info, held, or refused by our own checks before dispatch) in place, ' +
+      'against the current rules and tax codes. Use it after adding a rule, tax code mapping or setting so the new configuration applies to all of them at once; invoice ids do not change. ' +
+      'Pass ids (the invoices to re-run) or filter (status, reason, country, mandate, search: the same filters as list_invoices), not both. ' +
+      'Returns one result per invoice (outcome rerun, skipped or failed, with the new status or a plain code and message) and a summary (requested, rerun, skipped, failed). ' +
+      'Invoices that cannot be re-run (already sent, or no stored document) are skipped with a reason. One call handles a bounded batch: while done is false, call again with the same ids or filter and cursor set to nextCursor until done is true. ' +
+      'Never blind-retry. Check first: call it with dryRun true, show the user how many would be re-run and why others would be skipped, and only after they explicitly say yes call again without dryRun.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, description: 'The invoice IDs to re-run. Use this or filter.' },
+        filter: {
+          type: 'object',
+          description: 'Re-run every invoice matching these list filters. Use this or ids.',
+          properties: {
+            status: { type: 'string', description: 'Invoice status, as in list_invoices.' },
+            reason: { type: 'string', description: 'Reason under the status, as in list_invoices.' },
+            country: { type: 'string', description: 'Two-letter country code.' },
+            mandate: { type: 'string', description: 'Mandate code.' },
+            search: { type: 'string', description: 'Free-text search, as on the invoice list.' },
+            errorCode: { type: 'string', description: 'The error code recorded on the invoice.' },
+          },
+        },
+        batchSize: { type: 'integer', description: 'Invoices handled per call (default 10, at most 50). It only bounds one call: keep following nextCursor until done.' },
+        cursor: { type: 'string', description: 'Continue a large selection: the nextCursor returned by the previous call.' },
+        dryRun: { type: 'boolean', description: 'Check this request without changing anything: answers with how many would be re-run and why others would be skipped.' },
+        confirmationToken: { type: 'string', description: 'Hosted MCP only: the confirmationToken returned by the dryRun of this exact request. Not needed here.' },
+        entityId: { type: 'string', description: 'Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'get_sii_reconciliation',
     description:
       'Fetch one AEAT Spain SII Consulta reconciliation run — the scheduled sweep that compares this ' +
@@ -4529,6 +4562,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'rerun_invoice': {
       const { id, entityId, dryRun, confirmationToken } = args as { id: string; entityId?: string; dryRun?: boolean; confirmationToken?: string };
       return callApi('POST', `/invoices/${encodeURIComponent(id)}/rerun`, { ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}) }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'rerun_invoices': {
+      const { ids, filter, cursor, batchSize, entityId, dryRun, confirmationToken } = args as { ids?: string[]; filter?: Record<string, unknown>; cursor?: string; batchSize?: number; entityId?: string; dryRun?: boolean; confirmationToken?: string };
+      return callApi('POST', '/invoices/rerun', {
+        ...(ids ? { ids } : {}), ...(filter ? { filter } : {}), ...(cursor ? { cursor } : {}), ...(batchSize ? { batchSize } : {}),
+        ...(dryRun ? { dryRun } : {}), ...(confirmationToken ? { confirmationToken } : {}),
+      }, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'get_sii_reconciliation': {
