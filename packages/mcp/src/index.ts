@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createHash } from 'crypto';
+import { AsyncLocalStorage } from 'async_hooks';
 import { getToolAnnotations } from './tool-annotations.js';
 
 // Countries the received-invoice simulator covers. Repeated in the SDK and CLI; `npm run test:simulation-countries` fails on drift.
@@ -79,11 +80,15 @@ if (!API_KEY) {
 }
 if (!ENTITY_ID) {
   process.stderr.write(
-    'Warning: no entity ID is configured — operations that require an entity context will fail.\n' +
-    'Add CLEARVO_ENTITY_ID (or TAXUALLY_ENTITY_ID) to your MCP server env config, or use an entity-scoped API key.\n' +
+    'Note: no default entity ID is configured. With an entity-scoped API key none is needed; with an organisation-scoped key, pass entityId on each tool call.\n' +
+    'CLEARVO_ENTITY_ID (or TAXUALLY_ENTITY_ID) is only a default: an entityId passed on a tool call always overrides it.\n' +
     'Run the list_entities tool to find your entity ID.\n'
   );
 }
+
+// The entityId argument of the tool call being handled (set in the CallTool handler), so every handler acts on it
+// without each one forwarding it. AsyncLocalStorage keeps concurrent calls apart.
+const callEntityStore = new AsyncLocalStorage<string>();
 
 async function callApi(
   method: string,
@@ -107,9 +112,11 @@ async function callApi(
     'Accept': 'application/json',
     ...extraHeaders,
   };
-  // An explicit per-call x-entity-id (e.g. set_pl_credentials' entityId arg,
-  // forwarded via extraHeaders) must win over the env-configured default —
-  // only fall back to CLEARVO_ENTITY_ID when the call didn't specify one.
+  // Which business profile (entity) a call acts on, most specific first: an explicit x-entity-id from the tool
+  // handler (extraHeaders), then the entityId argument of this tool call, then the CLEARVO_ENTITY_ID default.
+  // CLEARVO_ENTITY_ID is only a default: a per-call entityId always overrides it.
+  const callEntityId = callEntityStore.getStore();
+  if (callEntityId && !headers['x-entity-id']) headers['x-entity-id'] = callEntityId;
   if (ENTITY_ID && !headers['x-entity-id']) headers['x-entity-id'] = ENTITY_ID;
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
@@ -132,8 +139,7 @@ async function callApi(
     if (res.status === 400 && errorText.toLowerCase().includes('entity context')) {
       throw new Error(
         'This operation requires an entity context. ' +
-        'Set CLEARVO_ENTITY_ID (or TAXUALLY_ENTITY_ID) in your MCP server env config, or use an entity-scoped API key. ' +
-        'Run the list_entities tool to find your entity ID, then add it to the env config and restart.'
+        'Pass entityId on the tool call (find it with list_entities), or set CLEARVO_ENTITY_ID (or TAXUALLY_ENTITY_ID) in your MCP server env config as the default, or use an entity-scoped API key.'
       );
     }
     // Filing upload refusals (same format as the hosted connector): the stable code on the first line, then the plain-language
@@ -567,7 +573,7 @@ const CALCULATE_TAX_INPUT_SCHEMA = {
 
 const { commit: _quoteOmitCommit, transactionDirection: _quoteOmitDirection, documentStage: _quoteOmitStage, ...QUOTE_DUTIES_PROPERTIES } = CALCULATE_TAX_INPUT_SCHEMA.properties as Record<string, unknown>;
 
-const TOOLS = [
+const BASE_TOOLS = [
   {
     name: 'submit_invoice',
     description:
@@ -1258,7 +1264,7 @@ const TOOLS = [
   {
     name: 'list_entities',
     description:
-      'List the business entities registered under this Clearvo account. ' +
+      'List the business entities (business profiles) this connection can act on. A connection to all your business profiles lists each one; a single-profile connection lists just that one. ' +
       'Each entity is a legal company registered for tax compliance (one VAT registration, one country of establishment). ' +
       'Returns entity IDs, names, countries of establishment, and VAT numbers. ' +
       'Use this to discover available entityId values, or to verify which entities are set up before submitting invoices. ' +
@@ -4479,6 +4485,40 @@ const TOOLS = [
   },
 ] as const;
 
+// Same entity handling as the hosted connector (lib/mcp/tools.ts in the backend): every tool that acts on one business
+// profile takes an optional entityId. Entity-agnostic tools (listing, reference data, creating a profile) never do.
+const ENTITY_AGNOSTIC_TOOLS: ReadonlySet<string> = new Set([
+  'list_entities', 'create_entity', 'invite_team_member', 'list_tax_categories', 'list_country_coverage',
+  'validate_tax_number', 'validate_tax_numbers_batch', 'get_test_case_catalogue', 'get_requirements',
+  'get_rules_engine_schema', 'get_registration_field_definitions', 'get_entity_fact_definitions',
+  'get_query_fields', 'get_filing_upload_template',
+]);
+const ENTITY_ID_DESCRIPTION = 'The business profile (entity) to act on, from list_entities. Optional when the connection can act on only one business profile; required when it can act on several.';
+const LEGACY_ENTITY_ID_DESCRIPTION = /Required for account-scoped keys(?:; omit for entity-scoped keys)?\./;
+
+type ToolDef = (typeof BASE_TOOLS)[number];
+
+const TOOLS_WITHOUT_ENTITY_ID: ReadonlySet<string> = new Set(
+  BASE_TOOLS
+    .filter(t => !ENTITY_AGNOSTIC_TOOLS.has(t.name) && !('entityId' in ((t.inputSchema as { properties?: Record<string, unknown> }).properties ?? {})))
+    .map(t => t.name),
+);
+
+function withEntityId(tool: ToolDef): ToolDef {
+  const schema = tool.inputSchema as { type: 'object'; properties?: Record<string, { description?: string }> };
+  const properties = { ...(schema.properties ?? {}) };
+  if (TOOLS_WITHOUT_ENTITY_ID.has(tool.name)) {
+    properties.entityId = { type: 'string', description: ENTITY_ID_DESCRIPTION } as { description?: string };
+  } else if (properties.entityId?.description && LEGACY_ENTITY_ID_DESCRIPTION.test(properties.entityId.description)) {
+    properties.entityId = { ...properties.entityId, description: properties.entityId.description.replace(LEGACY_ENTITY_ID_DESCRIPTION, 'Optional when the connection can act on only one business profile; required when it can act on several. Use list_entities.') };
+  } else {
+    return tool;
+  }
+  return { ...tool, inputSchema: { ...schema, properties } } as ToolDef;
+}
+
+const TOOLS: readonly ToolDef[] = BASE_TOOLS.map(withEntityId);
+
 async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
     case 'submit_invoice': {
@@ -5439,7 +5479,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   try {
-    const result = await handleTool(name, (args ?? {}) as Record<string, unknown>);
+    const rawArgs = (args ?? {}) as Record<string, unknown>;
+    const requestedEntity = typeof rawArgs.entityId === 'string' && rawArgs.entityId.trim() ? rawArgs.entityId.trim() : undefined;
+    let toolArgs = rawArgs;
+    // A tool whose handler has no entityId of its own gets it as the x-entity-id header instead of in the request body.
+    if (TOOLS_WITHOUT_ENTITY_ID.has(name) && 'entityId' in rawArgs) {
+      const { entityId: _entityId, ...rest } = rawArgs;
+      toolArgs = rest;
+    }
+    const result = await (requestedEntity && !ENTITY_AGNOSTIC_TOOLS.has(name)
+      ? callEntityStore.run(requestedEntity, () => handleTool(name, toolArgs))
+      : handleTool(name, toolArgs));
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       // A stored REJECTED document, or one WAITING_FOR_YOU for NEEDS_INFO / UNROUTABLE, is HTTP 200 but was not sent: flag it so an agent does not treat it as

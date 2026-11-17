@@ -74,7 +74,7 @@ const NEEDS_DISCLAIMER = Object.keys(REQUIRED);
   if (missing.length) return fail(`Missing tools from tools/list: ${missing.join(', ')}`);
 
   for (const [name, fields] of Object.entries(REQUIRED)) {
-    const props = Object.keys(byName.get(name).inputSchema?.properties ?? {}).sort();
+    const props = Object.keys(byName.get(name).inputSchema?.properties ?? {}).filter((p) => p !== 'entityId').sort(); // entityId: business-profile selector added to every tool
     if (JSON.stringify(props) !== JSON.stringify([...fields].sort())) {
       return fail(`${name}.inputSchema properties are [${props.join(', ')}], expected [${fields.join(', ')}]`);
     }
