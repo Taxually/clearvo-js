@@ -3076,7 +3076,7 @@ export interface RerunInvoicesInput {
   dryRun?: boolean;
   /** Hosted MCP only: the token a dry run returned. Not needed on the public API. */
   confirmationToken?: string;
-  /** Continue a large selection: the `nextCursor` of the previous answer. */
+  /** Continue a large selection: the `nextCursor` of the previous answer, passed back unchanged (an opaque string). */
   cursor?: string;
   /** Invoices handled per request (default 10, at most 50). It only bounds one request; the whole selection is always handled by following `nextCursor`. */
   batchSize?: number;
@@ -3085,6 +3085,8 @@ export interface RerunInvoicesInput {
 /** One invoice in a bulk re-run answer. `outcome` is `rerun` (with the new `status`), `skipped` (not eligible: `code` and plain `message` say why) or `failed` (try again later). */
 export interface RerunInvoicesResultItem {
   invoiceId: string;
+  /** The invoice's own number; null when the id was not found or the invoice has no number. */
+  invoiceNumber: string | null;
   ok: boolean;
   outcome: 'rerun' | 'skipped' | 'failed';
   status?: string;
