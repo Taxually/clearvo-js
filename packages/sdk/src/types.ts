@@ -2842,6 +2842,8 @@ export interface ReportingBatch {
   periodEnd: string | null;
   /** Earliest AEAT report-by date across the batch's records. */
   reportBy: string | null;
+  /** Why `reportBy` is null: set only when the period's reporting frequency is ambiguous; null otherwise. */
+  deadlineNote: string | null;
   /** Server-computed "N Spanish business day(s) overdue"; null when not overdue. */
   overdueLabel: string | null;
   recordCount: number;

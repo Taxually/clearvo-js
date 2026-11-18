@@ -11,6 +11,7 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 Reporting batches are listed oldest period first, empty periods outside the dates the obligation applies are no longer created or shown, and a batch's deadline always follows its own period (a décade is its end plus 10 days). Enabling an obligation with an `effectiveFrom` earlier than the date it starts applying is refused `400 EFFECTIVE_FROM_BEFORE_MANDATE`. The `deadlineBasis` field is gone from batch responses; it was never in the SDK types, so there is no type change. No runtime change in the SDK, CLI or MCP.
 
 - SDK: doc comments for `listReportingBatches` (order) and `updateReportingObligations` (new error code).
+- SDK: `ReportingBatch.deadlineNote: string | null` (why `reportBy` is null).
 - MCP: `list_reporting_batches` and `update_reporting_obligations` descriptions updated.
 
 ## Unreleased — invoice number on bulk re-run results (publish after the backend bulk re-run PR is live)
