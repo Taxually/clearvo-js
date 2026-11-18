@@ -549,7 +549,7 @@ export function createProgram(): Command {
     .command('list')
     .description('List invoices with their status, stage, reason, issues and customerResponse. Filter by status (one of ten), reason (the specific cause) and the buyer\'s decision')
     .option('--status <status>', 'RECEIVED | PENDING | WAITING_FOR_YOU | WAITING_FOR_PLATFORM | ACCUMULATED | COMPLETED | REJECTED | CANCELLED | SKIPPED | NOT_APPLICABLE')
-    .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, SETUP_NEEDED, SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED are also accepted)')
+    .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, SETUP_NEEDED, SKIP_RULE (rule exclusion, status SKIPPED), NO_OBLIGATION (nothing required, status NOT_APPLICABLE), MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED, which matches both, are also accepted)')
     .option('--customer-response <value>', 'The buyer\'s decision: in_review | approved | partially_approved | disputed | refused (a regime\'s own native code is also accepted)')
     .option('--country <code>', 'ISO 3166-1 alpha-2 country code')
     .option('--limit <n>', 'Results per page (default 25, max 100)')

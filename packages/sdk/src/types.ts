@@ -900,7 +900,7 @@ export interface ListInvoicesParams {
   country?: string;
   /** One of the ten statuses ({@link InvoiceStatus}). */
   status?: InvoiceStatus;
-  /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. */
+  /** A finer-grained reason ({@link InvoiceReason}); SKIP_RULE (status SKIPPED) is a record a rule excluded, NO_OBLIGATION (status NOT_APPLICABLE) one no rule excluded where the law requires nothing; the old stored names (UNROUTABLE, HELD_*, EXCLUDED which matches both, ...) and the new ones (MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. */
   reason?: InvoiceReason;
   /** Filter on the buyer's decision: in_review, approved, partially_approved, disputed or refused. A regime's own native code (for example PAYMENT_SENT) is also accepted. */
   businessStatus?: CustomerResponseStatus | (string & {});

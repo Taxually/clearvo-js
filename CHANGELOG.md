@@ -6,6 +6,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — rule exclusions report SKIPPED / SKIP_RULE (publish after the backend PR 19728 is live)
+
+An invoice a rule excluded now reports status `SKIPPED` with reason `SKIP_RULE` ("Skipped by rule") instead of `NOT_APPLICABLE` / `NO_OBLIGATION`; with no rule exclusion and nothing required by law it stays `NOT_APPLICABLE` / `NO_OBLIGATION`. The enums are unchanged, so there is no type or runtime change. `status=SKIPPED` now includes rule exclusions, `status=NOT_APPLICABLE` excludes them, and `reason=EXCLUDED` matches both.
+
+- SDK: doc comment on the `reason` filter.
+- CLI: `invoices list --reason` help.
+- MCP: `poll_status` and `list_invoices` descriptions.
+
 ## Unreleased — issue date in the future is refused (publish after the backend PR 19728 is live)
 
 Every send now refuses an invoice `issueDate` later than tomorrow in UTC with `ISSUE_DATE_IN_FUTURE` (field `issueDate`, stored `REJECTED`, HTTP 200 with `ok: false`); a future `taxPointDate` or `dueDate` is not refused. No runtime change in the SDK, CLI or MCP.
