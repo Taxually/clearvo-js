@@ -3057,6 +3057,69 @@ export interface RerunInvoiceResult {
   completed: boolean;
 }
 
+/** Which invoices a bulk re-run covers when you do not list ids: the same filters as the invoice list. */
+export interface RerunInvoicesFilter {
+  status?: string;
+  reason?: string;
+  /** The error code recorded on the invoice. */
+  errorCode?: string;
+  country?: string;
+  mandate?: string;
+  search?: string;
+}
+
+/** POST /v1/invoices/rerun: send `ids` or a `filter`, not both. A large selection is worked through in chunks: pass back the `nextCursor` of one answer as `cursor` until it is null. */
+export interface RerunInvoicesInput {
+  ids?: string[];
+  filter?: RerunInvoicesFilter;
+  /** Check the request without changing anything: answers with how many would be re-run and why others would be skipped. */
+  dryRun?: boolean;
+  /** Hosted MCP only: the token a dry run returned. Not needed on the public API. */
+  confirmationToken?: string;
+  /** Continue a large selection: the `nextCursor` of the previous answer. */
+  cursor?: string;
+  /** Invoices handled per request (default 10, at most 50). It only bounds one request; the whole selection is always handled by following `nextCursor`. */
+  batchSize?: number;
+}
+
+/** One invoice in a bulk re-run answer. `outcome` is `rerun` (with the new `status`), `skipped` (not eligible: `code` and plain `message` say why) or `failed` (try again later). */
+export interface RerunInvoicesResultItem {
+  invoiceId: string;
+  ok: boolean;
+  outcome: 'rerun' | 'skipped' | 'failed';
+  status?: string;
+  clearanceStatus?: string;
+  previousClearanceStatus?: string;
+  completed?: boolean;
+  code?: string;
+  message?: string;
+}
+
+export interface RerunInvoicesSummary {
+  requested: number;
+  rerun: number;
+  skipped: number;
+  failed: number;
+}
+
+/** POST /v1/invoices/rerun's answer for one request. Send the same request again with `cursor: nextCursor` until `done` is true. */
+export interface RerunInvoicesResult {
+  ok: true;
+  results: RerunInvoicesResultItem[];
+  summary: RerunInvoicesSummary;
+  done: boolean;
+  nextCursor: string | null;
+  /** How many invoices of the selection are still to be handled. */
+  remaining: number;
+}
+
+/** The 200 answer to a dryRun of a bulk re-run: nothing was changed. `matched` is how many invoices the selection would re-run (for a filter, only never-sent invoices count). */
+export interface RerunInvoicesPreview {
+  ok: true;
+  wouldSubmit: { operation: 'rerun_bulk'; matched: number };
+  matched: number;
+}
+
 /** The 200 answer to a dryRun: nothing was changed. */
 export interface RerunInvoicePreview {
   ok: true;

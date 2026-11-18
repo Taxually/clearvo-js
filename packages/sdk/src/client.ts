@@ -109,6 +109,9 @@ import type {
   RerunInvoiceInput,
   RerunInvoicePreview,
   RerunInvoiceResult,
+  RerunInvoicesInput,
+  RerunInvoicesResult,
+  RerunInvoicesPreview,
   GetSiiReconciliationSummaryResponse,
   GetSiiReconciliationResponse,
   QueryRequestParams,
@@ -928,6 +931,17 @@ export class ClearvoClient {
    */
   rerunInvoice(id: string, input: RerunInvoiceInput = {}, entityId?: string): Promise<RerunInvoiceResult | RerunInvoicePreview> {
     return this.request('POST', `/invoices/${encodeURIComponent(id)}/rerun`, input, entityHeaders(entityId));
+  }
+
+  /**
+   * Re-run many invoices that were never sent (needs info, held, refused before dispatch) against your current rules and tax codes.
+   * Send `ids` or a `filter` (status, reason, country, mandate, search as on the invoice list). One call handles a bounded batch and
+   * resolves with one result per invoice (`outcome` rerun, skipped or failed, with a `code` and `message` when not re-run) and a `summary`;
+   * call again with the same input and `cursor` set to `nextCursor` until `done` is true. With `dryRun: true` nothing changes and it
+   * resolves with how many invoices `matched`. An invoice that cannot be re-run is skipped with a reason, never silently dropped.
+   */
+  rerunInvoices(input: RerunInvoicesInput, entityId?: string): Promise<RerunInvoicesResult | RerunInvoicesPreview> {
+    return this.request('POST', '/invoices/rerun', input, entityHeaders(entityId));
   }
 
   /**

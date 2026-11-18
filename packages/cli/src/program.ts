@@ -445,6 +445,49 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo rerun-many ───────────────────────────────────────────────────────
+  // Re-runs many not-yet-sent invoices at once: by id, or by the same filters as the invoice list.
+  // A large selection is worked through in batches by following nextCursor until done.
+  program
+    .command('rerun-many [ids...]')
+    .description('Re-run many invoices that have not been sent yet against your current rules and tax codes (give ids, or filter flags)')
+    .option('--status <status>', 'Re-run every invoice with this status')
+    .option('--reason <reason>', 'Narrow to this reason under the status')
+    .option('--country <code>', 'Narrow to this country')
+    .option('--mandate <mandate>', 'Narrow to this mandate')
+    .option('--search <text>', 'Narrow to invoices matching this text')
+    .option('--dry-run', 'Check how many would be re-run without changing anything')
+    .option('--entity <id>', 'Entity ID (required for account-scoped keys)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (ids: string[], opts: { status?: string; reason?: string; country?: string; mandate?: string; search?: string; dryRun?: boolean; entity?: string; pretty?: boolean }) => {
+      const filter: Record<string, string> = {};
+      for (const k of ['status', 'reason', 'country', 'mandate', 'search'] as const) if (opts[k]) filter[k] = opts[k] as string;
+      const hasFilter = Object.keys(filter).length > 0;
+      if (ids.length > 0 && hasFilter) { console.error('Give invoice ids or filter flags, not both.'); process.exit(1); }
+      if (ids.length === 0 && !hasFilter) { console.error('Give invoice ids, or at least one filter flag (--status, --reason, --country, --mandate, --search).'); process.exit(1); }
+      const headers = opts.entity ? { 'x-entity-id': opts.entity } : undefined;
+      if (opts.dryRun) {
+        // Nothing changes and one answer says how many invoices the selection would re-run.
+        const body: Record<string, unknown> = { ...(ids.length > 0 ? { ids } : { filter }), dryRun: true };
+        print(await api('POST', '/invoices/rerun', body, headers), !!opts.pretty);
+        return;
+      }
+      let cursor: string | undefined;
+      const results: unknown[] = [];
+      const summary = { requested: 0, rerun: 0, skipped: 0, failed: 0 };
+      // One request handles a bounded batch; follow nextCursor until done so the whole selection is handled.
+      let done = false;
+      while (!done) {
+        const body: Record<string, unknown> = { ...(ids.length > 0 ? { ids } : { filter }), ...(cursor ? { cursor } : {}) };
+        const page = await api('POST', '/invoices/rerun', body, headers) as { results?: unknown[]; summary?: typeof summary; done?: boolean; nextCursor?: string | null };
+        results.push(...(page.results ?? []));
+        for (const k of Object.keys(summary) as (keyof typeof summary)[]) summary[k] += page.summary?.[k] ?? 0;
+        cursor = page.nextCursor ?? undefined;
+        done = page.done !== false || !cursor;
+      }
+      print({ results, summary }, !!opts.pretty);
+    });
+
   // ── clearvo business-status <id> ─────────────────────────────────────────────
   // Records a customer-lifecycle ("business") status decision on a received
   // (inbound) invoice — approve, partially approve, dispute, suspend, refuse, or
