@@ -8,7 +8,7 @@ describe('rerunInvoices', () => {
   const originalFetch = global.fetch;
   afterEach(() => { global.fetch = originalFetch; });
   const client = () => new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
-  const page = { ok: true, results: [{ invoiceId: 'a', ok: true, outcome: 'rerun', status: 'ACCEPTED' }], summary: { requested: 1, rerun: 1, skipped: 0, failed: 0 }, done: true, nextCursor: null, remaining: 0 };
+  const page = { ok: true, results: [{ invoiceId: 'a', invoiceNumber: 'INV-1', ok: true, outcome: 'rerun', status: 'ACCEPTED' }], summary: { requested: 1, rerun: 1, skipped: 0, failed: 0 }, done: true, nextCursor: null, remaining: 0 };
 
   it('posts ids to /invoices/rerun', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => page });
