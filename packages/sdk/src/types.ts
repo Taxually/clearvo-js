@@ -549,6 +549,7 @@ export interface SubmitInvoiceInput {
    * a plan without company codes is a 403 `company_codes_not_included`.
    */
   companyCode?: string;
+  /** YYYY-MM-DD, not later than today (ISSUE_DATE_IN_FUTURE): tomorrow in UTC is the latest accepted date, allowing for the furthest-ahead timezone. A later date is stored REJECTED; set it to today or earlier and resend. */
   issueDate: string;
   dueDate?: string;
   currency: string;
