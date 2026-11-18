@@ -6,6 +6,13 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — e-reporting batch fixes (publish after the backend reporting fixes PR is live)
+
+Reporting batches are listed oldest period first, empty periods outside the dates the obligation applies are no longer created or shown, and a batch's deadline always follows its own period (a décade is its end plus 10 days). Enabling an obligation with an `effectiveFrom` earlier than the date it starts applying is refused `400 EFFECTIVE_FROM_BEFORE_MANDATE`. The `deadlineBasis` field is gone from batch responses; it was never in the SDK types, so there is no type change. No runtime change in the SDK, CLI or MCP.
+
+- SDK: doc comments for `listReportingBatches` (order) and `updateReportingObligations` (new error code).
+- MCP: `list_reporting_batches` and `update_reporting_obligations` descriptions updated.
+
 ## Unreleased — invoice number on bulk re-run results (publish after the backend bulk re-run PR is live)
 
 Each result in the bulk re-run answer (`POST /v1/invoices/rerun`) now carries `invoiceNumber`, the invoice's own number, or null when the id was not found or the invoice has no number. The `nextCursor` is an opaque string: pass it back unchanged. The CLI `rerun-many` prints results as returned, so it gains the field with no code change.

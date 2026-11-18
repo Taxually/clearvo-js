@@ -3049,7 +3049,7 @@ const BASE_TOOLS = [
       'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
       '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
       '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
-      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii allows ' +
+      'EFFECTIVE_FROM_REQUIRED otherwise, and with EFFECTIVE_FROM_BEFORE_MANDATE (400) when it is earlier than the date the obligation starts applying (the message gives the earliest date to use). submissionMode must be one this regime allows (es_sii allows ' +
       '"immediate", "batch_auto" and "batch_review" — default "batch_review": nothing is sent until a human confirms the ' +
       'batch; fr_ereporting allows "batch_review" (default) and "batch_auto" — with batch_auto a Flux 2 batch you have not ' +
       'confirmed is sent automatically the day before its filing deadline, and you can still confirm it earlier; ' +
@@ -3086,7 +3086,7 @@ const BASE_TOOLS = [
       'batches (optionally filtered by status and entityId); pass id to fetch one batch\'s full detail, including ' +
       'every record it holds (invoice number, counterparty NIF, tipo, book, base/cuota, classification, ' +
       'warnings, reportBy, isLate, the AEAT outcome once submitted, and whether it was excluded from the batch). ' +
-      'Every response includes a vocabulary block with labels for every batch status and record state, plus a ' +
+      'Batches are listed oldest period first. Every response includes a vocabulary block with labels for every batch status and record state, plus a ' +
       'server-computed overdueLabel ("N Spanish business days overdue") wherever a deadline has passed — never ' +
       'reconstruct these from the raw status codes. A batch_review batch in status ready_for_review is waiting ' +
       'for a human confirm (POST /v1/reporting-batches/{id}/confirm with its snapshotVersion) — nothing is sent ' +

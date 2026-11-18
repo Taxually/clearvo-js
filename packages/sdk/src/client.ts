@@ -821,7 +821,8 @@ export class ClearvoClient {
 
   /**
    * Enable/disable regimes. Enabling requires `effectiveFrom` (EFFECTIVE_FROM_REQUIRED
-   * otherwise) and, for es_sii/fr_ereporting, a current registration in that country
+   * otherwise; an `effectiveFrom` before the date the obligation starts applying is refused 400
+   * EFFECTIVE_FROM_BEFORE_MANDATE, and the message gives the earliest date to use) and, for es_sii/fr_ereporting, a current registration in that country
    * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii accepts
    * submissionMode 'immediate' | 'batch_auto' | 'batch_review'; fr_ereporting accepts 'batch_review' | 'batch_auto'
    * (a batch_auto period you have not confirmed is sent the day before its filing deadline). Default 'batch_review'. Disabling es_sii while a batch is open / ready_for_review /
@@ -835,7 +836,7 @@ export class ClearvoClient {
 
   /**
    * List the Spain SII reporting batches this key can see (es_sii submissionMode
-   * batch_auto/batch_review), newest first. `status: 'ready_for_review'` finds the
+   * batch_auto/batch_review), oldest period first. `status: 'ready_for_review'` finds the
    * batches waiting for confirmReportingBatch().
    */
   listReportingBatches(params: ListReportingBatchesParams = {}): Promise<ListReportingBatchesResponse> {
