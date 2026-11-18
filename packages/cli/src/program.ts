@@ -1231,7 +1231,7 @@ export function createProgram(): Command {
     .description('Register a new webhook endpoint')
     .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
     .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending,invoice.unroutable', '*')
-    .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change')
+    .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change. Also takes reasons (SKIP_RULE) or the old name EXCLUDED: a rule-excluded record is SKIPPED / SKIP_RULE, so SKIPPED or SKIP_RULE receives it and NOT_APPLICABLE or NO_OBLIGATION does not; EXCLUDED receives both')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; statuses?: string; pretty?: boolean }) => {
       const events = opts.events.split(',').map(e => e.trim()).filter(Boolean);

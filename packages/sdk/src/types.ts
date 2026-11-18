@@ -2396,7 +2396,13 @@ export interface CreateWebhookInput {
    * gives two deliveries). `*` does NOT include `invoice.status_changed`: list it by name.
    */
   events?: WebhookEventName[] | string[];
-  /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
+  /**
+   * Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all.
+   * Takes public statuses (`SKIPPED`), public reasons (`SKIP_RULE`) or an old stored name. A record a rule excluded is delivered
+   * with `status` `SKIPPED` / `reason` `SKIP_RULE`: a `SKIPPED` or `SKIP_RULE` subscriber receives it, a `NOT_APPLICABLE` or
+   * `NO_OBLIGATION` subscriber does not (a record the law requires nothing for is the reverse); `EXCLUDED` receives both.
+   * The payload `to` reads `EXCLUDED` for both, so use `status` and `reason` to tell them apart.
+   */
   statuses?: Array<InvoiceStatus | InvoiceReason>;
 }
 

@@ -13,6 +13,7 @@ An invoice a rule excluded now reports status `SKIPPED` with reason `SKIP_RULE` 
 - SDK: doc comment on the `reason` filter.
 - CLI: `invoices list --reason` help.
 - MCP: `poll_status` and `list_invoices` descriptions.
+- Webhooks: the `statuses` filter on `invoice.status_changed` takes `SKIPPED`, `SKIP_RULE` or the old name `EXCLUDED`; a rule-excluded record reaches a `SKIPPED` or `SKIP_RULE` subscriber, not a `NOT_APPLICABLE` or `NO_OBLIGATION` one, and `EXCLUDED` gets both (payload `to` still reads `EXCLUDED`). Doc-only: SDK `CreateWebhookInput.statuses` comment, CLI `--statuses` help, MCP `create_webhook` `statuses` description.
 
 ## Unreleased — issue date in the future is refused (publish after the backend PR 19728 is live)
 

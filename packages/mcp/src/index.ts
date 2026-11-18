@@ -2102,7 +2102,7 @@ const BASE_TOOLS = [
         statuses: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["WAITING_FOR_YOU","REJECTED","COMPLETED"]), matched on the new status, one of the ten statuses. Omit or leave empty for every status change. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
+          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["WAITING_FOR_YOU","REJECTED","COMPLETED"]), matched on the new status, one of the ten statuses. Omit or leave empty for every status change. Public statuses (SKIPPED), public reasons (SKIP_RULE) or an old stored name are accepted. A record a rule excluded is delivered with status SKIPPED and reason SKIP_RULE, so a SKIPPED or SKIP_RULE subscriber receives it and a NOT_APPLICABLE or NO_OBLIGATION subscriber does not (a record the law requires nothing for is the reverse); the old name EXCLUDED receives both. The payload field `to` reads EXCLUDED for both, so use status and reason to tell them apart. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
         },
         events: {
           type: 'array',
