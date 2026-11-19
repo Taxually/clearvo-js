@@ -45,7 +45,7 @@ describe('rerun', () => {
 describe('rerun-many', () => {
   const page = (n: number, done: boolean, cursor: string | null) => ({
     ok: true, status: 200,
-    json: async () => ({ ok: true, results: [{ invoiceId: `i${n}`, ok: true, outcome: 'rerun' }], summary: { requested: 1, rerun: 1, skipped: 0, failed: 0 }, done, nextCursor: cursor, remaining: 0 }),
+    json: async () => ({ ok: true, results: [{ invoiceId: `i${n}`, ok: true, outcome: 'rerun' }], summary: { requested: 1, rerun: 1, skipped: 0, failed: 0, released: 1, stillHeld: 0, unchanged: 0, skippedInvoices: n === 2 ? [{ invoiceId: 'x', invoiceNumber: null, reasonLabel: 'Already sent' }] : [] }, done, nextCursor: cursor, remaining: 0 }),
   });
 
   it('follows nextCursor until done and sums the summary', async () => {
@@ -57,7 +57,7 @@ describe('rerun-many', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ filter: { status: 'WAITING_FOR_YOU', country: 'DE' } });
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ filter: { status: 'WAITING_FOR_YOU', country: 'DE' }, cursor: 'k:a' });
     const printed = JSON.parse((console.log as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]);
-    expect(printed.summary).toEqual({ requested: 2, rerun: 2, skipped: 0, failed: 0 });
+    expect(printed.summary).toEqual({ requested: 2, rerun: 2, skipped: 0, failed: 0, released: 2, stillHeld: 0, unchanged: 0, skippedInvoices: [{ invoiceId: 'x', invoiceNumber: null, reasonLabel: 'Already sent' }] });
   });
 
   it('--dry-run makes one call with dryRun and ids', async () => {

@@ -6,6 +6,38 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — invoice timeline and bulk re-run results explain themselves (publish after the backend PRs 19728 and 19755 are live)
+
+`GET /v1/invoices/{id}` events carry `label`, `detail` (always present, says why), `tone` (success, danger, warning, neutral, info) and `isCurrent`. Each bulk re-run result carries `outcomeGroup` (released, still_held, unchanged, skipped, failed) and `reasonLabel`; the summary adds `released`, `stillHeld`, `unchanged` and `skippedInvoices`; the dry-run answer is `{ ok, wouldSubmit, selected, matched, wouldSkip }`. The warning `SUPPLIER_AUTO_FILLED_FROM_ENTITY` and the fact `supplierFilledFromEntity` are gone (a sale is always issued as the business profile; `sendingEntity` stays).
+
+- SDK: `RerunInvoicesResultItem.outcomeGroup` and `reasonLabel` (new required fields on the answer), `RerunInvoicesSummary` counts and `skippedInvoices`, `RerunInvoicesPreview.selected` and `wouldSkip`.
+- CLI: `rerun-many` totals the new counts and lists every skipped invoice in `summary.skippedInvoices`.
+- MCP: `rerun_invoices` and `get_invoice` descriptions.
+
+## Unreleased — rule exclusions report SKIPPED / SKIP_RULE (publish after the backend PR 19728 is live)
+
+An invoice a rule excluded now reports status `SKIPPED` with reason `SKIP_RULE` ("Skipped by rule") instead of `NOT_APPLICABLE` / `NO_OBLIGATION`; with no rule exclusion and nothing required by law it stays `NOT_APPLICABLE` / `NO_OBLIGATION`. The enums are unchanged, so there is no type or runtime change. `status=SKIPPED` now includes rule exclusions, `status=NOT_APPLICABLE` excludes them, and `reason=EXCLUDED` matches both.
+
+- SDK: doc comment on the `reason` filter.
+- CLI: `invoices list --reason` help.
+- MCP: `poll_status` and `list_invoices` descriptions.
+- Webhooks: the `statuses` filter on `invoice.status_changed` takes `SKIPPED`, `SKIP_RULE` or the old name `EXCLUDED`; a rule-excluded record reaches a `SKIPPED` or `SKIP_RULE` subscriber, not a `NOT_APPLICABLE` or `NO_OBLIGATION` one, and `EXCLUDED` gets both (payload `to` still reads `EXCLUDED`). Doc-only: SDK `CreateWebhookInput.statuses` comment, CLI `--statuses` help, MCP `create_webhook` `statuses` description.
+
+## Unreleased — issue date in the future is refused (publish after the backend PR 19728 is live)
+
+Every send now refuses an invoice `issueDate` later than tomorrow in UTC with `ISSUE_DATE_IN_FUTURE` (field `issueDate`, stored `REJECTED`, HTTP 200 with `ok: false`); a future `taxPointDate` or `dueDate` is not refused. No runtime change in the SDK, CLI or MCP.
+
+- SDK: doc comment on `issueDate`.
+- MCP: `submit_invoice` `issueDate` description names the rule and the fix.
+
+## Unreleased — e-reporting batch fixes (publish after the backend reporting fixes PR is live)
+
+Reporting batches are listed oldest period first, empty periods outside the dates the obligation applies are no longer created or shown, and a batch's deadline always follows its own period (a décade is its end plus 10 days). Enabling an obligation with an `effectiveFrom` earlier than the date it starts applying is refused `400 EFFECTIVE_FROM_BEFORE_MANDATE`. The `deadlineBasis` field is gone from batch responses; it was never in the SDK types, so there is no type change. No runtime change in the SDK, CLI or MCP.
+
+- SDK: doc comments for `listReportingBatches` (order) and `updateReportingObligations` (new error code).
+- SDK: `ReportingBatch.deadlineNote: string | null` (why `reportBy` is null).
+- MCP: `list_reporting_batches` and `update_reporting_obligations` descriptions updated.
+
 ## Unreleased — invoice number on bulk re-run results (publish after the backend bulk re-run PR is live)
 
 Each result in the bulk re-run answer (`POST /v1/invoices/rerun`) now carries `invoiceNumber`, the invoice's own number, or null when the id was not found or the invoice has no number. The `nextCursor` is an opaque string: pass it back unchanged. The CLI `rerun-many` prints results as returned, so it gains the field with no code change.

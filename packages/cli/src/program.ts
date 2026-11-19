@@ -474,18 +474,20 @@ export function createProgram(): Command {
       }
       let cursor: string | undefined;
       const results: unknown[] = [];
-      const summary = { requested: 0, rerun: 0, skipped: 0, failed: 0 };
+      const summary = { requested: 0, rerun: 0, skipped: 0, failed: 0, released: 0, stillHeld: 0, unchanged: 0 };
+      const skippedInvoices: unknown[] = [];
       // One request handles a bounded batch; follow nextCursor until done so the whole selection is handled.
       let done = false;
       while (!done) {
         const body: Record<string, unknown> = { ...(ids.length > 0 ? { ids } : { filter }), ...(cursor ? { cursor } : {}) };
-        const page = await api('POST', '/invoices/rerun', body, headers) as { results?: unknown[]; summary?: typeof summary; done?: boolean; nextCursor?: string | null };
+        const page = await api('POST', '/invoices/rerun', body, headers) as { results?: unknown[]; summary?: Partial<typeof summary> & { skippedInvoices?: unknown[] }; done?: boolean; nextCursor?: string | null };
         results.push(...(page.results ?? []));
+        skippedInvoices.push(...(page.summary?.skippedInvoices ?? []));
         for (const k of Object.keys(summary) as (keyof typeof summary)[]) summary[k] += page.summary?.[k] ?? 0;
         cursor = page.nextCursor ?? undefined;
         done = page.done !== false || !cursor;
       }
-      print({ results, summary }, !!opts.pretty);
+      print({ results, summary: { ...summary, skippedInvoices } }, !!opts.pretty);
     });
 
   // ── clearvo business-status <id> ─────────────────────────────────────────────
@@ -549,7 +551,7 @@ export function createProgram(): Command {
     .command('list')
     .description('List invoices with their status, stage, reason, issues and customerResponse. Filter by status (one of ten), reason (the specific cause) and the buyer\'s decision')
     .option('--status <status>', 'RECEIVED | PENDING | WAITING_FOR_YOU | WAITING_FOR_PLATFORM | ACCUMULATED | COMPLETED | REJECTED | CANCELLED | SKIPPED | NOT_APPLICABLE')
-    .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, SETUP_NEEDED, SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED are also accepted)')
+    .option('--reason <reason>', 'A reason code, for example NEEDS_INFO, UNROUTABLE, SETUP_NEEDED, SKIP_RULE (rule exclusion, status SKIPPED), NO_OBLIGATION (nothing required, status NOT_APPLICABLE), MERCHANT_VOIDED, REGISTERED_WITH_ERRORS (the old stored names such as EXCLUDED, which matches both, are also accepted)')
     .option('--customer-response <value>', 'The buyer\'s decision: in_review | approved | partially_approved | disputed | refused (a regime\'s own native code is also accepted)')
     .option('--country <code>', 'ISO 3166-1 alpha-2 country code')
     .option('--limit <n>', 'Results per page (default 25, max 100)')
@@ -1231,7 +1233,7 @@ export function createProgram(): Command {
     .description('Register a new webhook endpoint')
     .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
     .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending,invoice.unroutable', '*')
-    .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change')
+    .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change. Also takes reasons (SKIP_RULE) or the old name EXCLUDED: a rule-excluded record is SKIPPED / SKIP_RULE, so SKIPPED or SKIP_RULE receives it and NOT_APPLICABLE or NO_OBLIGATION does not; EXCLUDED receives both')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; statuses?: string; pretty?: boolean }) => {
       const events = opts.events.split(',').map(e => e.trim()).filter(Boolean);

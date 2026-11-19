@@ -821,7 +821,8 @@ export class ClearvoClient {
 
   /**
    * Enable/disable regimes. Enabling requires `effectiveFrom` (EFFECTIVE_FROM_REQUIRED
-   * otherwise) and, for es_sii/fr_ereporting, a current registration in that country
+   * otherwise; an `effectiveFrom` before the date the obligation starts applying is refused 400
+   * EFFECTIVE_FROM_BEFORE_MANDATE, and the message gives the earliest date to use) and, for es_sii/fr_ereporting, a current registration in that country
    * (400 REGISTRATION_REQUIRED — RegistrationRequiredError body with fixUrl). es_sii accepts
    * submissionMode 'immediate' | 'batch_auto' | 'batch_review'; fr_ereporting accepts 'batch_review' | 'batch_auto'
    * (a batch_auto period you have not confirmed is sent the day before its filing deadline). Default 'batch_review'. Disabling es_sii while a batch is open / ready_for_review /
@@ -835,7 +836,7 @@ export class ClearvoClient {
 
   /**
    * List the Spain SII reporting batches this key can see (es_sii submissionMode
-   * batch_auto/batch_review), newest first. `status: 'ready_for_review'` finds the
+   * batch_auto/batch_review), oldest period first. `status: 'ready_for_review'` finds the
    * batches waiting for confirmReportingBatch().
    */
   listReportingBatches(params: ListReportingBatchesParams = {}): Promise<ListReportingBatchesResponse> {
@@ -936,9 +937,9 @@ export class ClearvoClient {
   /**
    * Re-run many invoices that were never sent (needs info, held, refused before dispatch) against your current rules and tax codes.
    * Send `ids` or a `filter` (status, reason, country, mandate, search as on the invoice list). One call handles a bounded batch and
-   * resolves with one result per invoice (`outcome` rerun, skipped or failed, with a `code` and `message` when not re-run) and a `summary`;
+   * resolves with one result per invoice (`outcome` rerun, skipped or failed, with a `code` and `message` when not re-run, an `outcomeGroup` released, still_held, unchanged, skipped or failed, and a plain `reasonLabel`) and a `summary` (counts per group and `skippedInvoices`);
    * call again with the same input and `cursor` set to `nextCursor` until `done` is true. With `dryRun: true` nothing changes and it
-   * resolves with how many invoices `matched`. An invoice that cannot be re-run is skipped with a reason, never silently dropped.
+   * resolves with `selected`, `matched` and `wouldSkip`. An invoice that cannot be re-run is skipped with a reason, never silently dropped.
    */
   rerunInvoices(input: RerunInvoicesInput, entityId?: string): Promise<RerunInvoicesResult | RerunInvoicesPreview> {
     return this.request('POST', '/invoices/rerun', input, entityHeaders(entityId));

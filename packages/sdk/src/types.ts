@@ -549,6 +549,7 @@ export interface SubmitInvoiceInput {
    * a plan without company codes is a 403 `company_codes_not_included`.
    */
   companyCode?: string;
+  /** YYYY-MM-DD, not later than today (ISSUE_DATE_IN_FUTURE): tomorrow in UTC is the latest accepted date, allowing for the furthest-ahead timezone. A later date is stored REJECTED; set it to today or earlier and resend. */
   issueDate: string;
   dueDate?: string;
   currency: string;
@@ -899,7 +900,7 @@ export interface ListInvoicesParams {
   country?: string;
   /** One of the ten statuses ({@link InvoiceStatus}). */
   status?: InvoiceStatus;
-  /** A finer-grained reason ({@link InvoiceReason}); the old stored names (UNROUTABLE, HELD_*, EXCLUDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are accepted. */
+  /** A finer-grained reason ({@link InvoiceReason}); SKIP_RULE (status SKIPPED) is a record a rule excluded, NO_OBLIGATION (status NOT_APPLICABLE) one no rule excluded where the law requires nothing; the old stored names (UNROUTABLE, HELD_*, EXCLUDED which matches both, ...) and the new ones (MERCHANT_VOIDED, REGISTERED_WITH_ERRORS) are accepted. */
   reason?: InvoiceReason;
   /** Filter on the buyer's decision: in_review, approved, partially_approved, disputed or refused. A regime's own native code (for example PAYMENT_SENT) is also accepted. */
   businessStatus?: CustomerResponseStatus | (string & {});
@@ -2395,7 +2396,13 @@ export interface CreateWebhookInput {
    * gives two deliveries). `*` does NOT include `invoice.status_changed`: list it by name.
    */
   events?: WebhookEventName[] | string[];
-  /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
+  /**
+   * Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all.
+   * Takes public statuses (`SKIPPED`), public reasons (`SKIP_RULE`) or an old stored name. A record a rule excluded is delivered
+   * with `status` `SKIPPED` / `reason` `SKIP_RULE`: a `SKIPPED` or `SKIP_RULE` subscriber receives it, a `NOT_APPLICABLE` or
+   * `NO_OBLIGATION` subscriber does not (a record the law requires nothing for is the reverse); `EXCLUDED` receives both.
+   * The payload `to` reads `EXCLUDED` for both, so use `status` and `reason` to tell them apart.
+   */
   statuses?: Array<InvoiceStatus | InvoiceReason>;
 }
 
@@ -2842,6 +2849,8 @@ export interface ReportingBatch {
   periodEnd: string | null;
   /** Earliest AEAT report-by date across the batch's records. */
   reportBy: string | null;
+  /** Why `reportBy` is null: set only when the period's reporting frequency is ambiguous; null otherwise. */
+  deadlineNote: string | null;
   /** Server-computed "N Spanish business day(s) overdue"; null when not overdue. */
   overdueLabel: string | null;
   recordCount: number;
@@ -3089,6 +3098,10 @@ export interface RerunInvoicesResultItem {
   invoiceNumber: string | null;
   ok: boolean;
   outcome: 'rerun' | 'skipped' | 'failed';
+  /** `released`: left the hold. `still_held`: still waiting for you, the platform or rejected (`reasonLabel` is the reason). `unchanged`: re-checked, same state. `skipped`: could not be re-run. `failed`: error. */
+  outcomeGroup: 'released' | 'still_held' | 'unchanged' | 'skipped' | 'failed';
+  /** Plain-English reason for the group. */
+  reasonLabel: string;
   status?: string;
   clearanceStatus?: string;
   previousClearanceStatus?: string;
@@ -3099,9 +3112,15 @@ export interface RerunInvoicesResultItem {
 
 export interface RerunInvoicesSummary {
   requested: number;
+  /** released + stillHeld + unchanged. */
   rerun: number;
   skipped: number;
   failed: number;
+  released: number;
+  stillHeld: number;
+  unchanged: number;
+  /** Every invoice in this batch that was not re-run, with the plain reason. */
+  skippedInvoices: Array<{ invoiceId: string; invoiceNumber: string | null; reasonLabel: string }>;
 }
 
 /** POST /v1/invoices/rerun's answer for one request. Send the same request again with `cursor: nextCursor` until `done` is true. */
@@ -3115,11 +3134,13 @@ export interface RerunInvoicesResult {
   remaining: number;
 }
 
-/** The 200 answer to a dryRun of a bulk re-run: nothing was changed. `matched` is how many invoices the selection would re-run (for a filter, only never-sent invoices count). */
+/** The 200 answer to a dryRun of a bulk re-run: nothing was changed. `selected` is how many you selected, `matched` how many a re-run applies to now (for a filter, only never-sent invoices count) and `wouldSkip` is selected minus matched (already sent, voided or not found). */
 export interface RerunInvoicesPreview {
   ok: true;
   wouldSubmit: { operation: 'rerun_bulk'; matched: number };
+  selected: number;
   matched: number;
+  wouldSkip: number;
 }
 
 /** The 200 answer to a dryRun: nothing was changed. */

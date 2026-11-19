@@ -691,7 +691,7 @@ const BASE_TOOLS = [
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 destination country (e.g. "IT", "PL", "DE")' },
         invoiceNumber: { type: 'string', description: 'Your invoice reference number' },
         companyCode: { type: 'string', description: 'Optional company code (a division of this entity; Enterprise plans only). Trimmed, max 50, matched without regard to case. Omit it to use the entity\'s default company code, else none. An unknown or archived code is stored with the error company_code_unknown, and a code outside its validFrom/validTo window on the transaction date with the error company_code_not_valid_on_date (an entity default outside its window is not applied, with a warning); a plan without company codes fails with 403 company_codes_not_included. Stored on the record and echoed on the response; company-code-scoped rules fire only for it.' },
-        issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format' },
+        issueDate: { type: 'string', description: 'Issue date in YYYY-MM-DD format. A date later than today is refused (ISSUE_DATE_IN_FUTURE; tomorrow in UTC is the latest accepted, for the furthest-ahead timezone); set it to today or earlier and resend.' },
         currency: { type: 'string', description: 'ISO 4217 currency code (e.g. "EUR", "PLN", "GBP")' },
         taxReportingCurrency: { type: 'string', description: 'ISO 4217 currency code this invoice must be VAT-reported in, when it differs from currency (EN16931 BT-6 — e.g. a EUR invoice for a transaction whose jurisdiction reports in RON). Omit to let it resolve automatically from the transaction\'s own tax jurisdiction; only set it to override that. When the resolved reporting currency differs from currency, you should also supply exchangeRate or taxReporting below — without one the invoice is still sent with the warning MISSING_EXCHANGE_RATE, except where the authority needs the conversion (Hungary: MISSING_EXCHANGE_RATE_REQUIRED stops it). Clearvo never fetches or computes an exchange rate itself.' },
         exchangeRate: { type: 'number', description: 'currency -> taxReportingCurrency rate, applied uniformly to every total. Mutually exclusive with taxReporting — supply one or the other, never both.' },
@@ -1081,7 +1081,7 @@ const BASE_TOOLS = [
       'Re-run many invoices that were never sent to an authority or network (needs info, held, or refused by our own checks before dispatch) in place, ' +
       'against the current rules and tax codes. Use it after adding a rule, tax code mapping or setting so the new configuration applies to all of them at once; invoice ids do not change. ' +
       'Pass ids (the invoices to re-run) or filter (status, reason, country, mandate, search: the same filters as list_invoices), not both. ' +
-      'Returns one result per invoice (invoiceId, invoiceNumber (null when not found or the invoice has no number), outcome rerun, skipped or failed, with the new status or a plain code and message) and a summary (requested, rerun, skipped, failed). ' +
+      'Returns one result per invoice (invoiceId, invoiceNumber (null when not found or the invoice has no number), outcome rerun, skipped or failed, outcomeGroup released, still_held, unchanged, skipped or failed, reasonLabel (plain reason; for still_held the reason it is still held), with the new status or a plain code and message) and a summary (requested, rerun, skipped, failed, released, stillHeld, unchanged, skippedInvoices). The check-first answer (dryRun) gives selected, matched (how many a re-run applies to now) and wouldSkip. ' +
       'Invoices that cannot be re-run (already sent, or no stored document) are skipped with a reason. One call handles a bounded batch: while done is false, call again with the same ids or filter and cursor set to nextCursor until done is true. ' +
       'Never blind-retry. Check first: call it with dryRun true, show the user how many would be re-run and why others would be skipped, and only after they explicitly say yes call again without dryRun.',
     inputSchema: {
@@ -1135,7 +1135,7 @@ const BASE_TOOLS = [
       'RECEIVED (stored, still processing), PENDING (stage queued: not sent yet; awaiting_authority: sent, wait for the answer), ACCUMULATED (in a periodic report, not yet filed): wait, do nothing; ' +
       'WAITING_FOR_YOU (reasons NEEDS_INFO, SETUP_NEEDED (cause in errorCode: TAX_CODE_UNMAPPED, OBLIGATION_DISABLED or a credential cause), UNROUTABLE, RECEIVED_NEEDS_REVIEW, AWAITING_RELEASE, REGISTERED_WITH_ERRORS: the merchant can fix it; read `nextStep`/`fixUrl`), ' +
       'WAITING_FOR_PLATFORM (reasons HELD_AWAITING_AUTHORIZATION, HELD_AWAITING_ORIGINAL (a credit note waiting for its original invoice; `originalInvoiceId` names it), HELD_UNKNOWN_MANDATE, HELD_UNMAPPED_DECISION, HELD_PLATFORM_FAULT, UNDELIVERED: Clearvo resolves it, nothing to do), ' +
-      'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (the merchant chose not to submit it: reason SKIP_RULE or MERCHANT_DISCARDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE: finished, not an error). ' +
+      'COMPLETED (stage generated, reported, cleared, delivered or received), REJECTED (see errors and nextStep), CANCELLED, SKIPPED (not submitted by choice: reason SKIP_RULE, "Skipped by rule", when a rule excluded the invoice, for example a zero-value document, or MERCHANT_VOIDED) and NOT_APPLICABLE (reasons NO_MANDATE, NOT_SUPPORTED, DUPLICATE, or NO_OBLIGATION when no rule excluded it and the law requires nothing: finished, not an error). ' +
       '`customerResponse` (in_review, approved, partially_approved, disputed, refused) is the buyer\'s separate, non-blocking decision and never changes `status`. ' +
       'A waiting document is not a dead end: for NEEDS_INFO and SETUP_NEEDED fix the gap (configure the code, add the setup) and the document continues, ' +
       'or resend the corrected document to POST /v1/send with the same invoice number. ' +
@@ -1953,8 +1953,8 @@ const BASE_TOOLS = [
         },
         reason: {
           type: 'string',
-          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_DISCARDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
-          description: 'Filter by the specific reason behind the status. The old stored names (EXCLUDED, DISCARDED, ...) and the new ones (SKIP_RULE, MERCHANT_DISCARDED, REGISTERED_WITH_ERRORS) are both accepted.',
+          enum: ['RECEIVED', 'PENDING', 'UNROUTABLE', 'DELIVERED', 'ACCEPTED', 'REJECTED', 'DUPLICATE', 'UNDELIVERED', 'HELD_AWAITING_AUTHORIZATION', 'HELD_AWAITING_ORIGINAL', 'SETUP_NEEDED', 'HELD_UNKNOWN_MANDATE', 'NOT_SUPPORTED', 'NO_MANDATE', 'NO_OBLIGATION', 'ACCUMULATED', 'NEEDS_INFO', 'HELD_PLATFORM_FAULT', 'HELD_UNMAPPED_DECISION', 'CANCELLED', 'RECEIVED_NEEDS_REVIEW', 'AWAITING_RELEASE', 'MERCHANT_VOIDED', 'REGISTERED_WITH_ERRORS', 'SKIP_RULE'],
+          description: 'Filter by the specific reason behind the status. SKIP_RULE (status SKIPPED) is a rule exclusion; NO_OBLIGATION (status NOT_APPLICABLE) is nothing required by law with no rule involved. The old stored names (EXCLUDED matches both, DISCARDED, ...) and the new ones (MERCHANT_VOIDED, REGISTERED_WITH_ERRORS) are both accepted. status=SKIPPED includes rule exclusions; status=NOT_APPLICABLE excludes them.',
         },
         businessStatus: {
           type: 'string',
@@ -1972,7 +1972,7 @@ const BASE_TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log (each event has label, detail saying why it happened, tone and isCurrent), country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
@@ -2102,7 +2102,7 @@ const BASE_TOOLS = [
         statuses: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["WAITING_FOR_YOU","REJECTED","COMPLETED"]), matched on the new status, one of the ten statuses. Omit or leave empty for every status change. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
+          description: 'Only for invoice.status_changed, which must also be listed in `events`: the statuses to receive (e.g. ["WAITING_FOR_YOU","REJECTED","COMPLETED"]), matched on the new status, one of the ten statuses. Omit or leave empty for every status change. Public statuses (SKIPPED), public reasons (SKIP_RULE) or an old stored name are accepted. A record a rule excluded is delivered with status SKIPPED and reason SKIP_RULE, so a SKIPPED or SKIP_RULE subscriber receives it and a NOT_APPLICABLE or NO_OBLIGATION subscriber does not (a record the law requires nothing for is the reverse); the old name EXCLUDED receives both. The payload field `to` reads EXCLUDED for both, so use status and reason to tell them apart. An unknown status, or statuses without invoice.status_changed in events, is a 400.',
         },
         events: {
           type: 'array',
@@ -3049,7 +3049,7 @@ const BASE_TOOLS = [
       'an object keyed by regime code, each value either `true`/`false` (disable-only shorthand) or an object ' +
       '{ enabled, effectiveFrom, submissionMode }. ENABLING A REGIME REQUIRES effectiveFrom (an ISO date, YYYY-MM-DD) ' +
       '— ask the user when the obligation should start applying rather than guessing; the call fails with ' +
-      'EFFECTIVE_FROM_REQUIRED otherwise. submissionMode must be one this regime allows (es_sii allows ' +
+      'EFFECTIVE_FROM_REQUIRED otherwise, and with EFFECTIVE_FROM_BEFORE_MANDATE (400) when it is earlier than the date the obligation starts applying (the message gives the earliest date to use). submissionMode must be one this regime allows (es_sii allows ' +
       '"immediate", "batch_auto" and "batch_review" — default "batch_review": nothing is sent until a human confirms the ' +
       'batch; fr_ereporting allows "batch_review" (default) and "batch_auto" — with batch_auto a Flux 2 batch you have not ' +
       'confirmed is sent automatically the day before its filing deadline, and you can still confirm it earlier; ' +
@@ -3086,7 +3086,7 @@ const BASE_TOOLS = [
       'batches (optionally filtered by status and entityId); pass id to fetch one batch\'s full detail, including ' +
       'every record it holds (invoice number, counterparty NIF, tipo, book, base/cuota, classification, ' +
       'warnings, reportBy, isLate, the AEAT outcome once submitted, and whether it was excluded from the batch). ' +
-      'Every response includes a vocabulary block with labels for every batch status and record state, plus a ' +
+      'Batches are listed oldest period first. Every response includes a vocabulary block with labels for every batch status and record state, plus a ' +
       'server-computed overdueLabel ("N Spanish business days overdue") wherever a deadline has passed — never ' +
       'reconstruct these from the raw status codes. A batch_review batch in status ready_for_review is waiting ' +
       'for a human confirm (POST /v1/reporting-batches/{id}/confirm with its snapshotVersion) — nothing is sent ' +
