@@ -6,6 +6,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — tax number evidence: reference numbers, lookups and check history (publish after the backend tax number evidence PR is live)
+
+Tax number checks now keep the authority's reference number (the proof of the check), its date, and the registered name and address, and you can read them back. SDK 0.11.0, MCP 0.12.0, CLI 0.11.0 (minor).
+
+- SDK: `TaxNumberValidateResponse` now matches the real response: `authority` carries `requestId` (reference number), `requestDate` (ISO date or null), `checkedAt`, `extra`, and the response carries `countryCode`, `normalized`, `format`, `formatValid`, `cached`. `country`, `name`, `address` and `status` are now optional (the API returns the registered name and address under `authority`). New `listTaxNumberLookups(params)` and `queryTaxNumberCheckHistory({ items, asOf?, includeChecks? })` with full types.
+- MCP: new tools `list_tax_number_lookups` and `query_tax_number_check_history` (same name as the hosted connector); `validate_tax_number` description names the reference number.
+- CLI: new `clearvo tax-number-lookups` and `clearvo tax-number-history`.
+- npm release needs: the backend PR must be live first (the new fields and `requestDate`/name/address on history only exist after it); then publish `@clearvo/sdk` 0.11.0, `@clearvo/cli` 0.11.0, `@clearvo/mcp` 0.12.0 per "Releasing" in the README.
+
 ## Unreleased — invoice number on bulk re-run results (publish after the backend bulk re-run PR is live)
 
 Each result in the bulk re-run answer (`POST /v1/invoices/rerun`) now carries `invoiceNumber`, the invoice's own number, or null when the id was not found or the invoice has no number. The `nextCursor` is an opaque string: pass it back unchanged. The CLI `rerun-many` prints results as returned, so it gains the field with no code change.

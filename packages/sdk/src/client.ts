@@ -32,6 +32,10 @@ import type {
   ImportSettlementVariance,
   TaxCalculateResponse,
   TaxNumberValidateResponse,
+  ListTaxNumberLookupsParams,
+  ListTaxNumberLookupsResponse,
+  TaxNumberCheckHistoryRequest,
+  TaxNumberCheckHistoryResponse,
   ValidateTaxNumberOptions,
   TaxNumberBatchItem,
   TaxNumberBatchResult,
@@ -503,6 +507,24 @@ export class ClearvoClient {
 
   validateTaxNumber(countryCode: string, taxNumber: string, options?: ValidateTaxNumberOptions): Promise<TaxNumberValidateResponse> {
     return this.request('POST', '/tax-numbers/validate', { countryCode, taxNumber, ...(options?.companyName ? { companyName: options.companyName } : {}) });
+  }
+
+  /** List stored tax number checks, with the authority's name, address and reference number. */
+  listTaxNumberLookups(params: ListTaxNumberLookupsParams = {}): Promise<ListTaxNumberLookupsResponse> {
+    const qs = new URLSearchParams();
+    if (params.countryCode) qs.set('countryCode', params.countryCode);
+    if (params.valid !== undefined) qs.set('valid', String(params.valid));
+    if (params.from) qs.set('from', params.from);
+    if (params.to) qs.set('to', params.to);
+    if (params.page !== undefined) qs.set('page', String(params.page));
+    if (params.limit !== undefined) qs.set('limit', String(params.limit));
+    const q = qs.toString();
+    return this.request('GET', `/tax-numbers/lookups${q ? `?${q}` : ''}`);
+  }
+
+  /** For up to 500 tax numbers: the stored authority check that applies on a date, with its reference number. Read-only; never contacts the authority. */
+  queryTaxNumberCheckHistory(request: TaxNumberCheckHistoryRequest): Promise<TaxNumberCheckHistoryResponse> {
+    return this.request('POST', '/tax-numbers/check-history', request);
   }
 
   // ── Entity Management ─────────────────────────────────────────────────────────

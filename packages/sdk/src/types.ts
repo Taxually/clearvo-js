@@ -1935,17 +1935,53 @@ export interface TaxCalculateResponse {
   }>;
 }
 
+/** What the tax authority returned for a check. Fields the authority does not provide are absent. */
+export interface TaxNumberAuthorityResult {
+  /** Whether the authority was contacted for this answer. */
+  checked: boolean;
+  valid?: boolean;
+  /** Registered name the authority holds for the number. */
+  name?: string;
+  /** Registered address the authority holds for the number. */
+  address?: string;
+  status?: string;
+  entityType?: string;
+  /** The authority's own reference number for the check (the proof of the consultation). */
+  requestId?: string;
+  /** The date the authority gives for the check (ISO 8601), or null when it gives none. */
+  requestDate?: string | null;
+  /** When the authority was consulted (ISO 8601). */
+  checkedAt?: string;
+  /** Authority detail keyed by source (for example `anaf`, `mfcr`, `fs` for Slovakia, `aade`); its shape varies by country, so it is left open. Slovak register data (`extra.fs`) carries a required CC BY 4.0 `attribution` string to show wherever that data is displayed. */
+  extra?: Record<string, unknown>;
+  error?: string;
+  [key: string]: unknown;
+}
+
 export interface TaxNumberValidateResponse {
   valid: boolean;
-  country: string;
+  /** ISO 3166-1 alpha-2 country code the number was checked under. */
+  countryCode?: string;
+  /** Deprecated alias seen on older responses; use `countryCode`. */
+  country?: string;
   taxNumber: string;
+  /** The number in its normalised spelling. */
+  normalized?: string;
+  registryType?: string;
+  /** Format check result. */
+  format?: { valid: boolean; normalized?: string; error?: string };
+  /** Shortcut for `format.valid`. */
+  formatValid?: boolean;
   name?: string;
   address?: string;
-  status: 'VALID' | 'INVALID' | 'UNVERIFIED';
+  status?: 'VALID' | 'INVALID' | 'UNVERIFIED';
   /** Present only when `companyName` was sent and the number's format is valid. A warning only: it never changes `valid`. */
   nameMatch?: NameMatch;
-  /** Authority detail. `extra` is keyed by source (for example `anaf`, `mfcr`, `fs` for Slovakia, `aade`) and its shape varies by country, so it is left open. Slovak register data (`extra.fs`) carries a required CC BY 4.0 `attribution` string to show wherever that data is displayed. */
-  authority?: { checked?: boolean; valid?: boolean; name?: string; extra?: Record<string, unknown>; [key: string]: unknown };
+  /** Authority detail, including the reference number (`requestId`) and its date (`requestDate`). */
+  authority?: TaxNumberAuthorityResult;
+  /** Whether the answer came from a recent stored check. */
+  cached?: boolean;
+  checkedAt?: string;
   [key: string]: unknown;
 }
 
@@ -6216,4 +6252,104 @@ export interface TestCaseCatalogue {
   };
   limits: { titleMax: number; textMax: number; stepsMax: number; casesMax: number; casesUsed: number };
   disclaimer?: string;
+}
+
+/** Query for listing tax number checks (GET /v1/tax-numbers/lookups). */
+export interface ListTaxNumberLookupsParams {
+  countryCode?: string;
+  valid?: boolean;
+  /** YYYY-MM-DD, checks on or after this date. */
+  from?: string;
+  /** YYYY-MM-DD, checks on or before this date. */
+  to?: string;
+  /** 1-based page, default 1. */
+  page?: number;
+  /** Rows per page, 1 to 100, default 50. */
+  limit?: number;
+}
+
+/** One stored tax number check, including the authority's reference number. */
+export interface TaxNumberLookup {
+  id: string;
+  countryCode: string;
+  taxNumber: string;
+  rawTaxNumber: string;
+  registryType: string;
+  formatValid: boolean;
+  formatError: string | null;
+  authorityChecked: boolean;
+  authorityValid: boolean | null;
+  authorityName: string | null;
+  authorityAddress: string | null;
+  /** The authority's reference number for the check. */
+  authorityRequestId: string | null;
+  /** The date the authority gives for the check (ISO 8601). */
+  authorityRequestDate: string | null;
+  authorityStatus: string | null;
+  checkedAt: string;
+  authorityCheckedAt: string | null;
+  entityId: string | null;
+}
+
+export interface ListTaxNumberLookupsResponse {
+  lookups: TaxNumberLookup[];
+  pagination: { total: number; page: number; limit: number; pages: number; hasNext: boolean; hasPrev: boolean };
+  /** Last 30 days. */
+  stats: { total30d: number; valid30d: number; validRate: number; countriesCovered: number };
+}
+
+export interface TaxNumberCheckHistoryItem {
+  taxNumber: string;
+  /** Derived from the number's prefix when omitted. */
+  countryCode?: string;
+  /** Restrict to one registry type (for example `vat`); all types when omitted. */
+  registryType?: string;
+}
+
+export interface TaxNumberCheckHistoryRequest {
+  /** Up to 500 numbers. */
+  items: TaxNumberCheckHistoryItem[];
+  /** YYYY-MM-DD or an ISO timestamp the answer is for; now when omitted. */
+  asOf?: string;
+  /** Also return every stored check, oldest first. */
+  includeChecks?: boolean;
+}
+
+/** One stored authority check. */
+export interface TaxNumberStoredCheck {
+  checkedAt: string;
+  valid: boolean;
+  /** The authority's reference number (the proof), or null when it issued none. */
+  checkReference: string | null;
+  registryType: string;
+  source: string;
+  /** Registered name the authority returned, when stored. */
+  name?: string | null;
+  address?: string | null;
+  status?: string | null;
+  /** The date the authority gives for the check. */
+  requestDate?: string | null;
+}
+
+export interface TaxNumberApplicableCheck extends TaxNumberStoredCheck {
+  /** Days between the check and `asOf` (negative = before it). */
+  daysFromAsOf: number;
+}
+
+export interface TaxNumberCheckHistoryResult {
+  index: number;
+  countryCode: string;
+  taxNumber: string;
+  /** The check that applies on `asOf`, or null when none lies within the window. */
+  applicable: TaxNumberApplicableCheck | null;
+  /** Every stored check, oldest first. Present only when requested. */
+  checks?: TaxNumberStoredCheck[];
+  error?: string;
+}
+
+export interface TaxNumberCheckHistoryResponse {
+  asOf: string;
+  applicableWindowDays: number;
+  total: number;
+  results: TaxNumberCheckHistoryResult[];
 }
