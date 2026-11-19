@@ -6,6 +6,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — invoice timeline and bulk re-run results explain themselves (publish after the backend PRs 19728 and 19755 are live)
+
+`GET /v1/invoices/{id}` events carry `label`, `detail` (always present, says why), `tone` (success, danger, warning, neutral, info) and `isCurrent`. Each bulk re-run result carries `outcomeGroup` (released, still_held, unchanged, skipped, failed) and `reasonLabel`; the summary adds `released`, `stillHeld`, `unchanged` and `skippedInvoices`; the dry-run answer is `{ ok, wouldSubmit, selected, matched, wouldSkip }`. The warning `SUPPLIER_AUTO_FILLED_FROM_ENTITY` and the fact `supplierFilledFromEntity` are gone (a sale is always issued as the business profile; `sendingEntity` stays).
+
+- SDK: `RerunInvoicesResultItem.outcomeGroup` and `reasonLabel` (new required fields on the answer), `RerunInvoicesSummary` counts and `skippedInvoices`, `RerunInvoicesPreview.selected` and `wouldSkip`.
+- CLI: `rerun-many` totals the new counts and lists every skipped invoice in `summary.skippedInvoices`.
+- MCP: `rerun_invoices` and `get_invoice` descriptions.
+
 ## Unreleased — rule exclusions report SKIPPED / SKIP_RULE (publish after the backend PR 19728 is live)
 
 An invoice a rule excluded now reports status `SKIPPED` with reason `SKIP_RULE` ("Skipped by rule") instead of `NOT_APPLICABLE` / `NO_OBLIGATION`; with no rule exclusion and nothing required by law it stays `NOT_APPLICABLE` / `NO_OBLIGATION`. The enums are unchanged, so there is no type or runtime change. `status=SKIPPED` now includes rule exclusions, `status=NOT_APPLICABLE` excludes them, and `reason=EXCLUDED` matches both.

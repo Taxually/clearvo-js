@@ -3098,6 +3098,10 @@ export interface RerunInvoicesResultItem {
   invoiceNumber: string | null;
   ok: boolean;
   outcome: 'rerun' | 'skipped' | 'failed';
+  /** `released`: left the hold. `still_held`: still waiting for you, the platform or rejected (`reasonLabel` is the reason). `unchanged`: re-checked, same state. `skipped`: could not be re-run. `failed`: error. */
+  outcomeGroup: 'released' | 'still_held' | 'unchanged' | 'skipped' | 'failed';
+  /** Plain-English reason for the group. */
+  reasonLabel: string;
   status?: string;
   clearanceStatus?: string;
   previousClearanceStatus?: string;
@@ -3108,9 +3112,15 @@ export interface RerunInvoicesResultItem {
 
 export interface RerunInvoicesSummary {
   requested: number;
+  /** released + stillHeld + unchanged. */
   rerun: number;
   skipped: number;
   failed: number;
+  released: number;
+  stillHeld: number;
+  unchanged: number;
+  /** Every invoice in this batch that was not re-run, with the plain reason. */
+  skippedInvoices: Array<{ invoiceId: string; invoiceNumber: string | null; reasonLabel: string }>;
 }
 
 /** POST /v1/invoices/rerun's answer for one request. Send the same request again with `cursor: nextCursor` until `done` is true. */
@@ -3124,11 +3134,13 @@ export interface RerunInvoicesResult {
   remaining: number;
 }
 
-/** The 200 answer to a dryRun of a bulk re-run: nothing was changed. `matched` is how many invoices the selection would re-run (for a filter, only never-sent invoices count). */
+/** The 200 answer to a dryRun of a bulk re-run: nothing was changed. `selected` is how many you selected, `matched` how many a re-run applies to now (for a filter, only never-sent invoices count) and `wouldSkip` is selected minus matched (already sent, voided or not found). */
 export interface RerunInvoicesPreview {
   ok: true;
   wouldSubmit: { operation: 'rerun_bulk'; matched: number };
+  selected: number;
   matched: number;
+  wouldSkip: number;
 }
 
 /** The 200 answer to a dryRun: nothing was changed. */

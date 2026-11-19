@@ -1081,7 +1081,7 @@ const BASE_TOOLS = [
       'Re-run many invoices that were never sent to an authority or network (needs info, held, or refused by our own checks before dispatch) in place, ' +
       'against the current rules and tax codes. Use it after adding a rule, tax code mapping or setting so the new configuration applies to all of them at once; invoice ids do not change. ' +
       'Pass ids (the invoices to re-run) or filter (status, reason, country, mandate, search: the same filters as list_invoices), not both. ' +
-      'Returns one result per invoice (invoiceId, invoiceNumber (null when not found or the invoice has no number), outcome rerun, skipped or failed, with the new status or a plain code and message) and a summary (requested, rerun, skipped, failed). ' +
+      'Returns one result per invoice (invoiceId, invoiceNumber (null when not found or the invoice has no number), outcome rerun, skipped or failed, outcomeGroup released, still_held, unchanged, skipped or failed, reasonLabel (plain reason; for still_held the reason it is still held), with the new status or a plain code and message) and a summary (requested, rerun, skipped, failed, released, stillHeld, unchanged, skippedInvoices). The check-first answer (dryRun) gives selected, matched (how many a re-run applies to now) and wouldSkip. ' +
       'Invoices that cannot be re-run (already sent, or no stored document) are skipped with a reason. One call handles a bounded batch: while done is false, call again with the same ids or filter and cursor set to nextCursor until done is true. ' +
       'Never blind-retry. Check first: call it with dryRun true, show the user how many would be re-run and why others would be skipped, and only after they explicitly say yes call again without dryRun.',
     inputSchema: {
@@ -1972,7 +1972,7 @@ const BASE_TOOLS = [
     description:
       'Fetch complete detail for a single invoice by its Clearvo ID or authority reference number ' +
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
-      'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
+      'Returns everything in list_invoices (including ingestedAt), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log (each event has label, detail saying why it happened, tone and isCurrent), country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
