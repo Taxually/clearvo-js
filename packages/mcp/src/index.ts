@@ -1295,7 +1295,7 @@ const BASE_TOOLS = [
     name: 'validate_tax_number',
     description:
       'Validate a business tax number against the official authority for that country. ' +
-      'Returns whether the number is valid and, when available, the registered business name and address. ' +
+      'Returns whether the number is valid and, when available, the registered business name and address (authority.name, authority.address) and the authority\'s reference number for the check (authority.requestId) with its date (authority.requestDate). ' +
       'Supports EU VIES (all 27 EU member states), HMRC (UK), Brreg (Norway), ABN Lookup (Australia), ' +
       'and 100+ other countries. ' +
       'Romania, Czechia and Slovakia also return national VAT-payer register detail under authority.extra (anaf, mfcr, fs); for Slovakia, valid means currently registered for VAT, cancellationGrounds and deregistered are warnings only, and extra.fs.attribution (CC BY 4.0) must be shown wherever Slovak register data is displayed. ' +
@@ -2319,6 +2319,54 @@ const BASE_TOOLS = [
             required: ['countryCode', 'taxNumber'],
           },
         },
+      },
+      required: ['items'],
+    },
+  },
+  {
+    name: 'list_tax_number_lookups',
+    description:
+      'List the tax number checks stored for this business profile (newest first), with the registered name, address and the authority\'s reference number (authorityRequestId) and its date (authorityRequestDate) where the authority gave them. ' +
+      'Read-only: it reads past checks and never contacts the authority (use validate_tax_number for a fresh check). ' +
+      'The response also carries pagination and 30-day stats.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        countryCode: { type: 'string', description: 'Only checks for this ISO 3166-1 alpha-2 country code' },
+        valid: { type: 'boolean', description: 'true for valid numbers only, false for invalid only' },
+        from: { type: 'string', description: 'Only checks on or after this date (YYYY-MM-DD)' },
+        to: { type: 'string', description: 'Only checks on or before this date (YYYY-MM-DD)' },
+        page: { type: 'integer', description: '1-based page (default 1)' },
+        limit: { type: 'integer', description: 'Rows per page, 1 to 100 (default 50)' },
+      },
+    },
+  },
+  {
+    name: 'query_tax_number_check_history',
+    description:
+      'For up to 500 tax/VAT numbers, return the stored authority check that applies on a given date, with the authority consultation ' +
+      'reference number (the proof), and the registered name, address, status and the authority\'s date for the check where stored. Use it to answer "was this number valid on this date?" for a filing period. Read-only: it reads past checks ' +
+      'and never contacts the authority (use validate_tax_number for a fresh check). A check applies when it lies strictly less than ' +
+      'applicableWindowDays (default 30) from asOf; the nearest one wins, ties to the later. applicable is null when none qualifies. ' +
+      'Numbers are re-checked automatically once their latest check is older than 10 days.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        items: {
+          type: 'array',
+          description: 'Up to 500 numbers',
+          items: {
+            type: 'object',
+            properties: {
+              taxNumber: { type: 'string', description: 'The tax/VAT number. Include the country prefix when countryCode is omitted.' },
+              countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code; derived from the number prefix when omitted' },
+              registryType: { type: 'string', description: 'Restrict to one registry type (e.g. "vat"); all types when omitted' },
+            },
+            required: ['taxNumber'],
+          },
+        },
+        asOf: { type: 'string', description: 'Date (YYYY-MM-DD) or ISO timestamp the answer is for; now when omitted' },
+        includeChecks: { type: 'boolean', description: 'Also return every stored check, oldest first (default false)' },
       },
       required: ['items'],
     },
@@ -4914,6 +4962,19 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const { entityId, ...body } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/receive/simulate', body, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
+
+    case 'list_tax_number_lookups': {
+      const qs = new URLSearchParams();
+      for (const k of ['countryCode', 'valid', 'from', 'to', 'page', 'limit']) {
+        const v = (args as Record<string, unknown>)[k];
+        if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/tax-numbers/lookups${q ? `?${q}` : ''}`);
+    }
+
+    case 'query_tax_number_check_history':
+      return callApi('POST', '/tax-numbers/check-history', args);
 
     case 'validate_tax_numbers_batch':
       return callApi('POST', '/tax-numbers/validate-batch', args);

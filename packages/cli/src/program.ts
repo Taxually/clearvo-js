@@ -1435,6 +1435,51 @@ export function createProgram(): Command {
       print(await api('DELETE', `/test-cases/${encodeURIComponent(caseId)}`), !!opts.pretty);
     });
 
+  // ── clearvo tax-number-lookups ───────────────────────────────────────────────
+  program
+    .command('tax-number-lookups')
+    .description('List stored tax number checks with the registered name, address and the authority reference number (read-only; does not contact the authority)')
+    .option('--country <code>', 'Only checks for this ISO 3166-1 alpha-2 country code')
+    .option('--valid <true|false>', 'Only valid (true) or invalid (false) numbers')
+    .option('--from <date>', 'Only checks on or after this date (YYYY-MM-DD)')
+    .option('--to <date>', 'Only checks on or before this date (YYYY-MM-DD)')
+    .option('--page <n>', 'Page number (default 1)')
+    .option('--limit <n>', 'Rows per page, 1 to 100 (default 50)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; valid?: string; from?: string; to?: string; page?: string; limit?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.country) qs.set('countryCode', opts.country);
+      if (opts.valid) qs.set('valid', opts.valid);
+      if (opts.from) qs.set('from', opts.from);
+      if (opts.to) qs.set('to', opts.to);
+      if (opts.page) qs.set('page', opts.page);
+      if (opts.limit) qs.set('limit', opts.limit);
+      const q = qs.toString();
+      const result = await api('GET', `/tax-numbers/lookups${q ? `?${q}` : ''}`);
+      print(result, !!opts.pretty);
+    });
+
+  // ── clearvo tax-number-history ───────────────────────────────────────────────
+  program
+    .command('tax-number-history')
+    .description('For up to 500 tax numbers, the stored authority check that applies on a date, with its reference number (read-only; does not contact the authority). Numbers come from --number (repeatable) or a --file: JSON array of {taxNumber, countryCode?, registryType?}.')
+    .option('--number <taxNumber>', 'A tax number to look up (repeat for several; include the country prefix)', (v: string, prev: string[] = []) => [...prev, v])
+    .option('--file <path>', 'JSON file: array of {taxNumber, countryCode?, registryType?}')
+    .option('--as-of <date>', 'Date (YYYY-MM-DD) or ISO timestamp the answer is for; now when omitted')
+    .option('--include-checks', 'Also return every stored check, oldest first')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { number?: string[]; file?: string; asOf?: string; includeChecks?: boolean; pretty?: boolean }) => {
+      const fromFile = opts.file ? (JSON.parse(readFileSync(opts.file, 'utf8')) as unknown[]) : [];
+      const items = [...fromFile, ...(opts.number ?? []).map(taxNumber => ({ taxNumber }))];
+      if (items.length === 0) throw new Error('Give at least one tax number with --number or --file');
+      const result = await api('POST', '/tax-numbers/check-history', {
+        items,
+        ...(opts.asOf ? { asOf: opts.asOf } : {}),
+        ...(opts.includeChecks ? { includeChecks: true } : {}),
+      });
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo validate-tin-batch ───────────────────────────────────────────────
   program
     .command('validate-tin-batch <file>')
