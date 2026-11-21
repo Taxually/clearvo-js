@@ -6,6 +6,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — tax number batches of up to 1,000 (publish after the backend tax number batch PR is live)
+
+`validate-batch` now takes up to 1,000 tax numbers. Up to 20 are answered at once, exactly as before; 21 to 1,000 start a background job that you read until it completes. New optional `formatOnly` checks the number format only and never contacts an authority. Daily limit 10,000 numbers (429 past it); more than 1,000 in one request is a 400. The separate `validate-batch/async` route is deprecated (the same job, always started as a background job); the SDK, CLI and MCP never used it.
+
+- SDK 0.12.0: `validateTaxNumbersBatch(items, { formatOnly? })` now returns `TaxNumberBatchResult | TaxNumberBatchJobAccepted` (type-level change: narrow with `'jobId' in result`). New `getTaxNumberBatchJob(jobId)` and `validateTaxNumbersBatchAndWait(items, { formatOnly?, pollIntervalMs?, timeoutMs?, onProgress? })`, which polls a background job to completion and throws if the job fails or the timeout passes. New types `TaxNumberBatchJobAccepted`, `TaxNumberBatchJob`, `TaxNumberBatchJobStatus`, `ValidateTaxNumbersBatchOptions`, `ValidateTaxNumbersBatchWaitOptions`.
+- MCP 0.13.0: `validate_tax_numbers_batch` accepts `formatOnly` and says up to 20 are immediate and more returns a job; new read-only tool `get_tax_number_batch_job`.
+- CLI 0.12.0: `clearvo validate-tin-batch` takes up to 1,000 rows, waits for a background job and prints progress on stderr, with `--format-only`, `--no-wait` and `--interval`; output for 20 or fewer is unchanged. New `clearvo validate-tin-batch-job <jobId>`.
+- npm release needs: the backend PR must be live first; then publish `@clearvo/sdk` 0.12.0, `@clearvo/cli` 0.12.0, `@clearvo/mcp` 0.13.0 per "Releasing" in the README (the PR carries `Depends-on-backend` and merges itself when the backend release lands).
+
 ## Unreleased — tax number evidence: reference numbers, lookups and check history (publish after the backend tax number evidence PR is live)
 
 Tax number checks now keep the authority's reference number (the proof of the check), its date, and the registered name and address, and you can read them back. SDK 0.11.0, MCP 0.12.0, CLI 0.11.0 (minor).

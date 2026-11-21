@@ -1483,15 +1483,46 @@ export function createProgram(): Command {
   // ── clearvo validate-tin-batch ───────────────────────────────────────────────
   program
     .command('validate-tin-batch <file>')
-    .description('Validate up to 20 tax numbers from a JSON file (array of {countryCode, taxNumber, companyName?}), or a CSV with a country, tax number and optional company name column')
+    .description('Validate 1 to 1,000 tax numbers from a JSON file (array of {countryCode, taxNumber, companyName?}), or a CSV with a country, tax number and optional company name column. Up to 20 are answered at once; more run as a background job that this command waits for, printing progress on stderr. --format-only checks the number format only. Daily limit 10,000 numbers.')
+    .option('--format-only', 'Check the number format only; no live authority lookup')
+    .option('--no-wait', 'For more than 20 numbers, print the accepted job (jobId) and return without waiting; read it with `clearvo validate-tin-batch-job <jobId>`')
+    .option('--interval <seconds>', 'Seconds between progress checks of a background job (default 3)')
     .option('--pretty', 'Pretty-print JSON output')
-    .action(async (file: string, opts: { pretty?: boolean }) => {
+    .action(async (file: string, opts: { pretty?: boolean; formatOnly?: boolean; wait?: boolean; interval?: string }) => {
       const raw = readFileSync(file, 'utf8');
       const items = file.toLowerCase().endsWith('.csv') ? parseTaxNumberCsv(raw) : (JSON.parse(raw) as unknown[]);
-      const result = await api('POST', '/tax-numbers/validate-batch', { items });
+      const intervalSec = opts.interval === undefined ? 3 : Number(opts.interval);
+      if (!Number.isFinite(intervalSec) || intervalSec <= 0) {
+        console.error('Error: --interval must be a positive number of seconds');
+        process.exit(1);
+      }
+      let result = await api('POST', '/tax-numbers/validate-batch', { items, ...(opts.formatOnly ? { formatOnly: true } : {}) }) as Record<string, unknown>;
+      if (typeof result.jobId === 'string' && opts.wait !== false) {
+        const jobId = result.jobId;
+        for (;;) {
+          result = await api('GET', `/tax-numbers/validate-batch/${encodeURIComponent(jobId)}`) as Record<string, unknown>;
+          console.error(`Job ${jobId}: ${result.status}, ${result.completed} of ${result.total} checked (${result.passed} passed, ${result.failed} failed)`);
+          if (result.status === 'completed') break;
+          if (result.status === 'failed') {
+            console.error(`Error: job ${jobId} failed`);
+            print(result, !!opts.pretty);
+            process.exit(1);
+          }
+          await new Promise(resolve => setTimeout(resolve, intervalSec * 1000));
+        }
+      }
       print(result, !!opts.pretty);
     });
-  
+
+  // ── clearvo validate-tin-batch-job ───────────────────────────────────────────
+  program
+    .command('validate-tin-batch-job <jobId>')
+    .description('Read a background tax number batch job (status pending, processing, completed or failed; total, completed, passed, failed and the results so far)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (jobId: string, opts: { pretty?: boolean }) => {
+      print(await api('GET', `/tax-numbers/validate-batch/${encodeURIComponent(jobId)}`), !!opts.pretty);
+    });
+
   // ── clearvo registrations ───────────────────────────────────────────────────
   const registrations = program.command('registrations').description('Manage tax registrations');
   

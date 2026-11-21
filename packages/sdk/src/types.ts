@@ -2476,6 +2476,48 @@ export interface TaxNumberBatchItem {
   companyName?: string;
 }
 
+/** Options for `validateTaxNumbersBatch`. */
+export interface ValidateTaxNumbersBatchOptions {
+  /** Check the number format only (no live authority lookup). */
+  formatOnly?: boolean;
+}
+
+/**
+ * The 202 answer to a batch of 21 to 1,000 tax numbers: the batch runs in the background. Read the progress and results
+ * with `getTaxNumberBatchJob(jobId)`, or use `validateTaxNumbersBatchAndWait`.
+ */
+export interface TaxNumberBatchJobAccepted {
+  jobId: string;
+  total: number;
+  status: 'pending';
+}
+
+export type TaxNumberBatchJobStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+/** One background batch validation job (`GET /v1/tax-numbers/validate-batch/{jobId}`). `results` fills in as items complete. */
+export interface TaxNumberBatchJob {
+  jobId: string;
+  status: TaxNumberBatchJobStatus;
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  results: TaxNumberBatchResult['results'];
+  sandbox?: boolean;
+  createdAt?: string;
+  completedAt?: string | null;
+}
+
+/** Options for `validateTaxNumbersBatchAndWait`. */
+export interface ValidateTaxNumbersBatchWaitOptions extends ValidateTaxNumbersBatchOptions {
+  /** Milliseconds between polls of a background job (default 3000). */
+  pollIntervalMs?: number;
+  /** Give up waiting after this many milliseconds (default 600000). The job keeps running; poll it later with its jobId. */
+  timeoutMs?: number;
+  /** Called after every poll of a background job. */
+  onProgress?: (job: TaxNumberBatchJob) => void;
+}
+
 export interface TaxNumberBatchResult {
   results: Array<{ index: number; countryCode: string; taxNumber: string; format: { valid: boolean; error?: string }; authority: { checked: boolean; valid?: boolean; name?: string; extra?: Record<string, unknown> }; nameMatch?: NameMatch; error?: string }>;
   total: number;

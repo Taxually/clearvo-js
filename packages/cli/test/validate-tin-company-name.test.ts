@@ -57,3 +57,39 @@ describe('validate-tin-batch', () => {
     expect(() => parseTaxNumberCsv('a,b\n1,2')).toThrow(/country column/);
   });
 });
+
+describe('validate-tin-batch large batches', () => {
+  const file = () => { const f = join(mkdtempSync(join(tmpdir(), 'tin-')), 'in.json'); writeFileSync(f, JSON.stringify(Array(25).fill({ countryCode: 'DE', taxNumber: 'DE1' }))); return f; };
+  const res = (status: number, json: unknown) => ({ ok: true, status, json: async () => json, text: async () => JSON.stringify(json) });
+
+  it('sends formatOnly and prints a sync result once', async () => {
+    const m = mockFetch();
+    await createProgram().parseAsync(['validate-tin-batch', file(), '--format-only'], { from: 'user' });
+    expect(body(m).formatOnly).toBe(true);
+    expect(m).toHaveBeenCalledTimes(1);
+  });
+  it('waits for a background job, prints progress on stderr and the finished job on stdout', async () => {
+    const m = vi.fn()
+      .mockResolvedValueOnce(res(202, { jobId: 'j1', total: 25, status: 'pending' }))
+      .mockResolvedValueOnce(res(200, { jobId: 'j1', status: 'processing', total: 25, completed: 10, passed: 10, failed: 0, results: [] }))
+      .mockResolvedValueOnce(res(200, { jobId: 'j1', status: 'completed', total: 25, completed: 25, passed: 24, failed: 1, results: [] }));
+    global.fetch = m as unknown as typeof fetch;
+    await createProgram().parseAsync(['validate-tin-batch', file(), '--interval', '0.001'], { from: 'user' });
+    expect(m).toHaveBeenCalledTimes(3);
+    expect(String(m.mock.calls[2][0])).toContain('/tax-numbers/validate-batch/j1');
+    expect((console.error as unknown as ReturnType<typeof vi.fn>).mock.calls.flat().join('\n')).toContain('10 of 25');
+    expect(JSON.parse(String((console.log as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0])).status).toBe('completed');
+  });
+  it('--no-wait prints the accepted job without polling', async () => {
+    const m = vi.fn().mockResolvedValueOnce(res(202, { jobId: 'j1', total: 25, status: 'pending' }));
+    global.fetch = m as unknown as typeof fetch;
+    await createProgram().parseAsync(['validate-tin-batch', file(), '--no-wait'], { from: 'user' });
+    expect(m).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((console.log as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0])).jobId).toBe('j1');
+  });
+  it('validate-tin-batch-job reads the job', async () => {
+    const m = mockFetch();
+    await createProgram().parseAsync(['validate-tin-batch-job', 'j1'], { from: 'user' });
+    expect(String(m.mock.calls[0][0])).toBe('http://x/v1/tax-numbers/validate-batch/j1');
+  });
+});
