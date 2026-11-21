@@ -805,7 +805,7 @@ export class ClearvoClient {
       const job = await this.getTaxNumberBatchJob(accepted.jobId);
       options.onProgress?.(job);
       if (job.status === 'completed') return job;
-      if (job.status === 'failed') throw new Error(`Batch validation job ${job.jobId} failed after ${job.completed} of ${job.total} items`);
+      if (job.status === 'failed') throw new Error(`Batch validation job ${job.jobId} failed after ${job.completed} of ${job.total} items${job.error ? `: ${job.error}` : ''}`);
       if (Date.now() + interval > deadline) throw new Error(`Batch validation job ${job.jobId} was still ${job.status} (${job.completed} of ${job.total}) after the timeout; read it later with getTaxNumberBatchJob`);
       await new Promise(resolve => setTimeout(resolve, interval));
     }

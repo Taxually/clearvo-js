@@ -1504,7 +1504,7 @@ export function createProgram(): Command {
           console.error(`Job ${jobId}: ${result.status}, ${result.completed} of ${result.total} checked (${result.passed} passed, ${result.failed} failed)`);
           if (result.status === 'completed') break;
           if (result.status === 'failed') {
-            console.error(`Error: job ${jobId} failed`);
+            console.error(`Error: job ${jobId} failed${typeof result.error === 'string' ? `: ${result.error}` : ''}`);
             print(result, !!opts.pretty);
             process.exit(1);
           }

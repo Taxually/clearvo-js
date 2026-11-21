@@ -2506,6 +2506,8 @@ export interface TaxNumberBatchJob {
   sandbox?: boolean;
   createdAt?: string;
   completedAt?: string | null;
+  /** Present when `status` is `failed`: why the job stopped. */
+  error?: string;
 }
 
 /** Options for `validateTaxNumbersBatchAndWait`. */
