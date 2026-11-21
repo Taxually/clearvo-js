@@ -6342,6 +6342,91 @@ export interface ListTaxNumberLookupsResponse {
   stats: { total30d: number; valid30d: number; validRate: number; countriesCovered: number };
 }
 
+/** Query for listing tax number checks (GET /v1/tax-numbers/checks) and exporting them as CSV (GET /v1/tax-numbers/checks/export; paging is ignored there). */
+export interface ListTaxNumberChecksParams {
+  /** 1-based page, default 1. */
+  page?: number;
+  /** Rows per page, default 50, maximum 200. */
+  pageSize?: number;
+  countryCode?: string;
+  result?: TaxNumberCheckResult;
+  /** `live` rows are authority consultations; `cache` rows were answered from the shared cache with the original reference. */
+  source?: TaxNumberCheckSource;
+  /** `taxually` for a check made under Taxually's requester number (the default for every check), `own` for a "re-check under my number". */
+  requester?: TaxNumberCheckRequester;
+  /** ISO date, checks on or after it. */
+  from?: string;
+  /** ISO date, checks on or before it. */
+  to?: string;
+  /** Substring of the tax number. */
+  q?: string;
+  /** Exact tax number: every check of that one number (combine with `countryCode`). */
+  taxNumber?: string;
+}
+
+export type TaxNumberCheckResult = 'valid' | 'invalid' | 'unchecked';
+export type TaxNumberCheckSource = 'live' | 'cache';
+export type TaxNumberCheckRequester = 'taxually' | 'own';
+
+/** One row of the tax number check history. A field that cannot be sourced truthfully is `null`. */
+export interface TaxNumberCheck {
+  id: string;
+  checkedAt: string;
+  countryCode: string;
+  taxNumber: string;
+  result: TaxNumberCheckResult;
+  source: TaxNumberCheckSource;
+  /** The authority's reference number (for a cached row, the original check's reference). */
+  referenceNumber: string | null;
+  requester: TaxNumberCheckRequester | null;
+  /** The VAT number the check was made under. */
+  requesterNumber: string | null;
+  authority: string | null;
+  name: string | null;
+  address: string | null;
+}
+
+export interface ListTaxNumberChecksResponse {
+  items: TaxNumberCheck[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Query for listing background tax number batch jobs (GET /v1/tax-numbers/validate-batch). Jobs are kept 30 days. */
+export interface ListTaxNumberBatchJobsParams {
+  /** 1-based page, default 1. */
+  page?: number;
+  pageSize?: number;
+}
+
+/** One row of the batch job list. Read the results of a job with `getTaxNumberBatchJob(jobId)` while it is kept. */
+export interface TaxNumberBatchJobSummary {
+  jobId: string;
+  status: TaxNumberBatchJobStatus;
+  total: number;
+  processed: number;
+  createdAt: string;
+  completedAt: string | null;
+  formatOnly: boolean;
+}
+
+export interface ListTaxNumberBatchJobsResponse {
+  jobs: TaxNumberBatchJobSummary[];
+}
+
+/** Body of `recheck`. */
+export interface TaxNumberRecheckRequest {
+  countryCode: string;
+  taxNumber: string;
+}
+
+/** The answer to a re-check under the business profile's own registered number: a single-check validate answer plus `requester: 'own'` and the authority's `referenceNumber`. */
+export type TaxNumberRecheckResponse = TaxNumberValidateResponse & {
+  requester: 'own';
+  referenceNumber: string | null;
+};
+
 export interface TaxNumberCheckHistoryItem {
   taxNumber: string;
   /** Derived from the number's prefix when omitted. */

@@ -1459,6 +1459,75 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo tax-numbers (check history, batch jobs, re-check under your own number) ──
+  // MCP twins: list_tax_number_checks, list_tax_number_batch_jobs, recheck_tax_number_under_own_number.
+  const taxNumbers = program.command('tax-numbers').description('Tax number check history, background batch jobs and the re-check under your own number');
+
+  taxNumbers
+    .command('checks')
+    .description('List every tax number check (newest first) with the result, the authority reference number, who the requester was (taxually or own) and live vs cache. Read-only; does not contact the authority. With --export, writes every matching check as CSV (no paging, no row cap).')
+    .option('--country <code>', 'Only this ISO 3166-1 alpha-2 country code')
+    .option('--result <valid|invalid|unchecked>', 'Only this result')
+    .option('--source <live|cache>', 'Only live authority consultations, or only answers served from the shared cache')
+    .option('--requester <taxually|own>', 'Only checks made under Taxually\'s number, or only re-checks under your own number')
+    .option('--from <date>', 'Only checks on or after this date (YYYY-MM-DD)')
+    .option('--to <date>', 'Only checks on or before this date (YYYY-MM-DD)')
+    .option('--q <text>', 'Substring of the tax number')
+    .option('--tax-number <number>', 'Every check of this exact number (use with --country): the audit view of one number')
+    .option('--page <n>', 'Page number (default 1)')
+    .option('--page-size <n>', 'Rows per page, 1 to 200 (default 50)')
+    .option('--export', 'Write all matching checks as CSV instead of listing a page (paging options are ignored)')
+    .option('--out <path>', 'With --export: write the CSV to this file instead of stdout')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { country?: string; result?: string; source?: string; requester?: string; from?: string; to?: string; q?: string; taxNumber?: string; page?: string; pageSize?: string; export?: boolean; out?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.country) qs.set('countryCode', opts.country);
+      if (opts.result) qs.set('result', opts.result);
+      if (opts.source) qs.set('source', opts.source);
+      if (opts.requester) qs.set('requester', opts.requester);
+      if (opts.from) qs.set('from', opts.from);
+      if (opts.to) qs.set('to', opts.to);
+      if (opts.q) qs.set('q', opts.q);
+      if (opts.taxNumber) qs.set('taxNumber', opts.taxNumber);
+      if (opts.export) {
+        const q = qs.toString();
+        const csv = await (await apiFile(`/tax-numbers/checks/export${q ? `?${q}` : ''}`)).text();
+        if (opts.out) {
+          writeFileSync(opts.out, csv);
+          console.error(`Wrote ${opts.out}`);
+        } else {
+          process.stdout.write(csv);
+        }
+        return;
+      }
+      if (opts.page) qs.set('page', opts.page);
+      if (opts.pageSize) qs.set('pageSize', opts.pageSize);
+      const q = qs.toString();
+      print(await api('GET', `/tax-numbers/checks${q ? `?${q}` : ''}`), !!opts.pretty);
+    });
+
+  taxNumbers
+    .command('batch-jobs')
+    .description('List background tax number batch jobs of the last 30 days, newest first: status, processed of total, times, formatOnly. Read the results of one with `clearvo validate-tin-batch-job <jobId>`.')
+    .option('--page <n>', 'Page number (default 1)')
+    .option('--page-size <n>', 'Rows per page')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { page?: string; pageSize?: string; pretty?: boolean }) => {
+      const qs = new URLSearchParams();
+      if (opts.page) qs.set('page', opts.page);
+      if (opts.pageSize) qs.set('pageSize', opts.pageSize);
+      const q = qs.toString();
+      print(await api('GET', `/tax-numbers/validate-batch${q ? `?${q}` : ''}`), !!opts.pretty);
+    });
+
+  taxNumbers
+    .command('recheck <countryCode> <taxNumber>')
+    .description('Re-check a number under YOUR OWN registered number: a live authority consultation (never the cache) recorded with requester "own" and its reference number. Every other check uses Taxually\'s requester number. Fails with a 422 when your business profile has no usable own number for that authority (there is no fallback to Taxually\'s number).')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (countryCode: string, taxNumber: string, opts: { pretty?: boolean }) => {
+      print(await api('POST', '/tax-numbers/recheck', { countryCode, taxNumber }), !!opts.pretty);
+    });
+
   // ── clearvo tax-number-history ───────────────────────────────────────────────
   program
     .command('tax-number-history')

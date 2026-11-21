@@ -2357,6 +2357,56 @@ const BASE_TOOLS = [
     },
   },
   {
+    name: 'list_tax_number_checks',
+    description:
+      'The tax number check history for this business profile, newest first. Each row: checkedAt, countryCode, taxNumber, result (valid, invalid, unchecked), source (live = an authority consultation, cache = answered from the shared cache with the ORIGINAL reference), referenceNumber (the authority\'s reference number), requester (taxually or own) and requesterNumber, authority, name, address. A field that is not known is null. ' +
+      'By default every authority check is made under Taxually\'s requester number, so a confirmation is not your own audit evidence (for example the German qualified confirmation): use recheck_tax_number_under_own_number for that. ' +
+      'Pass taxNumber (with countryCode) for every check of one number. Read-only: never contacts the authority. Paged: page, pageSize (max 200); the response carries total.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        page: { type: 'integer', description: '1-based page (default 1)' },
+        pageSize: { type: 'integer', description: 'Rows per page, default 50, max 200' },
+        countryCode: { type: 'string', description: 'Only this ISO 3166-1 alpha-2 country code' },
+        result: { type: 'string', enum: ['valid', 'invalid', 'unchecked'], description: 'Only this result' },
+        source: { type: 'string', enum: ['live', 'cache'], description: 'live = authority consultations, cache = answered from the shared cache' },
+        requester: { type: 'string', enum: ['taxually', 'own'], description: 'taxually = made under Taxually\'s number (the default for every check), own = a re-check under your own number' },
+        from: { type: 'string', description: 'Only checks on or after this date (YYYY-MM-DD)' },
+        to: { type: 'string', description: 'Only checks on or before this date (YYYY-MM-DD)' },
+        q: { type: 'string', description: 'Substring of the tax number' },
+        taxNumber: { type: 'string', description: 'Exact tax number: every check of that one number (combine with countryCode)' },
+      },
+    },
+  },
+  {
+    name: 'list_tax_number_batch_jobs',
+    description:
+      'List the background tax number batch jobs of the last 30 days (newest first): jobId, status (pending, processing, completed, failed), total, processed, createdAt, completedAt, formatOnly. ' +
+      'Read the results of one job with get_tax_number_batch_job while it is kept; after 30 days the job and its results are gone and the checks are found with list_tax_number_checks. Read-only. Paged: page, pageSize.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        page: { type: 'integer', description: '1-based page (default 1)' },
+        pageSize: { type: 'integer', description: 'Rows per page' },
+      },
+    },
+  },
+  {
+    name: 'recheck_tax_number_under_own_number',
+    description:
+      'Re-check one tax number under THIS business profile\'s own registered number: a live authority consultation that bypasses the cache and is recorded with requester "own" and the authority\'s reference number. ' +
+      'Every other check is made under Taxually\'s requester number, which does not give you your own audit evidence. Contacts the authority and writes a check record. ' +
+      'Returns 422 with a code and message when the business profile has no usable own number for that authority (there is no fallback to Taxually\'s number).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code of the number' },
+        taxNumber: { type: 'string', description: 'The tax/VAT number to re-check' },
+      },
+      required: ['countryCode', 'taxNumber'],
+    },
+  },
+  {
     name: 'query_tax_number_check_history',
     description:
       'For up to 500 tax/VAT numbers, return the stored authority check that applies on a given date, with the authority consultation ' +
@@ -4987,6 +5037,29 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
       const q = qs.toString();
       return callApi('GET', `/tax-numbers/lookups${q ? `?${q}` : ''}`);
     }
+
+    case 'list_tax_number_checks': {
+      const qs = new URLSearchParams();
+      for (const k of ['page', 'pageSize', 'countryCode', 'result', 'source', 'requester', 'from', 'to', 'q', 'taxNumber']) {
+        const v = (args as Record<string, unknown>)[k];
+        if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/tax-numbers/checks${q ? `?${q}` : ''}`);
+    }
+
+    case 'list_tax_number_batch_jobs': {
+      const qs = new URLSearchParams();
+      for (const k of ['page', 'pageSize']) {
+        const v = (args as Record<string, unknown>)[k];
+        if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+      }
+      const q = qs.toString();
+      return callApi('GET', `/tax-numbers/validate-batch${q ? `?${q}` : ''}`);
+    }
+
+    case 'recheck_tax_number_under_own_number':
+      return callApi('POST', '/tax-numbers/recheck', args);
 
     case 'query_tax_number_check_history':
       return callApi('POST', '/tax-numbers/check-history', args);

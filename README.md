@@ -133,6 +133,11 @@ clearvo validate-tin-batch numbers.csv --format-only   # format check only, no a
 clearvo validate-tin-batch numbers.csv --no-wait   # over 20: print the jobId and return; later: clearvo validate-tin-batch-job <jobId>
 clearvo tax-number-lookups --country DE --valid true   # stored checks with the authority's reference number
 clearvo tax-number-history --number DE123456789 --as-of 2026-03-31 --include-checks   # the check that applies on a date
+clearvo tax-numbers checks --country DE --result valid --source live   # full check history: reference number, requester (taxually or own), live or cache; filters --requester --from --to --q
+clearvo tax-numbers checks --country DE --tax-number DE123456789   # every check of one number (audit view)
+clearvo tax-numbers checks --export --out checks.csv   # every matching check as CSV, no row cap
+clearvo tax-numbers batch-jobs   # background batch jobs of the last 30 days: status and progress
+clearvo tax-numbers recheck DE DE123456789   # live re-check under YOUR OWN registered number (every other check uses Taxually's number)
 clearvo send invoice.json --pretty
 clearvo status ref-abc123 --pretty
 ```

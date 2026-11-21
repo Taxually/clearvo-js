@@ -6,6 +6,14 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — tax number check history, batch job list, re-check under your own number (publish after the backend tax number checks PR is live)
+
+Every tax number check now has a full history: result, the authority's reference number, who the requester was and whether it was a live consultation or answered from the shared cache. **Behaviour change for every customer:** authority checks are now always made under Taxually's requester number, never the business profile's own registered number. A confirmation under Taxually's number is not your own audit evidence (for example the German qualified confirmation): use the new explicit re-check, which forces a live consultation under your own registered number and records it with requester `own`. A cached answer shows the original reference, labelled `source: cache`.
+
+- SDK 0.13.0: `listTaxNumberChecks(params)` (filters: `countryCode`, `result`, `source`, `requester`, `from`, `to`, `q`, `taxNumber`; `page`, `pageSize` up to 200), `exportTaxNumberChecks(params)` (CSV text, no paging), `listTaxNumberBatchJobs(params)` (last 30 days), `recheckTaxNumber({ countryCode, taxNumber })` (422 when the profile has no usable own number; no fallback to Taxually's). New types `TaxNumberCheck`, `ListTaxNumberChecksParams`, `ListTaxNumberChecksResponse`, `TaxNumberBatchJobSummary`, `ListTaxNumberBatchJobsParams`, `ListTaxNumberBatchJobsResponse`, `TaxNumberRecheckRequest`, `TaxNumberRecheckResponse`.
+- MCP 0.14.0: new tools `list_tax_number_checks`, `list_tax_number_batch_jobs`, `recheck_tax_number_under_own_number`.
+- CLI 0.13.0: new `clearvo tax-numbers checks` (filters, `--tax-number` audit view, `--export [--out file]` CSV), `clearvo tax-numbers batch-jobs` and `clearvo tax-numbers recheck <countryCode> <taxNumber>`.
+
 ## Unreleased — tax number batches of up to 1,000 (publish after the backend tax number batch PR is live)
 
 `validate-batch` now takes up to 1,000 tax numbers. Up to 20 are answered at once, exactly as before; 21 to 1,000 start a background job that you read until it completes. New optional `formatOnly` checks the number format only and never contacts an authority. Daily limit 10,000 numbers (429 past it); more than 1,000 in one request is a 400. The separate `validate-batch/async` route is deprecated (the same job, always started as a background job); the SDK, CLI and MCP never used it.

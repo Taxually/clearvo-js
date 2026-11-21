@@ -43,7 +43,7 @@ const READ_ONLY = new Set<string>([
   'get_rules_engine_schema', 'list_rules', 'get_rule', 'list_rule_versions', 'get_rules_trace',
   'list_platform_rule_changes', 'list_rule_property_definitions', 'list_rule_templates', 'get_rule_template',
   'list_field_mappings', 'list_rules_engine_datasets', 'get_rules_engine_dataset', 'list_rules_engine_dataset_rows',
-  'query_data', 'simulate_rule', 'list_tax_number_lookups', 'query_tax_number_check_history', 'quote_duties', 'estimate_duties', 'get_import_settlement',
+  'query_data', 'simulate_rule', 'list_tax_number_lookups', 'list_tax_number_checks', 'list_tax_number_batch_jobs', 'query_tax_number_check_history', 'quote_duties', 'estimate_duties', 'get_import_settlement',
   'get_test_run', 'export_test_run', 'list_test_runs', 'list_test_cases', 'get_test_case_catalogue',
   // Filings (GET routes).
   'get_registration_filing_setup', 'list_filings', 'get_filing', 'list_filing_change_requests', 'get_filing_bank_account',
@@ -75,7 +75,7 @@ const NON_IDEMPOTENT = new Set<string>([
   'calculate_tax', 'propose_manual_adjustment', 'create_client_tax_code', 'create_entity', 'upload_entity_logo',
   'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'invite_team_member', 'create_exemption_certificate',
   'create_fr_platform_connect_link',
-  'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch',
+  'upload_exemption_document', 'create_product', 'create_webhook', 'validate_tax_number', 'validate_tax_numbers_batch', 'recheck_tax_number_under_own_number',
   'add_registration', 'run_reporting_batch_sweep', 'create_customer', 'create_supplier', 'create_bank_account', 'create_company_code',
   'receive_invoice_document', 'simulate_received_invoices', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'import_tax_calculations',
   'create_rule', 'create_rule_property_definition', 'create_rules_engine_dataset', 'import_rules_engine_dataset',
@@ -94,7 +94,7 @@ const OPEN_WORLD = new Set<string>([
   // Data files and processing go to the filing processing partner.
   'upload_filing_data_file', 'replace_filing_data_file', 'delete_filing_data_file', 'process_filing_upload_month',
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'validate_tax_number',
-  'validate_tax_numbers_batch', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
+  'validate_tax_numbers_batch', 'recheck_tax_number_under_own_number', 'poll_fr_inbound', 'trigger_br_poll', 'poll_br_inbound', 'push_mx_cfdi', 'confirm_reporting_batch',
   'create_fr_platform_connect_link',
   'amend_sii_report', 'cancel_sii_report', 'update_business_status', 'update_invoice_business_status',
   'retry_invoice_with_master_data', 'rerun_invoice', 'rerun_invoices',

@@ -34,6 +34,12 @@ import type {
   TaxNumberValidateResponse,
   ListTaxNumberLookupsParams,
   ListTaxNumberLookupsResponse,
+  ListTaxNumberChecksParams,
+  ListTaxNumberChecksResponse,
+  ListTaxNumberBatchJobsParams,
+  ListTaxNumberBatchJobsResponse,
+  TaxNumberRecheckRequest,
+  TaxNumberRecheckResponse,
   TaxNumberCheckHistoryRequest,
   TaxNumberCheckHistoryResponse,
   ValidateTaxNumberOptions,
@@ -256,6 +262,16 @@ function csvFormData(csvContent: string, filename: string): FormData {
 /** The x-entity-id header for an account-scoped key, or none. */
 function entityHeaders(entityId?: string): Record<string, string> | undefined {
   return entityId ? { 'x-entity-id': entityId } : undefined;
+}
+
+/** Query string from a flat params object: only defined, non-empty values. */
+function taxNumberChecksQuery(params: object): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  const q = qs.toString();
+  return q ? `?${q}` : '';
 }
 
 export class ClearvoClient {
@@ -524,6 +540,34 @@ export class ClearvoClient {
     if (params.limit !== undefined) qs.set('limit', String(params.limit));
     const q = qs.toString();
     return this.request('GET', `/tax-numbers/lookups${q ? `?${q}` : ''}`);
+  }
+
+  /**
+   * The tax number check history: every check with its result, authority reference number, requester (`taxually` or `own`)
+   * and whether it was `live` or answered from the shared `cache`. Filter by country, result, source, requester, date range,
+   * a substring `q` or one exact `taxNumber` (every check of that number). Read-only; never contacts an authority.
+   */
+  listTaxNumberChecks(params: ListTaxNumberChecksParams = {}): Promise<ListTaxNumberChecksResponse> {
+    return this.request('GET', `/tax-numbers/checks${taxNumberChecksQuery(params)}`);
+  }
+
+  /** The same filters as listTaxNumberChecks (paging ignored), as CSV text: every matching check, no row cap. */
+  async exportTaxNumberChecks(params: Omit<ListTaxNumberChecksParams, 'page' | 'pageSize'> = {}): Promise<string> {
+    return (await this.requestFile(`/tax-numbers/checks/export${taxNumberChecksQuery(params)}`)).text();
+  }
+
+  /** Background tax number batch jobs of the last 30 days, newest first: status, progress and times. Read the results of one with getTaxNumberBatchJob. */
+  listTaxNumberBatchJobs(params: ListTaxNumberBatchJobsParams = {}): Promise<ListTaxNumberBatchJobsResponse> {
+    return this.request('GET', `/tax-numbers/validate-batch${taxNumberChecksQuery(params)}`);
+  }
+
+  /**
+   * "Re-check under my number": a live authority consultation under this business profile's own registered number, never the
+   * cache. Every other check is made under Taxually's requester number. 422 (no fallback to Taxually's number) when the
+   * profile has no usable own number for that authority.
+   */
+  recheckTaxNumber(body: TaxNumberRecheckRequest): Promise<TaxNumberRecheckResponse> {
+    return this.request('POST', '/tax-numbers/recheck', body);
   }
 
   /** For up to 500 tax numbers: the stored authority check that applies on a date, with its reference number. Read-only; never contacts the authority. */
