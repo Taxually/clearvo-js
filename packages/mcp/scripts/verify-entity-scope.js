@@ -23,7 +23,7 @@ if (!fs.existsSync(SERVER)) {
 }
 
 const AGNOSTIC = ['list_entities', 'create_entity', 'invite_team_member', 'list_tax_categories', 'list_country_coverage',
-  'validate_tax_number', 'validate_tax_numbers_batch', 'get_test_case_catalogue', 'get_requirements', 'get_rules_engine_schema',
+  'validate_tax_number', 'validate_tax_numbers_batch', 'get_tax_number_batch_job', 'get_test_case_catalogue', 'get_requirements', 'get_rules_engine_schema',
   'get_registration_field_definitions', 'get_entity_fact_definitions', 'get_query_fields', 'get_filing_upload_template'];
 
 const seen = [];
