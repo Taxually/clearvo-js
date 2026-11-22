@@ -2300,7 +2300,8 @@ const BASE_TOOLS = [
   {
     name: 'validate_tax_numbers_batch',
     description:
-      'Validate up to 20 tax/VAT numbers in a single request. ' +
+      'Validate 1 to 1,000 tax/VAT numbers in a single request. Up to 20 numbers are checked immediately and the full result comes back. ' +
+      '21 to 1,000 numbers return a background job ({ jobId, total, status: "pending" }): read its progress and results with get_tax_number_batch_job until status is completed. More than 1,000 is refused; the daily limit is 10,000 numbers. ' +
       'More efficient than calling validate_tax_number individually when processing a list of counterparties. ' +
       'Each result includes format validity, authority check status, and registered business name where available.',
     inputSchema: {
@@ -2308,7 +2309,7 @@ const BASE_TOOLS = [
       properties: {
         items: {
           type: 'array',
-          description: 'Up to 20 tax numbers to validate',
+          description: 'Tax numbers to validate: up to 20 are answered immediately, 21 to 1,000 start a background job',
           items: {
             type: 'object',
             properties: {
@@ -2319,8 +2320,22 @@ const BASE_TOOLS = [
             required: ['countryCode', 'taxNumber'],
           },
         },
+        formatOnly: { type: 'boolean', description: 'When true, check the number format only; no live authority lookup. Default false.' },
       },
       required: ['items'],
+    },
+  },
+  {
+    name: 'get_tax_number_batch_job',
+    description:
+      'Read a background tax number batch job started by validate_tax_numbers_batch with more than 20 numbers: status (pending, processing, completed, failed), total, completed, passed, failed and the results so far. ' +
+      'Poll every few seconds until status is completed or failed. Read-only. A job id that is not yours is a 404.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        jobId: { type: 'string', description: 'The jobId returned by validate_tax_numbers_batch' },
+      },
+      required: ['jobId'],
     },
   },
   {
@@ -4589,7 +4604,7 @@ const BASE_TOOLS = [
 // profile takes an optional entityId. Entity-agnostic tools (listing, reference data, creating a profile) never do.
 const ENTITY_AGNOSTIC_TOOLS: ReadonlySet<string> = new Set([
   'list_entities', 'create_entity', 'invite_team_member', 'list_tax_categories', 'list_country_coverage',
-  'validate_tax_number', 'validate_tax_numbers_batch', 'get_test_case_catalogue', 'get_requirements',
+  'validate_tax_number', 'validate_tax_numbers_batch', 'get_tax_number_batch_job', 'get_test_case_catalogue', 'get_requirements',
   'get_rules_engine_schema', 'get_registration_field_definitions', 'get_entity_fact_definitions',
   'get_query_fields', 'get_filing_upload_template',
 ]);
@@ -4978,6 +4993,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case 'validate_tax_numbers_batch':
       return callApi('POST', '/tax-numbers/validate-batch', args);
+
+    case 'get_tax_number_batch_job':
+      return callApi('GET', `/tax-numbers/validate-batch/${encodeURIComponent(String(args.jobId))}`);
 
     case 'list_registrations': {
       const qs = new URLSearchParams();

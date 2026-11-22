@@ -38,7 +38,7 @@ const READ_ONLY = new Set<string>([
   'get_registration_field_definitions', 'get_entity_fact_definitions', 'list_tax_calculations', 'list_calculation_requests', 'get_query_fields',
   'get_setup_status', 'get_tax_settings', 'get_reporting_obligations', 'list_reporting_batches', 'list_customers', 'list_customer_reference_types', 'list_exemption_certificates',
   'list_suppliers', 'list_bank_accounts', 'list_company_codes', 'get_sii_reconciliation', 'get_inbound_batch',
-  'get_inbound_email_address', 'get_bulk_upload_status', 'list_mandate_transactions', 'list_bulk_upload_errors',
+  'get_inbound_email_address', 'get_bulk_upload_status', 'get_tax_number_batch_job', 'list_mandate_transactions', 'list_bulk_upload_errors',
   'get_tax_calculation_import_status', 'list_tax_calculation_import_errors', 'get_pt_monthly_saft',
   'get_rules_engine_schema', 'list_rules', 'get_rule', 'list_rule_versions', 'get_rules_trace',
   'list_platform_rule_changes', 'list_rule_property_definitions', 'list_rule_templates', 'get_rule_template',

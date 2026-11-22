@@ -39,6 +39,10 @@ import type {
   ValidateTaxNumberOptions,
   TaxNumberBatchItem,
   TaxNumberBatchResult,
+  TaxNumberBatchJobAccepted,
+  TaxNumberBatchJob,
+  ValidateTaxNumbersBatchOptions,
+  ValidateTaxNumbersBatchWaitOptions,
   CountryRequirements,
   CountryCoverageResponse,
   Product,
@@ -771,8 +775,40 @@ export class ClearvoClient {
 
   // ── Batch TIN Validation ──────────────────────────────────────────────────────
 
-  validateTaxNumbersBatch(items: TaxNumberBatchItem[]): Promise<TaxNumberBatchResult> {
-    return this.request('POST', '/tax-numbers/validate-batch', { items });
+  /**
+   * Validate 1 to 1,000 tax numbers. Up to 20 items are checked while you wait and answer with the full result (200).
+   * 21 to 1,000 items are accepted as a background job (202): the answer carries `jobId`, and you read progress and
+   * results with getTaxNumberBatchJob (or use validateTaxNumbersBatchAndWait). More than 1,000 is a 400; the daily
+   * quota (10,000 numbers per day) is a 429. Tell the two answers apart with `'jobId' in result`.
+   * `formatOnly: true` checks the number format only and never contacts an authority.
+   */
+  validateTaxNumbersBatch(items: TaxNumberBatchItem[], options: ValidateTaxNumbersBatchOptions = {}): Promise<TaxNumberBatchResult | TaxNumberBatchJobAccepted> {
+    return this.request('POST', '/tax-numbers/validate-batch', { items, ...(options.formatOnly !== undefined ? { formatOnly: options.formatOnly } : {}) });
+  }
+
+  /** One background batch validation job: `status` (pending, processing, completed, failed), `total`, `completed`, `passed`, `failed` and the `results` so far. 404 when the job is not yours. */
+  getTaxNumberBatchJob(jobId: string): Promise<TaxNumberBatchJob> {
+    return this.request('GET', `/tax-numbers/validate-batch/${encodeURIComponent(jobId)}`);
+  }
+
+  /**
+   * validateTaxNumbersBatch, then for a background job (21 to 1,000 items) poll getTaxNumberBatchJob until it is
+   * completed. Up to 20 items resolves with the immediate result. Throws when the job fails, or when `timeoutMs`
+   * passes first (the job keeps running; its id is in the error message).
+   */
+  async validateTaxNumbersBatchAndWait(items: TaxNumberBatchItem[], options: ValidateTaxNumbersBatchWaitOptions = {}): Promise<TaxNumberBatchResult | TaxNumberBatchJob> {
+    const accepted = await this.validateTaxNumbersBatch(items, options.formatOnly !== undefined ? { formatOnly: options.formatOnly } : {});
+    if (!('jobId' in accepted)) return accepted;
+    const interval = options.pollIntervalMs ?? 3000;
+    const deadline = Date.now() + (options.timeoutMs ?? 600_000);
+    for (;;) {
+      const job = await this.getTaxNumberBatchJob(accepted.jobId);
+      options.onProgress?.(job);
+      if (job.status === 'completed') return job;
+      if (job.status === 'failed') throw new Error(`Batch validation job ${job.jobId} failed after ${job.completed} of ${job.total} items${job.error ? `: ${job.error}` : ''}`);
+      if (Date.now() + interval > deadline) throw new Error(`Batch validation job ${job.jobId} was still ${job.status} (${job.completed} of ${job.total}) after the timeout; read it later with getTaxNumberBatchJob`);
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
   }
 
   // ── Tax Registrations ──────────────────────────────────────────────────────────
