@@ -6,6 +6,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — PDF of every received document (publish after the backend PR is live)
+
+`GET /v1/documents/{id}?format=pdf` now answers for EVERY received (inbound) document in any country: the authority PDF, else the archived original PDF, else the NFS-e DANFSe, else a Clearvo-generated readable copy of the received electronic invoice (the XML is the legal record; headers `X-Taxually-Pdf-Source: rendered`, `x-clearvo-rendition: generated`). 422 `PDF_NOT_RENDERABLE` only when the record has no stored data object. `pdfUrl` and the download list on invoice reads now include it for received documents.
+
+- SDK 0.13.0: new `downloadDocumentPdf(id, entityId?)` returning `{ data, mimeType, source, rendition }`; new type `DownloadedDocumentPdf`; `rendition` doc updated.
+- MCP 0.14.0: `list_invoices` and `get_invoice` descriptions document the received-document PDF and its serving order (no new tool: the bytes are binary).
+- CLI 0.13.0: new `clearvo invoices download-pdf <id> [--out] [--entity]`.
+- npm release needs: the backend PR must be live first; then publish `@clearvo/sdk` 0.13.0, `@clearvo/cli` 0.13.0, `@clearvo/mcp` 0.14.0 per "Releasing" in the README.
+
 ## Unreleased — tax number batches of up to 1,000 (publish after the backend tax number batch PR is live)
 
 `validate-batch` now takes up to 1,000 tax numbers. Up to 20 are answered at once, exactly as before; 21 to 1,000 start a background job that you read until it completes. New optional `formatOnly` checks the number format only and never contacts an authority. Daily limit 10,000 numbers (429 past it); more than 1,000 in one request is a 400. The separate `validate-batch/async` route is deprecated (the same job, always started as a background job); the SDK, CLI and MCP never used it.

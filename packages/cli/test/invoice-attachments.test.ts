@@ -44,4 +44,14 @@ describe('clearvo invoices attachments', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('http://x/v1/invoices/inv_1/attachments/0');
     expect([...readFileSync(out)]).toEqual([0, 1, 2, 250, 255]);
   });
+
+  it('downloads a document PDF to --out', async () => {
+    const bytes = new Uint8Array([37, 80, 68, 70]);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, headers: new Headers({ 'x-clearvo-rendition': 'generated' }), arrayBuffer: async () => bytes.buffer });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const out = join(dir, 'doc.pdf');
+    await createProgram().parseAsync(['node', 'clearvo', 'invoices', 'download-pdf', 'inv_1', '--out', out]);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://x/v1/documents/inv_1?format=pdf');
+    expect([...readFileSync(out)]).toEqual([37, 80, 68, 70]);
+  });
 });

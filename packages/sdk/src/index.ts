@@ -51,6 +51,7 @@ export type {
   InvoiceAttachment,
   ListInvoiceAttachmentsResponse,
   DownloadedInvoiceAttachment,
+  DownloadedDocumentPdf,
   CustomerAttachment,
   AddressErasureResult,
   ImportSettlementInput,

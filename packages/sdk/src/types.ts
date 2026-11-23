@@ -963,7 +963,9 @@ export interface ReceivedInvoiceFields {
   /**
    * How GET /v1/documents/{id}?format=pdf answers: `original` (the archived
    * PDF), `generated` (a labelled readable copy rendered from the structured
-   * data, not an invoice in its own right) or `none` (it would answer 422).
+   * data, not an invoice in its own right; available for every received
+   * document in any country) or `none` (it would answer 422 PDF_NOT_RENDERABLE,
+   * only when the record has no stored data object).
    */
   rendition?: 'original' | 'generated' | 'none' | null;
   /**
@@ -1010,6 +1012,19 @@ export interface DownloadedInvoiceAttachment {
   data: Buffer;
   fileName: string | null;
   mimeType: string;
+}
+
+/**
+ * A document's PDF from `downloadDocumentPdf`. For a received (inbound) document in any country this is the authority PDF,
+ * the archived original PDF, the NFS-e DANFSe, or else a Clearvo-generated readable copy labelled as such: the XML stays the
+ * legal record. `source` is the `X-Taxually-Pdf-Source` header (`rendered` for the readable copy), `rendition` the
+ * `x-clearvo-rendition` header (`generated` for the readable copy, `original` for an archived PDF); null when the header is absent.
+ */
+export interface DownloadedDocumentPdf {
+  data: Buffer;
+  mimeType: string;
+  source: string | null;
+  rendition: string | null;
 }
 
 /**

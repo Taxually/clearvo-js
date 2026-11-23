@@ -55,3 +55,26 @@ describe('invoice attachments', () => {
     expect(err.code).toBe('ATTACHMENT_NOT_FOUND');
   });
 });
+
+describe('downloadDocumentPdf', () => {
+  const client = () => new ClearvoClient({ apiKey: 'csk_live_x', baseUrl: 'http://x/v1' });
+  it('fetches format=pdf and reports the rendition headers', async () => {
+    const headers = new Headers({ 'content-type': 'application/pdf', 'x-taxually-pdf-source': 'rendered', 'x-clearvo-rendition': 'generated' });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, headers, arrayBuffer: async () => new Uint8Array([37, 80, 68, 70]).buffer });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const pdf = await client().downloadDocumentPdf('doc 1', 'ent-1');
+    expect(fetchMock.mock.calls[0][0]).toBe('http://x/v1/documents/doc%201?format=pdf');
+    expect(fetchMock.mock.calls[0][1].headers['x-entity-id']).toBe('ent-1');
+    expect([...pdf.data]).toEqual([37, 80, 68, 70]);
+    expect(pdf.mimeType).toBe('application/pdf');
+    expect(pdf.source).toBe('rendered');
+    expect(pdf.rendition).toBe('generated');
+  });
+
+  it('surfaces 422 PDF_NOT_RENDERABLE', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 422, json: async () => ({ error: 'No stored data', code: 'PDF_NOT_RENDERABLE' }) }) as unknown as typeof fetch;
+    const err = await client().downloadDocumentPdf('doc_2').catch((e) => e);
+    expect(err).toBeInstanceOf(ClearvoError);
+    expect(err.code).toBe('PDF_NOT_RENDERABLE');
+  });
+});
