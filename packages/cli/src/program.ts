@@ -1670,6 +1670,30 @@ export function createProgram(): Command {
       print(result, !!opts.pretty);
     });
 
+  // ── clearvo ae appointment ───────────────────────────────────────────────────
+  // UAE e-invoicing provider appointment (GET/POST /v1/ae/provider-appointment). The customer appoints
+  // Taxually's accredited provider in their own EmaraTax account; `request` tells Clearvo they have.
+  const ae = program.command('ae').description('UAE e-invoicing provider appointment');
+  const aeAppointment = ae
+    .command('appointment')
+    .description('Read the entity\'s UAE e-invoicing provider appointment status and the steps to complete it')
+    .option('--entity <entityId>', 'Entity to read. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('GET', '/ae/provider-appointment', undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
+  aeAppointment
+    .command('request')
+    .description('Tell Clearvo the customer has appointed the provider in EmaraTax (status moves to pending, then is confirmed automatically)')
+    .option('--entity <entityId>', 'Entity to act on. Required for account-scoped keys; omit for entity-scoped keys.')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (opts: { entity?: string; pretty?: boolean }) => {
+      const result = await api('POST', '/ae/provider-appointment/request', {}, opts.entity ? { 'x-entity-id': opts.entity } : undefined);
+      print(result, !!opts.pretty);
+    });
+
   // ── clearvo it profile ────────────────────────────────────────────────────
   // Italy's required Regime Fiscale profile field (GET/PUT /v1/it/profile).
   // Not a credential — Clearvo (Blue Arrow Solutions) is the accredited SDI

@@ -144,6 +144,7 @@ import type {
   FrCredentialsResponse,
   CreateFrPlatformConnectLinkInput,
   FrPlatformConnectLinkResponse,
+  AeProviderAppointment,
   SetItProfileInput,
   ItProfileResponse,
   UpdateBusinessStatusInput,
@@ -1295,6 +1296,21 @@ export class ClearvoClient {
   createFrPlatformConnectLink(input: CreateFrPlatformConnectLinkInput): Promise<FrPlatformConnectLinkResponse> {
     const { entityId, ...body } = input;
     return this.request('POST', '/fr/platform-connect-link', body, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  // ── UAE e-invoicing provider appointment ──────────────────────────────────
+  // UAE e-invoices go through Taxually's accredited provider. The customer appoints it in their own EmaraTax
+  // account; these two calls read the appointment and tell Clearvo the customer has done it.
+
+  /** Reads the entity's provider appointment: status, instructions for the next step, timestamps. */
+  getAeProviderAppointment(entityId?: string): Promise<AeProviderAppointment> {
+    return this.request('GET', '/ae/provider-appointment', undefined, entityId ? { 'x-entity-id': entityId } : undefined);
+  }
+
+  /** Tells Clearvo the customer has appointed the provider in EmaraTax; moves `not_appointed` (or `failed` /
+   *  `revoked`) to `pending`. Clearvo then confirms it automatically: read getAeProviderAppointment() until `appointed`. */
+  requestAeProviderAppointment(entityId?: string): Promise<AeProviderAppointment> {
+    return this.request('POST', '/ae/provider-appointment/request', {}, entityId ? { 'x-entity-id': entityId } : undefined);
   }
 
   // ── Italy profile field (Regime Fiscale) ─────────────────────────────────
