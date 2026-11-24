@@ -1940,7 +1940,7 @@ const BASE_TOOLS = [
       'validationOutcome (E_INVOICE, E_INVOICE_WITH_FLAGS, FORMAT_ERROR, PROFILE_NOT_SUFFICIENT, NOT_AN_EINVOICE, BUSINESS_RULE_ERROR, ' +
       'NOT_VALIDATED), validation (what was checked against which rule set and version, with error/warning counts and a summary; ' +
       'the findings are on get_invoice), attachments (the supplier\'s supporting documents, listed only, never the bytes), ' +
-      'rendition (original | generated | none: how the PDF read answers) and supersededBy. ' +
+      'rendition (original | generated | none: how the PDF read answers; every received document in any country has a PDF, the generated one being a readable copy of the received e-invoice whose XML is the legal record) and supersededBy. ' +
       'Paginate using the nextCursor / prevCursor values returned in each response: pass nextCursor as after_id to advance forward.',
     inputSchema: {
       type: 'object' as const,
@@ -1998,8 +1998,10 @@ const BASE_TOOLS = [
       'document is valid, compliant or approved. Also attachments (the supplier\'s own supporting documents, listed only), ' +
       'rendition (original = the archived PDF, generated = a labelled readable copy rendered from the structured data and not an ' +
       'invoice in its own right, none = the PDF read would answer 422) and supersededBy (the corrected re-send that replaced a ' +
-      'needs-review record). The pdfUrl of a received document returns that readable copy for any received Peppol/e-invoice; when ' +
-      'it cannot be rendered it answers an explicit 422 code (for example PDF_SCRIPT_UNSUPPORTED) rather than a 500, and pdfUrl is omitted. ' +
+      'needs-review record). The pdfUrl of a received document (any country) returns, in this order: the authority PDF, the archived original PDF, ' +
+      'the NFS-e DANFSe, else a Clearvo-generated readable copy labelled as a readable copy of the received electronic invoice (the XML is the legal record; ' +
+      'response headers X-Taxually-Pdf-Source: rendered, x-clearvo-rendition: generated). It answers 422 PDF_NOT_RENDERABLE and is omitted only when the record has ' +
+      'no stored data object. This tool returns the link, not the bytes; download it with the same credentials (GET /v1/documents/{id}?format=pdf, or `clearvo invoices download-pdf`). ' +
       'Use this to investigate a specific rejection, retrieve the XML for auditing, ' +
       'or check whether a suggested action has been applied.',
     inputSchema: {

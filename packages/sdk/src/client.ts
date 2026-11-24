@@ -24,6 +24,7 @@ import type {
   FixInvoiceResponse,
   FixInvoiceDryRunResponse,
   DownloadedInvoiceAttachment,
+  DownloadedDocumentPdf,
   AddressErasureResult,
   ImportSettlementInput,
   ImportSettlementResult,
@@ -401,6 +402,24 @@ export class ClearvoClient {
    */
   listInvoiceAttachments(id: string): Promise<ListInvoiceAttachmentsResponse> {
     return this.request('GET', `/invoices/${encodeURIComponent(id)}/attachments`);
+  }
+
+  /**
+   * GET /documents/{id}?format=pdf: the PDF of a document. For EVERY received (inbound) document in any country this is served in
+   * this order: the authority PDF, the archived original PDF, the NFS-e DANFSe, else a Clearvo-generated readable copy (labelled as a
+   * readable copy of the received electronic invoice; the XML is the legal record; headers `X-Taxually-Pdf-Source: rendered`,
+   * `x-clearvo-rendition: generated`). For an issued invoice it is the archived or generated invoice PDF. 422 PDF_NOT_RENDERABLE only
+   * when the record has no stored data object (check `rendition` on the list/get response); 404 when the id is unknown.
+   * Errors surface as ClearvoError.
+   */
+  async downloadDocumentPdf(id: string, entityId?: string): Promise<DownloadedDocumentPdf> {
+    const response = await this.requestFile(`/documents/${encodeURIComponent(id)}?format=pdf`, entityHeaders(entityId));
+    return {
+      data: Buffer.from(await response.arrayBuffer()),
+      mimeType: (response.headers.get('content-type') ?? 'application/pdf').split(';')[0].trim(),
+      source: response.headers.get('x-taxually-pdf-source'),
+      rendition: response.headers.get('x-clearvo-rendition'),
+    };
   }
 
   /**
