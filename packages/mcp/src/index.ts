@@ -1570,6 +1570,35 @@ const BASE_TOOLS = [
     },
   },
   {
+    name: 'get_ae_provider_appointment',
+    description:
+      'Read where the entity\'s appointment of Taxually\'s accredited UAE e-invoicing provider stands. UAE e-invoices are sent through ' +
+      'that provider, and the customer must appoint it in their own EmaraTax account first. Returns status (not_appointed | pending | ' +
+      'appointed | revoked | failed), providerName (always "Taxually"), instructions (ordered steps the customer follows for the current ' +
+      'status), and requestedAt / appointedAt / reason when they apply. Invoices sent before status is appointed are held with a ' +
+      'setup-needed status, not lost.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to read. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
+    name: 'request_ae_provider_appointment',
+    description:
+      'Tell Clearvo the customer has appointed Taxually\'s accredited UAE e-invoicing provider in their own EmaraTax account. Call it only ' +
+      'after the customer has done that (get_ae_provider_appointment returns the steps). Moves status from not_appointed, failed or revoked ' +
+      'to pending; Clearvo then confirms the appointment automatically, so read get_ae_provider_appointment until status is appointed. ' +
+      'Calling it again while pending changes nothing. Returns the same object as get_ae_provider_appointment.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        entityId: { type: 'string', description: 'Entity to act on. Required for account-scoped keys; omit for entity-scoped keys.' },
+      },
+    },
+  },
+  {
     name: 'poll_fr_inbound',
     description:
       'Manually trigger a France inbound poll for this entity: resolve status on your own pending outbound ' +
@@ -4775,6 +4804,16 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
     case 'create_fr_platform_connect_link': {
       const { entityId, ...rest } = args as { entityId?: string } & Record<string, unknown>;
       return callApi('POST', '/fr/platform-connect-link', rest, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'get_ae_provider_appointment': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('GET', '/ae/provider-appointment', undefined, entityId ? { 'x-entity-id': String(entityId) } : undefined);
+    }
+
+    case 'request_ae_provider_appointment': {
+      const { entityId } = args as { entityId?: string };
+      return callApi('POST', '/ae/provider-appointment/request', {}, entityId ? { 'x-entity-id': String(entityId) } : undefined);
     }
 
     case 'poll_fr_inbound': {

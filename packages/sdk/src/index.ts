@@ -272,6 +272,8 @@ export type {
   FrPlatformConnection,
   CreateFrPlatformConnectLinkInput,
   FrPlatformConnectLinkResponse,
+  AeProviderAppointmentStatus,
+  AeProviderAppointment,
   ItRegimeFiscaleOption,
   SetItProfileInput,
   ItProfileResponse,

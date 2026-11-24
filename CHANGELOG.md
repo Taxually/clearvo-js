@@ -6,6 +6,15 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — UAE e-invoicing provider appointment (publish after the backend UAE e-invoicing PR is live)
+
+UAE e-invoices are sent through Taxually's accredited provider, which the customer appoints in their own EmaraTax account. Three new calls read the appointment and tell Clearvo the customer has done it. Status is `not_appointed | pending | appointed | revoked | failed`; `providerName` is always "Taxually"; `instructions` lists the steps for the current status.
+
+- SDK 0.14.0: new `getAeProviderAppointment(entityId?)` and `requestAeProviderAppointment(entityId?)`; new types `AeProviderAppointment`, `AeProviderAppointmentStatus`.
+- MCP 0.15.0: new tools `get_ae_provider_appointment` (read-only) and `request_ae_provider_appointment`.
+- CLI 0.14.0: new `clearvo ae appointment [--entity]` and `clearvo ae appointment request [--entity]`.
+- npm release needs: the backend PR must be live first; then publish `@clearvo/sdk` 0.14.0, `@clearvo/cli` 0.14.0, `@clearvo/mcp` 0.15.0 per "Releasing" in the README (the PR carries `Depends-on-backend`).
+
 ## Unreleased — PDF of every received document (publish after the backend PR is live)
 
 `GET /v1/documents/{id}?format=pdf` now answers for EVERY received (inbound) document in any country: the authority PDF, else the archived original PDF, else the NFS-e DANFSe, else a Clearvo-generated readable copy of the received electronic invoice (the XML is the legal record; headers `X-Taxually-Pdf-Source: rendered`, `x-clearvo-rendition: generated`). 422 `PDF_NOT_RENDERABLE` only when the record has no stored data object. `pdfUrl` and the download list on invoice reads now include it for received documents.

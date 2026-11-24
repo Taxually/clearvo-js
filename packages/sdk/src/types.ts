@@ -4002,6 +4002,24 @@ export interface FrPlatformConnectLinkResponse {
   connectUrl: string;
 }
 
+/** Where the entity's appointment of Taxually's accredited UAE e-invoicing provider stands. The customer appoints the
+ *  provider in their own EmaraTax account; `pending` means they said they did and it is not yet confirmed. */
+export type AeProviderAppointmentStatus = 'not_appointed' | 'pending' | 'appointed' | 'revoked' | 'failed';
+
+export interface AeProviderAppointment {
+  status: AeProviderAppointmentStatus;
+  /** Always "Taxually". */
+  providerName: string;
+  /** Step-by-step instructions for the customer, in order, for the current status. */
+  instructions: string[];
+  /** ISO timestamp the customer said they had appointed the provider. Absent before that. */
+  requestedAt?: string;
+  /** ISO timestamp the appointment was confirmed. Absent until `appointed`. */
+  appointedAt?: string;
+  /** Present only when it helps, for example why an appointment `failed` or was `revoked`. */
+  reason?: string;
+}
+
 export interface FrCredentialsResponse {
   ok: boolean;
   entityId: string;
