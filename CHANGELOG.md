@@ -6,6 +6,16 @@ Packages in this repo are versioned independently. Dates are release-prep dates;
 
 **2026-11-10 release: `@clearvo/sdk` 0.7.0, `@clearvo/mcp` 0.8.0, `@clearvo/cli` 0.7.0** (previous npm versions: 0.6.0, 0.7.0, 0.6.0). One combined minor release of the "Unreleased" blocks below (fix an invoice with one call, opt-in platform rules, retry with master data, country coverage list); all of their backend changes are live in production. **Type-level breaking change:** `seller` is removed from `TaxCalculateRequest` (SDK) and the `calculate_tax` input schema (MCP); send `supplier` instead.
 
+## Unreleased — void transactions (publish after the backend void PR is live)
+
+An invoice that has not been transmitted can be voided: it becomes VOIDED (terminal, never sent, its invoice number free again, the record kept with who voided it, when and why). `POST /v1/invoices/{id}/void`, `POST /v1/invoices/void` (1 to 500 ids; every invoice handled on its own), `POST /v1/send/bulk/{batchId}/void` (a CSV upload) and `POST /v1/reporting-batches/{id}/void` (e-reporting). An invoice that was already transmitted is refused with `CANNOT_VOID_<STATUS>` (409 on a single void; a `skipped` item in the bulk and batch forms); a confirmed or submitted reporting batch refuses with `BATCH_LOCKED` / `BATCH_ALREADY_SUBMITTED`. Voiding twice answers 200 with `result: "already_voided"`. Sending a voided invoice again is accepted and carries a `PREVIOUSLY_VOIDED` warning. The old DISCARDED reads as VOIDED; on the invoice status model a voided invoice is `status: SKIPPED`, `reason: MERCHANT_VOIDED`.
+
+- SDK: `voidInvoice(id, { reason? }, entityId?)`, `voidInvoices({ ids, reason? }, entityId?)`, `voidBulkUpload(batchId, { reason? }, entityId?)`, `voidReportingBatch(id, { reason? }, entityId?)`; new types `VoidInvoiceInput`, `VoidInvoicesInput`, `VoidInvoiceResponse`, `VoidInvoicesResponse`, `VoidBatchResponse`, `VoidItem`, `VoidItemVoided`, `VoidItemSkipped`, `VoidedStatus`.
+- MCP: new tools `void_invoice` and `void_invoices` (the latter takes exactly one of `ids`, `batchId`, `reportingBatchId`; same schema as the hosted connector).
+- CLI: `clearvo void-invoice <id>`, `clearvo void-invoices <ids...>`, `clearvo void-bulk-upload <batchId>`, `clearvo void-reporting-batch <id>`, each with `[--reason <text>] [--entity <id>] [--pretty]`.
+- The generated contract file and the MCP `list_invoices` reason enum now carry `MERCHANT_VOIDED` in place of `MERCHANT_DISCARDED`, matching the published OpenAPI (the old DISCARDED name is still accepted by the API as a filter).
+- npm release needs: the backend PR must be live first; then publish `@clearvo/sdk` 0.15.0, `@clearvo/cli` 0.15.0, `@clearvo/mcp` 0.16.0 per "Releasing" in the README (the PR carries `Depends-on-backend`).
+
 ## Unreleased — UAE e-invoicing provider appointment (publish after the backend UAE e-invoicing PR is live)
 
 UAE e-invoices are sent through Taxually's accredited provider, which the customer appoints in their own EmaraTax account. Three new calls read the appointment and tell Clearvo the customer has done it. Status is `not_appointed | pending | appointed | revoked | failed`; `providerName` is always "Taxually"; `instructions` lists the steps for the current status.

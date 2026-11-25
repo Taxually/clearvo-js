@@ -57,6 +57,8 @@ const DESTRUCTIVE = new Set<string>([
   'confirm_reporting_batch',
   // Irrevocable submissions to a tax authority / e-invoicing network, or sends that reach a counterparty.
   'submit_invoice', 'submit_invoices_bulk', 'submit_invoices_bulk_async', 'push_mx_cfdi', 'retry_invoice_with_master_data', 'rerun_invoice', 'rerun_invoices',
+  // Voiding an already voided invoice answers 200 already_voided; a transmitted one is refused 409.
+  'void_invoice', 'void_invoices',
   'update_business_status', 'update_invoice_business_status', 'fix_invoice',
   // Removes one of the customer's own tests from new runs.
   'archive_test_case',
