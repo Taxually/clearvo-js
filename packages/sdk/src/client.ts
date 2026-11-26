@@ -939,8 +939,10 @@ export class ClearvoClient {
   /**
    * Confirm a batch so it is submitted to AEAT now. Pass the batch's CURRENT
    * snapshotVersion — 409 BATCH_STALE if it changed since you read it (re-read and retry),
-   * 409 ALREADY_SUBMITTED if already in flight, 503 ENQUEUE_FAILED if confirmed but the
-   * hand-off failed (retried automatically on the next scheduler run).
+   * 409 ALREADY_SUBMITTED if already in flight, 422 SUBMISSION_REJECTED if the
+   * platform rejected it (the error is the reason; the batch is back in review, fix the data and
+   * confirm again), 503 ENQUEUE_FAILED if the hand-off failed (Spain SII retries automatically on
+   * the next scheduler run; other regimes go back to review, so confirm again).
    */
   confirmReportingBatch(id: string, input: ConfirmReportingBatchInput): Promise<ConfirmReportingBatchResponse> {
     return this.request('POST', `/reporting-batches/${encodeURIComponent(id)}/confirm`, input);
