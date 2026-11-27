@@ -30,5 +30,6 @@ const _badResend: ResendCustomerNotificationInput = { email: 42 };
 
 function _payload(p: CustomerNotificationWebhookPayload) {
   const domain: string | null = p.recipientDomain;
-  return [p.type, p.notificationId, domain];
+  const entity: string | null = p.entityId;
+  return [p.type, p.notificationId, domain, entity];
 }

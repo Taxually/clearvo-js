@@ -5325,7 +5325,8 @@ export interface CustomerNotificationWebhookPayload {
   type: CustomerNotificationEventType;
   invoiceId: string;
   notificationId: string;
-  entityId: string;
+  /** Null when the entity has since been deleted. */
+  entityId: string | null;
   /** ISO 8601 timestamp of when it happened. */
   occurredAt: string;
   reason: string | null;
