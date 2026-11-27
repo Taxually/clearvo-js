@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Merges open PRs whose `Depends-on-backend: <ADO PR id>` is among the backend PRs that just went live, then
-# reports back to Slack once the frontend side has actually finished (merged AND deployed to production).
+# Merges open PRs whose `Depends-on-backend: <ADO PR id>` lines are ALL live, then reports back to Slack once the
+# frontend side has actually finished (merged AND deployed to production). A PR may carry several such lines (one
+# per line); it is merged only when every listed id is live. Ids live in this release are recorded on the PR in a
+# `<!-- backend-released:<id> -->` comment by github-actions, so a later release sees them as already released.
+# An id that is neither in this release nor recorded counts as NOT released: the PR waits.
 #
 # env: GH_TOKEN, GITHUB_REPOSITORY, LABEL (name in Slack messages, default Frontend), DEPLOY_CHECK=vercel|none (default vercel),
 #      EXTRA_NOTE (appended to the Slack message), PR_IDS (comma-separated ADO PR ids), BACKEND_BUILD (label for messages),
@@ -39,7 +42,7 @@ slack() { # slack <text>  (printed, not posted, in dry-run or without a webhook)
 if [ -n "${PRS_JSON_FILE:-}" ]; then
   cp "$PRS_JSON_FILE" "$WORK/prs.json"
 else
-  gh pr list --repo "$REPO" --state open --limit 200 --json number,title,body,isDraft,labels > "$WORK/prs.json" || { echo "Could not list PRs"; exit 1; }
+  gh pr list --repo "$REPO" --state open --limit 200 --json number,title,body,isDraft,labels,comments > "$WORK/prs.json" || { echo "Could not list PRs"; exit 1; }
 fi
 
 python3 - "$WORK/prs.json" "$WANT" > "$WORK/matches.tsv" <<'PYEOF'
@@ -47,11 +50,21 @@ import json, re, sys
 prs = json.load(open(sys.argv[1]))
 want = sys.argv[2]
 for p in prs:
-    m = re.search(r'^\s*Depends-on-backend:\s*#?(\d+)', p.get('body') or '', re.I | re.M)
-    if not m or f',{m.group(1)},' not in want:
+    # Every `Depends-on-backend: <id>` line counts (a PR may list several); duplicates are ignored.
+    ids = list(dict.fromkeys(re.findall(r'^\s*Depends-on-backend:\s*#?(\d+)', p.get('body') or '', re.I | re.M)))
+    if not ids or not any(f',{i},' in want for i in ids):
         continue
+    # An id released by an EARLIER release is remembered by a marker comment this workflow posted then.
+    # Only github-actions comments count; an id with no marker and not in this release is NOT released.
+    recorded = set()
+    for c in p.get('comments') or []:
+        if ((c.get('author') or {}).get('login') or '') in ('github-actions', 'app/github-actions'):
+            recorded.update(re.findall(r'<!-- backend-released:(\d+) -->', c.get('body') or ''))
+    live_now = [i for i in ids if f',{i},' in want]
+    new = [i for i in live_now if i not in recorded]
+    missing = [i for i in ids if i not in recorded and f',{i},' not in want]
     hold = any((l.get('name') or '').lower() == 'hold' for l in p.get('labels', []))
-    print(f"{p['number']}\t{m.group(1)}\t{'draft' if p.get('isDraft') else 'ready'}\t{'hold' if hold else '-'}\t{p['title'][:80]}")
+    print(f"{p['number']}\t{','.join(ids)}\t{'draft' if p.get('isDraft') else 'ready'}\t{'hold' if hold else '-'}\t{p['title'][:80]}\t{','.join(new) or '-'}\t{','.join(missing) or '-'}")
 PYEOF
 
 if [ ! -s "$WORK/matches.tsv" ]; then
@@ -67,8 +80,20 @@ result() { echo "$1" >> "$WORK/results.txt"; } # result <slack line>
 
 STATUS=0
 LAST_SHA=""
-while IFS=$'\t' read -r NUM DEP STATE HOLD TITLE; do
+while IFS=$'\t' read -r NUM DEP STATE HOLD TITLE NEWREL MISSING; do
   echo "== #${NUM} (${STATE}, depends on backend PR ${DEP}): ${TITLE}"
+  # Remember each id that is live in THIS release, so a later release can see it was already released.
+  if [ "$NEWREL" != "-" ]; then
+    MARKERS=""; for I in ${NEWREL//,/ }; do MARKERS="${MARKERS}<!-- backend-released:${I} -->"; done
+    note "$NUM" "${MARKERS}Backend PR(s) ${NEWREL} went live in release ${BUILD}."
+  fi
+  # A PR listing several backend PRs merges only when ALL of them are released. An id that is neither in this
+  # release nor recorded as released earlier counts as NOT released (never merge on an unresolved id).
+  if [ "$MISSING" != "-" ]; then
+    say "not merging #${NUM}: still waiting for backend PR(s) ${MISSING}"
+    result "• PR ${NUM} ${TITLE} — waiting for backend PR(s) ${MISSING}"
+    continue
+  fi
   if [ "$HOLD" = "hold" ]; then
     say "skipping #${NUM}: labelled 'hold'"
     note "$NUM" "Backend PR ${DEP} is live (release ${BUILD}) but this PR is labelled \`hold\`, so it was not merged automatically. Remove the label and re-run the workflow, or merge by hand."
