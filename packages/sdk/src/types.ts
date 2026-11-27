@@ -236,6 +236,65 @@ export interface SendResult extends InvoiceStatusFields {
 /** @deprecated Renamed {@link SendResult}; the shape is identical. */
 export type InvoiceSubmitResponse = SendResult;
 
+/** One step in the life of the invoice email sent to the customer. */
+export type CustomerNotificationEventType =
+  | 'sent'
+  | 'delivered'
+  | 'delivery_delayed'
+  | 'opened'
+  | 'clicked'
+  | 'bounced'
+  | 'complained'
+  | 'failed'
+  | 'viewed'
+  | 'downloaded';
+
+/** One entry of the customer notification email history on `GET /v1/invoices/{id}`. */
+export interface CustomerNotificationEvent {
+  type: CustomerNotificationEventType;
+  /** ISO 8601 timestamp of when it happened. */
+  occurredAt: string;
+  /** Why, when the provider or Clearvo gave a reason (for example a bounce or failure); otherwise null. */
+  reason: string | null;
+}
+
+/** The customer notification block of `GET /v1/invoices/{id}`. */
+export interface InvoiceCustomerNotification {
+  eligible: boolean;
+  /** Latest state of the email; null when no email was ever attempted. */
+  status: 'SENT' | 'VIEWED' | 'DOWNLOADED' | 'BOUNCED' | 'COMPLAINED' | 'FAILED' | null;
+  sentAt: string | null;
+  viewedAt: string | null;
+  downloadedAt: string | null;
+  bouncedAt: string | null;
+  complainedAt: string | null;
+  errorMessage: string | null;
+  /** The whole email history of the invoice (every send and resend), oldest first. Empty when no email was ever attempted. */
+  events: CustomerNotificationEvent[];
+}
+
+/**
+ * `GET /v1/invoices/{id}`. Only the fields this SDK types are listed; the response carries many more (status, lines, authority
+ * references, XML and so on), which stay on the object unchanged.
+ */
+export interface InvoiceDetail {
+  id: string;
+  customerNotification: InvoiceCustomerNotification;
+  [field: string]: unknown;
+}
+
+/** Body of `POST /v1/invoices/{id}/resend-notification`. */
+export interface ResendCustomerNotificationInput {
+  /** Send to this address instead of the one stored on the invoice (for a bounced or wrong address). The stored invoice is not changed. Omit to resend to the stored address. */
+  email?: string;
+}
+
+/** 200 body of `POST /v1/invoices/{id}/resend-notification`: the outcome of this send, in the same shape as `SendResult.customerNotification`. */
+export interface ResendCustomerNotificationResponse {
+  ok: true;
+  customerNotification: NonNullable<SendResult['customerNotification']>;
+}
+
 /** True when the stored send is REJECTED, or WAITING_FOR_YOU because a fact is missing or the recipient was not found (reason NEEDS_INFO or UNROUTABLE): the cases `throwOnRejected` turns into a thrown error. */
 export function isRejected(result: Pick<SendResult, 'status' | 'reason'>): boolean {
   return needsFix(result.status, result.reason);
@@ -2448,7 +2507,9 @@ export interface CreateWebhookInput {
   url: string;
   /**
    * Include `invoice.status_changed` to be told about every status change; the specific events keep working (subscribing to both
-   * gives two deliveries). `*` does NOT include `invoice.status_changed`: list it by name.
+   * gives two deliveries). `*` does NOT include `invoice.status_changed` or the `invoice.customer_notification.*` events
+   * (the customer email lifecycle: sent, delivered, delivery_delayed, opened, clicked, bounced, complained, failed, viewed,
+   * downloaded): list those by name.
    */
   events?: WebhookEventName[] | string[];
   /** Only for `invoice.status_changed`: which new statuses to receive. Omit or leave empty for all. */
@@ -5184,9 +5245,13 @@ export interface HeldCertificateRecovery {
   certificateId: string;
 }
 
-/** Event names a webhook can subscribe to (`*` means every event except `invoice.status_changed`, which must be listed by name). */
+/** The opt-in webhook event for each customer notification email lifecycle step. */
+export type CustomerNotificationWebhookEventName = `invoice.customer_notification.${CustomerNotificationEventType}`;
+
+/** Event names a webhook can subscribe to (`*` means every event except `invoice.status_changed` and the `invoice.customer_notification.*` events, which must be listed by name). */
 export type WebhookEventName =
   | 'invoice.status_changed'
+  | CustomerNotificationWebhookEventName
   | 'invoice.accepted'
   | 'invoice.rejected'
   | 'invoice.duplicate'
@@ -5247,6 +5312,25 @@ export interface StatusChangedWebhookPayload {
   organisationId?: string;
   /** True only for a test event (POST /v1/webhooks/test). */
   test?: true;
+}
+
+/**
+ * Payload of the opt-in `invoice.customer_notification.<type>` webhooks: one per step of the invoice email sent to the customer.
+ * Carries no email address, only the recipient's domain. `*` and an empty events list never deliver these: subscribe by name.
+ */
+export interface CustomerNotificationWebhookPayload {
+  event: CustomerNotificationWebhookEventName;
+  /** Unique id of this event, the same on every delivery retry of it: dedupe on it. */
+  eventId: string;
+  type: CustomerNotificationEventType;
+  invoiceId: string;
+  notificationId: string;
+  /** Null when the entity has since been deleted. */
+  entityId: string | null;
+  /** ISO 8601 timestamp of when it happened. */
+  occurredAt: string;
+  reason: string | null;
+  recipientDomain: string | null;
 }
 
 /** Payload of the `ap.decision` webhook. */

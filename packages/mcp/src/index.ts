@@ -2042,6 +2042,7 @@ const BASE_TOOLS = [
       '(SDI IdentificativoSdI, KSeF referenceNumber, NAV ID, etc.). ' +
       'Returns everything in list_invoices (including ingestedAt and canVoid, true exactly when void_invoice would void it now), plus `nextStep` ({actor, message, fixUrl?} or null: who must act and where), the same fields poll_status and submit_invoice return, plus: full event log, country authority references, ' +
       'upstream error code and message, a suggested action when the invoice was rejected, ' +
+      'customerNotification (eligible, status SENT/VIEWED/DOWNLOADED/BOUNCED/COMPLAINED/FAILED or null when never attempted, sentAt, viewedAt, downloadedAt, bouncedAt, complainedAt, errorMessage, and events: the ordered email history [{ type, occurredAt, reason }] with type sent, delivered, delivery_delayed, opened, clicked, bounced, complained, failed, viewed or downloaded; events is empty when no email was ever attempted), ' +
       'the submitted XML, and the invoice lines as submitted — each line carries `taxRate` and `taxAmount`, and the ' +
       'invoice total is `totalTax` (the retired `vatRate`/`vatAmount`/`totalVat` names are never returned). For a Spain SII invoice, also returns siiDetail (estado, csv, ' +
       'admissibleErrors, errorCode, xml, matchedRuleId, createdAt/updatedAt) — null for every ' +
@@ -2164,7 +2165,8 @@ const BASE_TOOLS = [
       'ap.decision (rules-engine B7 — a purchase calculation\'s ACCEPTED_AS_CHARGED/OVERCHARGED/UNDERCHARGED/HELD outcome; filtered so a clean, in-tolerance ACCEPTED_AS_CHARGED with no warning never fires — payload carries outcome, reasonCode, legalDelta, appliedDelta), ' +
       'manual_adjustment.proposed / manual_adjustment.confirmed / manual_adjustment.reverted / manual_adjustment.rejected ' +
       '(rules-engine B7 — a FORCED_INPUT or POST_CALCULATION_OVERRIDE manual adjustment\'s lifecycle; see propose_manual_adjustment), ' +
-      '* (all events).',
+      'invoice.customer_notification.<type> (the lifecycle of the invoice email sent to the customer for DE, IT consumer and PL no-NIP invoices: type is sent, delivered, delivery_delayed, opened, clicked, bounced, complained, failed, viewed or downloaded; payload { event, eventId, type, invoiceId, notificationId, entityId, occurredAt, reason, recipientDomain }, no email address; opened and clicked need open/click tracking on the sending domain; NOT covered by "*", list each by name), ' +
+      '* (all events except invoice.status_changed and the invoice.customer_notification.* events).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -2177,7 +2179,7 @@ const BASE_TOOLS = [
         events: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue)',
+          description: 'Event types to subscribe to. Use ["*"] for all events except invoice.status_changed and the invoice.customer_notification.* events, which you must list by name. Options: invoice.status_changed, invoice.accepted, invoice.rejected, invoice.duplicate, invoice.undelivered, invoice.pending, invoice.unroutable, product.classification_changed, held_unmapped_decision, accepted_with_errors, reporting_batch.ready_for_review, reporting_batch.deadline_approaching, reporting_batch.deadline_passed, reporting_batch.overdue_reminder, ap.decision, manual_adjustment.proposed, manual_adjustment.confirmed, manual_adjustment.reverted, manual_adjustment.rejected, filing.enabled, filing.ready, filing.approved, filing.paused, filing.resumed, filing.pause_ending, filing.payment_due, filing.submitted, filing.filed, filing.skipped, filing.not_filed, filing.action_needed (US sales tax filing: payload carries filingId, jurisdictionId, periodKey, filingStatus, dueDate, amountDue), invoice.customer_notification.sent, invoice.customer_notification.delivered, invoice.customer_notification.delivery_delayed, invoice.customer_notification.opened, invoice.customer_notification.clicked, invoice.customer_notification.bounced, invoice.customer_notification.complained, invoice.customer_notification.failed, invoice.customer_notification.viewed, invoice.customer_notification.downloaded (the customer email lifecycle)',
         },
       },
       required: ['url'],
