@@ -4,6 +4,11 @@ import { homedir } from 'os';
 import { join, basename } from 'path';
 import { Command } from 'commander';
 
+// The opt-in webhook events for the customer notification email lifecycle ('*' never includes them).
+const CUSTOMER_NOTIFICATION_EVENT_TYPES = ['sent', 'delivered', 'delivery_delayed', 'opened', 'clicked', 'bounced', 'complained', 'failed', 'viewed', 'downloaded'] as const;
+const CUSTOMER_NOTIFICATION_EVENT_PREFIX = 'invoice.customer_notification.';
+const CUSTOMER_NOTIFICATION_WEBHOOK_EVENTS: readonly string[] = CUSTOMER_NOTIFICATION_EVENT_TYPES.map(t => `${CUSTOMER_NOTIFICATION_EVENT_PREFIX}${t}`);
+
 // Countries the received-invoice simulator covers. Repeated in the SDK and MCP server; `npm run test:simulation-countries` fails on drift.
 const SIMULATION_COUNTRY_CODES = [
   'AE', 'AT', 'AU', 'BE', 'CH', 'DE', 'DK', 'EE', 'FI', 'FR', 'HR', 'IE',
@@ -690,6 +695,28 @@ export function createProgram(): Command {
       console.log(`Saved ${target}`);
     });
 
+  // MCP twin: get_invoice (GET /v1/invoices/{id}). customerNotification.events is the email history, oldest first.
+  invoices
+    .command('get <id>')
+    .description('Show one invoice in full (GET /v1/invoices/{id}), including customerNotification.events: the ordered history of the email sent to the customer (sent, delivered, delivery_delayed, opened, clicked, bounced, complained, failed, viewed, downloaded; every send and resend; empty when never attempted)')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { entity?: string; pretty?: boolean }) => {
+      print(await api('GET', `/invoices/${encodeURIComponent(id)}`, undefined, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
+  // MCP twin: none (the hosted connector has no resend tool). POST /v1/invoices/{id}/resend-notification.
+  invoices
+    .command('resend-notification <id>')
+    .description('Send the customer notification email for an invoice again (POST /v1/invoices/{id}/resend-notification). Use --email to send to a corrected address instead of the stored one (a bounced or wrong address); the invoice itself is not changed. See the result with `clearvo invoices get <id>` (customerNotification.events)')
+    .option('--email <address>', 'Send to this address instead of the one stored on the invoice')
+    .option('--entity <id>', 'Entity id (account-scoped keys only)')
+    .option('--pretty', 'Pretty-print JSON output')
+    .action(async (id: string, opts: { email?: string; entity?: string; pretty?: boolean }) => {
+      const body = opts.email === undefined ? {} : { email: opts.email };
+      print(await api('POST', `/invoices/${encodeURIComponent(id)}/resend-notification`, body, opts.entity ? { 'x-entity-id': opts.entity } : undefined), !!opts.pretty);
+    });
+
   // MCP twin: none. The PDF is binary; the MCP get_invoice tool reports `rendition` and `pdfUrl`.
   invoices
     .command('download-pdf <id>')
@@ -1294,11 +1321,16 @@ export function createProgram(): Command {
     .command('create')
     .description('Register a new webhook endpoint')
     .requiredOption('--url <url>', 'HTTPS endpoint URL to deliver events to (a public address; no credentials, no internal or private addresses; redirects are not followed)')
-    .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed; list that one by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending,invoice.unroutable', '*')
+    .option('--events <events>', 'Comma-separated event types (default: *, which does NOT include invoice.status_changed or the invoice.customer_notification.* events; list those by name). Options: invoice.status_changed,invoice.accepted,invoice.rejected,invoice.duplicate,invoice.undelivered,invoice.pending,invoice.unroutable,' + CUSTOMER_NOTIFICATION_WEBHOOK_EVENTS.join(',') + ' (the customer email lifecycle: sent, delivered, delivery_delayed, opened, clicked, bounced, complained, failed, viewed, downloaded; opened and clicked need open/click tracking on the sending domain)', '*')
     .option('--statuses <statuses>', 'Comma-separated statuses, only with the invoice.status_changed event (for example WAITING_FOR_YOU,REJECTED,COMPLETED). Omit for every status change')
     .option('--pretty', 'Pretty-print JSON output')
     .action(async (opts: { url: string; events: string; statuses?: string; pretty?: boolean }) => {
       const events = opts.events.split(',').map(e => e.trim()).filter(Boolean);
+      const unknownNotificationEvents = events.filter(e => e.startsWith(CUSTOMER_NOTIFICATION_EVENT_PREFIX) && !CUSTOMER_NOTIFICATION_WEBHOOK_EVENTS.includes(e));
+      if (unknownNotificationEvents.length > 0) {
+        console.error(`Unknown event ${unknownNotificationEvents.join(', ')}. The customer email events are: ${CUSTOMER_NOTIFICATION_WEBHOOK_EVENTS.join(', ')}.`);
+        process.exit(1);
+      }
       const body: Record<string, unknown> = { url: opts.url, events };
       if (opts.statuses) body.statuses = opts.statuses.split(',').map(x => x.trim()).filter(Boolean);
       const result = await api('POST', '/webhooks', body);

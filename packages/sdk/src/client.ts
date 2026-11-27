@@ -9,6 +9,9 @@ import type {
   SendResult,
   SubmitInvoiceOptions,
   InvoiceStatusResponse,
+  InvoiceDetail,
+  ResendCustomerNotificationInput,
+  ResendCustomerNotificationResponse,
   ListInvoicesParams,
   ListInvoicesResponse,
   SimulateReceivedInvoicesInput,
@@ -375,6 +378,25 @@ export class ClearvoClient {
       'GET',
       `/status?id=${encodeURIComponent(referenceId)}&country=${encodeURIComponent(country)}`
     );
+  }
+
+  /**
+   * Full detail of one invoice by its Clearvo id or reference. `customerNotification.events` is the ordered history of the email
+   * sent to the customer (every send and resend: sent, delivered, delivery_delayed, opened, clicked, bounced, complained, failed,
+   * viewed, downloaded), empty when no email was ever attempted. Throws a {@link ClearvoError} 404 when no such invoice exists.
+   */
+  getInvoice(id: string, entityId?: string): Promise<InvoiceDetail> {
+    return this.request('GET', `/invoices/${encodeURIComponent(id)}`, undefined, entityHeaders(entityId));
+  }
+
+  /**
+   * Send the customer notification email for an outbound invoice again. Pass `email` to send to a corrected address instead of the
+   * stored one (the invoice itself is not changed). Throws a {@link ClearvoError}: 400 for an invalid `email`, 404, 409 for a
+   * received invoice, 422 when the invoice is not accepted or has no stored data. The result is visible in
+   * `getInvoice(id).customerNotification.events` and, if subscribed, the `invoice.customer_notification.*` webhooks.
+   */
+  resendCustomerNotification(id: string, input: ResendCustomerNotificationInput = {}, entityId?: string): Promise<ResendCustomerNotificationResponse> {
+    return this.request('POST', `/invoices/${encodeURIComponent(id)}/resend-notification`, input, entityHeaders(entityId));
   }
 
   /**
