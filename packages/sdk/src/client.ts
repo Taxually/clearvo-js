@@ -345,7 +345,7 @@ export class ClearvoClient {
    * A rejection is a stored status and answers 200 with `ok: false`. With `throwOnRejected` true (the default for this SDK major,
    * set on the client or per call) a REJECTED status, or WAITING_FOR_YOU with reason NEEDS_INFO or UNROUTABLE, throws a {@link ClearvoError} (status 422, `code`, `errors`,
    * and the whole body on `body`), as it did before the 200 flip. With false it returns the body. 4xx and 5xx always throw: 400
-   * malformed, 401/403 auth or plan, 409 edited resend, 429 rate limit, 503 INGEST_UNAVAILABLE (nothing stored: retry with the same body).
+   * malformed, 401/403 auth or plan, 409 edited resend, 429 rate limit, 503 INGEST_UNAVAILABLE or SERVICE_TEMPORARILY_UNAVAILABLE (nothing stored: retry with the same body after Retry-After). A temporary platform fault after the document is stored is 200 HELD_PLATFORM_FAULT (errorCode DEPENDENCY_UNAVAILABLE), retried by Clearvo: do not resend.
    */
   async submitInvoice(input: SubmitInvoiceInput, idempotencyKey?: string, options: SubmitInvoiceOptions = {}): Promise<SendResult> {
     const headers: Record<string, string> = {};
